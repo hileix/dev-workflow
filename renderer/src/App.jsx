@@ -20,7 +20,7 @@ export default function App() {
     <div className="flex flex-col h-screen bg-background text-foreground">
       {!isTicketPage && (
         <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-card">
-          <Link to="/" className="text-lg font-semibold text-foreground hover:text-foreground/80 transition-colors">Workbench</Link>
+          <Link to="/" className="text-lg font-semibold text-foreground hover:text-foreground/80 transition-colors">dev-Workflow</Link>
           <div className="flex items-center gap-3">
             <Link to="/settings" className="text-muted-foreground hover:text-foreground transition-colors text-sm">Settings</Link>
             <ThemeToggle />
