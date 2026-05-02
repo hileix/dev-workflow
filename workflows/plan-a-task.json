@@ -1,0 +1,23 @@
+{
+  "name": "plan a task",
+  "prompts": [
+    {
+      "key": "task",
+      "label": "Task description",
+      "placeholder": "Task description"
+    }
+  ],
+  "phases": [
+    {
+      "id": "phase_new_1",
+      "type": "auto",
+      "label": "Plan",
+      "group": "Plan",
+      "groupLabel": "Plan",
+      "artifact": "{{task}}.md",
+      "skill": "---\nname: plan-task\ndescription: \"Plan and break down a task into actionable steps with clear implementation strategy\"\n---\n\n# Task Planning Skill\n\nUse this skill when you need to analyze and plan how to approach a task before implementation.\n\n## What to do\n\n1. **Understand the task requirements**\n   - Read and clarify what needs to be accomplished\n   - Identify any ambiguities and ask questions if needed\n   - Surface assumptions and tradeoffs explicitly\n\n2. **Break down the task**\n   - Decompose the task into logical, sequential steps\n   - Identify dependencies between steps\n   - Keep steps focused and atomic (one clear action per step)\n\n3. **Define verification criteria**\n   - For each step, specify how to verify completion\n   - Include testable success criteria where applicable\n   - Format as: `[Step] → verify: [check]`\n\n4. **Identify required resources**\n   - List files that need to be created or modified\n   - Note any dependencies, libraries, or tools needed\n   - Flag potential risks or blockers\n\n5. **Output the plan**\n   - Present a numbered list of steps with verification criteria\n   - Highlight any decisions or tradeoffs made\n   - Note any questions or uncertainties that need resolution\n   - Keep the plan concise and actionable\n\n## Constraints\n\n- Don't overcomplicate: aim for the simplest approach that solves the problem\n- Don't plan features beyond what was requested\n- If multiple approaches exist, present them with pros/cons\n- Surface confusion early - don't proceed on guesses\n\n## Expected output format\n\n```\n## Task: [brief task description]\n\n## Assumptions:\n- [assumption 1]\n- [assumption 2]\n\n## Implementation Plan:\n1. [Step] → verify: [check]\n2. [Step] → verify: [check]\n3. [Step] → verify: [check]\n\n## Files affected:\n- [file path]: [what will change]\n\n## Questions/Risks:\n- [anything unclear or risky]\n```\n\nThe plan should be clear enough that implementation can proceed systematically with verification at each step.",
+      "prompt": "/plan-task {{task}}",
+      "rejectTargets": []
+    }
+  ]
+}

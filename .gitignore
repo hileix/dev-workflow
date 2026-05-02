@@ -1,0 +1,8 @@
+node_modules/
+renderer/dist/
+renderer/node_modules/
+
+.do-a-ticket-task/
+config.json
+
+references/

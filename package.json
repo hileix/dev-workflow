@@ -1,0 +1,30 @@
+{
+  "name": "dev-workflow",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "",
+  "main": "electron/main.mjs",
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "chat": "node chat.mjs",
+    "server": "node server.mjs",
+    "dev:renderer": "pnpm --dir renderer dev",
+    "dev": "pnpm --dir renderer build && electron .",
+    "electron": "pnpm build && electron .",
+    "build": "pnpm --dir renderer build",
+    "start": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "multer": "^2.1.1",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "electron": "^41.3.0"
+  }
+}

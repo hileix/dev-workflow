@@ -1,0 +1,155 @@
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import WorkflowEditor from "../WorkflowEditor";
+import { Button } from "../components/ui/button";
+import { cn } from "../lib/utils";
+import { useConfigStore } from "../stores/configStore";
+import { useWorkflowStore } from "../stores/workflowStore";
+
+export default function SettingsPage() {
+  const [editingWorkflow, setEditingWorkflow] = useState(null);
+  const [showEditor, setShowEditor] = useState(false);
+  const [confirmRemoveFolder, setConfirmRemoveFolder] = useState(null);
+
+  const workflows = useConfigStore((s) => s.workflows);
+  const taskStoragePath = useConfigStore((s) => s.taskStoragePath);
+  const workFolders = useConfigStore((s) => s.workFolders);
+  const selectedFolder = useConfigStore((s) => s.selectedFolder);
+  const setSelectedFolder = useConfigStore((s) => s.setSelectedFolder);
+  const deleteWorkflow = useConfigStore((s) => s.deleteWorkflow);
+  const changeStoragePath = useConfigStore((s) => s.changeStoragePath);
+  const addFolder = useConfigStore((s) => s.addFolder);
+  const removeFolder = useConfigStore((s) => s.removeFolder);
+  const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
+  const loadWorkflowConfig = useConfigStore((s) => s.loadWorkflowConfig);
+  const showToast = useWorkflowStore((s) => s.showToast);
+
+  if (showEditor) {
+    return (
+      <WorkflowEditor
+        filename={editingWorkflow}
+        onClose={() => { setShowEditor(false); setEditingWorkflow(null); loadWorkflows(); }}
+        onSaved={() => {
+          showToast("Workflow saved successfully");
+          loadWorkflowConfig();
+          loadWorkflows();
+          setShowEditor(false);
+          setEditingWorkflow(null);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto px-6 py-6 max-w-3xl mx-auto w-full">
+      <div className="flex items-center gap-3 mb-6">
+        <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors text-sm">&larr; Back</Link>
+        <h2 className="text-lg font-semibold text-foreground">Settings</h2>
+      </div>
+
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-semibold text-foreground">Workflows</h3>
+          <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(null); setShowEditor(true); }}>+ New Workflow</Button>
+        </div>
+        {workflows.length === 0 ? (
+          <div className="text-muted-foreground text-sm p-6 text-center border border-dashed border-border rounded-lg">
+            No workflows found.
+          </div>
+        ) : (
+          <ul className="list-none space-y-2">
+            {workflows.map((wf) => (
+              <li
+                key={wf.filename}
+                className="flex items-center justify-between p-3 border border-border rounded-lg transition-colors hover:bg-accent"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-sm font-semibold text-foreground">{wf.name}</span>
+                  <span className="text-xs text-muted-foreground">{wf.phaseCount} phases</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(wf.filename); setShowEditor(true); }}>
+                    Edit
+                  </Button>
+                  {wf.filename !== "default.json" && (
+                    <button
+                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded text-base"
+                      onClick={() => deleteWorkflow(wf.filename)}
+                    >
+                      x
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-semibold text-foreground">Task Storage</h3>
+          <Button variant="outline" size="sm" onClick={changeStoragePath}>Change</Button>
+        </div>
+        <div className="p-3 border border-border rounded-lg">
+          <span className="text-sm text-muted-foreground truncate block">
+            {taskStoragePath || "Default (./do-a-ticket-task)"}
+          </span>
+        </div>
+      </div>
+
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-semibold text-foreground">Work Folders</h3>
+          <Button variant="outline" size="sm" onClick={addFolder}>+ Add Folder</Button>
+        </div>
+
+        {workFolders.length === 0 ? (
+          <div className="text-muted-foreground text-sm p-6 text-center border border-dashed border-border rounded-lg">
+            No work folders configured. Click "+ Add Folder" to browse and select a project directory.
+          </div>
+        ) : (
+          <ul className="list-none space-y-2">
+            {workFolders.map((f) => (
+              <li
+                key={f.path}
+                className={cn(
+                  "flex items-center justify-between p-3 border border-border rounded-lg cursor-pointer transition-colors",
+                  "hover:bg-accent",
+                  selectedFolder === f.path && "bg-secondary border-ring"
+                )}
+                onClick={() => setSelectedFolder(f.path)}
+              >
+                <div className="flex flex-col gap-1 min-w-0">
+                  <span className="text-sm font-semibold text-foreground">{f.name}</span>
+                  <span className="text-xs text-muted-foreground truncate">{f.path}</span>
+                </div>
+                <button
+                  className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded text-base"
+                  onClick={(e) => { e.stopPropagation(); setConfirmRemoveFolder(f); }}
+                >
+                  x
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {confirmRemoveFolder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setConfirmRemoveFolder(null)}>
+          <div className="bg-card border border-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-foreground mb-2">Remove Work Folder</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Are you sure you want to remove <strong>{confirmRemoveFolder.name}</strong>?
+            </p>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" size="sm" onClick={() => setConfirmRemoveFolder(null)}>Cancel</Button>
+              <Button variant="destructive" size="sm" onClick={() => { removeFolder(confirmRemoveFolder.path); setConfirmRemoveFolder(null); }}>Remove</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

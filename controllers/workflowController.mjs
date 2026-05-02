@@ -1,0 +1,170 @@
+import { Router } from "express";
+import { join } from "path";
+import { readFile, writeFile, readdir, stat, unlink } from "fs/promises";
+import { spawn } from "child_process";
+import { readConfig, saveConfig, WORKFLOW_DIR } from "../models/config.mjs";
+import {
+  getWorkflow, getActiveWorkflowFile, setActiveWorkflowFile,
+  getPhaseOrder, loadWorkflow,
+} from "../models/workflow.mjs";
+
+const router = Router();
+
+// --- AI skill generation ---
+
+router.post("/generate-skill", (req, res) => {
+  const { label, id, prompt, description } = req.body;
+  if (!label) return res.status(400).json({ error: "label is required" });
+
+  const context = [
+    `Phase label: ${label}`,
+    id ? `Phase ID: ${id}` : "",
+    prompt ? `Current prompt: ${prompt}` : "",
+    description ? `User description: ${description}` : "",
+  ].filter(Boolean).join("\n");
+
+  const metaPrompt = `You are generating a skill instruction for a workflow automation phase. The skill will guide an AI assistant (Claude) on how to execute this phase.
+
+Based on the following phase context, generate a concise, actionable skill instruction. The skill should describe what the AI should do, any constraints or best practices, and expected output format.
+
+${context}
+
+The output MUST start with YAML frontmatter containing name and description fields, followed by the skill body. Use this format:
+
+---
+name: <short kebab-case name derived from the phase label>
+description: "<one-line description of what this skill does and when to use it>"
+---
+
+<skill instruction body>
+
+Keep the skill body concise and actionable (under 500 words). No extra explanations outside the format above.`;
+
+  const args = ["-p", metaPrompt, "--output-format", "text"];
+  const child = spawn(process.env.CLAUDE_PATH || "claude", args, {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  child.stdout.on("data", (d) => { stdout += d.toString(); });
+  child.on("close", (code) => {
+    if (code !== 0) return res.status(500).json({ error: "Failed to generate skill" });
+    res.json({ skill: stdout.trim() });
+  });
+});
+
+// --- Workflow metadata ---
+
+router.get("/workflow", (req, res) => {
+  const WORKFLOW = getWorkflow();
+  const PHASE_ORDER = getPhaseOrder();
+  const groups = [];
+  const seenGroups = new Set();
+  const phaseLabels = {};
+  const phaseTypes = {};
+  const rejectTargets = {};
+
+  for (const p of WORKFLOW.phases) {
+    phaseLabels[p.id] = p.label;
+    phaseTypes[p.id] = p.type;
+    if (p.rejectTargets) rejectTargets[p.id] = p.rejectTargets;
+    if (!seenGroups.has(p.group)) {
+      seenGroups.add(p.group);
+      groups.push({ key: p.group, label: p.groupLabel || p.label, phases: [] });
+    }
+    groups.find((g) => g.key === p.group).phases.push(p.id);
+  }
+
+  res.json({ name: WORKFLOW.name, activeWorkflow: getActiveWorkflowFile(), phaseOrder: PHASE_ORDER, groups, phaseLabels, phaseTypes, rejectTargets, prompts: WORKFLOW.prompts || [] });
+});
+
+// --- Workflow CRUD ---
+
+router.get("/workflows", async (req, res) => {
+  try {
+    const files = await readdir(WORKFLOW_DIR);
+    const workflows = [];
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const raw = JSON.parse(await readFile(join(WORKFLOW_DIR, f), "utf-8"));
+        workflows.push({ filename: f, name: raw.name || f, phaseCount: raw.phases?.length || 0, prompts: raw.prompts || [] });
+      } catch {}
+    }
+    res.json({ workflows, activeWorkflow: getActiveWorkflowFile() });
+  } catch {
+    res.json({ workflows: [], activeWorkflow: getActiveWorkflowFile() });
+  }
+});
+
+router.get("/workflows/:filename", async (req, res) => {
+  const { filename } = req.params;
+  if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
+  try {
+    const raw = await readFile(join(WORKFLOW_DIR, filename), "utf-8");
+    res.json(JSON.parse(raw));
+  } catch {
+    res.status(404).json({ error: "workflow not found" });
+  }
+});
+
+router.post("/workflows", async (req, res) => {
+  const workflow = req.body;
+  if (!workflow.name || !workflow.phases) return res.status(400).json({ error: "name and phases required" });
+  const filename = workflow.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".json";
+  const filepath = join(WORKFLOW_DIR, filename);
+  try {
+    await stat(filepath);
+    return res.status(409).json({ error: "workflow with this name already exists" });
+  } catch {}
+  await writeFile(filepath, JSON.stringify(workflow, null, 2));
+  res.json({ filename, name: workflow.name });
+});
+
+router.put("/workflows/:filename", async (req, res) => {
+  const { filename } = req.params;
+  if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
+  const workflow = req.body;
+  if (!workflow.name || !workflow.phases) return res.status(400).json({ error: "name and phases required" });
+  await writeFile(join(WORKFLOW_DIR, filename), JSON.stringify(workflow, null, 2));
+  if (filename === getActiveWorkflowFile()) {
+    loadWorkflow(join(WORKFLOW_DIR, filename));
+  }
+  res.json({ filename, name: workflow.name });
+});
+
+router.delete("/workflows/:filename", async (req, res) => {
+  const { filename } = req.params;
+  if (filename === "default.json") return res.status(400).json({ error: "cannot delete default workflow" });
+  if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
+  try {
+    await unlink(join(WORKFLOW_DIR, filename));
+    if (getActiveWorkflowFile() === filename) {
+      setActiveWorkflowFile("default.json");
+      loadWorkflow(join(WORKFLOW_DIR, "default.json"));
+      const config = await readConfig();
+      delete config.activeWorkflow;
+      await saveConfig(config);
+    }
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: "workflow not found" });
+  }
+});
+
+router.put("/workflows/:filename/activate", async (req, res) => {
+  const { filename } = req.params;
+  if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
+  try {
+    loadWorkflow(join(WORKFLOW_DIR, filename));
+    setActiveWorkflowFile(filename);
+    const config = await readConfig();
+    config.activeWorkflow = filename;
+    await saveConfig(config);
+    res.json({ activeWorkflow: filename });
+  } catch (err) {
+    res.status(400).json({ error: `failed to load workflow: ${err.message}` });
+  }
+});
+
+export default router;

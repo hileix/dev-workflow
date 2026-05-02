@@ -1,0 +1,510 @@
+import { useState, useEffect } from "react";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Badge } from "./components/ui/badge";
+import { cn } from "./lib/utils";
+import { getDesktopApi } from "./lib/desktop-api";
+
+const desktopApi = getDesktopApi();
+
+function generateId(label) {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+const EMPTY_PHASE = {
+  id: "",
+  type: "auto",
+  label: "",
+  group: "",
+  groupLabel: "",
+  artifact: "",
+  skill: "",
+  prompt: "",
+  rejectTargets: [],
+};
+
+export default function WorkflowEditor({ filename, onClose, onSaved }) {
+  const [name, setName] = useState("");
+  const [prompts, setPrompts] = useState([]);
+  const [phases, setPhases] = useState([]);
+  const [selectedIdx, setSelectedIdx] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [confirmRemoveIdx, setConfirmRemoveIdx] = useState(null);
+  const [showBackConfirm, setShowBackConfirm] = useState(false);
+  const [showSkillGenerate, setShowSkillGenerate] = useState(false);
+  const [skillDescription, setSkillDescription] = useState("");
+  const [generatingSkill, setGeneratingSkill] = useState(false);
+  const isNew = !filename;
+
+  useEffect(() => {
+    if (!filename) {
+      setName("");
+      setPrompts([]);
+      setPhases([]);
+      setSelectedIdx(null);
+      return;
+    }
+    desktopApi.getWorkflow(filename)
+      .then((wf) => {
+        setName(wf.name || "");
+        setPrompts(wf.prompts || []);
+        setPhases(wf.phases || []);
+        setSelectedIdx(wf.phases?.length > 0 ? 0 : null);
+      })
+      .catch(() => setError("Failed to load workflow"));
+  }, [filename]);
+
+  function updatePhase(idx, field, value) {
+    setPhases((prev) => prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p)));
+    setDirty(true);
+  }
+
+  function addPhase() {
+    const newPhase = { ...EMPTY_PHASE, id: `phase_new_${phases.length + 1}`, label: "New Phase" };
+    setPhases((prev) => [...prev, newPhase]);
+    setSelectedIdx(phases.length);
+    setDirty(true);
+  }
+
+  function removePhase(idx) {
+    setPhases((prev) => prev.filter((_, i) => i !== idx));
+    setSelectedIdx((prev) => {
+      if (prev === idx) return phases.length > 1 ? Math.min(idx, phases.length - 2) : null;
+      if (prev > idx) return prev - 1;
+      return prev;
+    });
+    setDirty(true);
+  }
+
+  function movePhase(idx, dir) {
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= phases.length) return;
+    setPhases((prev) => {
+      const copy = [...prev];
+      [copy[idx], copy[newIdx]] = [copy[newIdx], copy[idx]];
+      return copy;
+    });
+    setSelectedIdx(newIdx);
+    setDirty(true);
+  }
+
+  function toggleRejectTarget(target) {
+    if (selectedIdx === null) return;
+    const phase = phases[selectedIdx];
+    const current = phase.rejectTargets || [];
+    const updated = current.includes(target)
+      ? current.filter((t) => t !== target)
+      : [...current, target];
+    updatePhase(selectedIdx, "rejectTargets", updated);
+  }
+
+  async function generateSkill() {
+    if (selectedIdx === null) return;
+    const phase = phases[selectedIdx];
+    setGeneratingSkill(true);
+    try {
+      const data = await desktopApi.generateSkill({
+        label: phase.label,
+        id: phase.id,
+        prompt: phase.prompt,
+        description: skillDescription,
+      });
+      updatePhase(selectedIdx, "skill", data.skill);
+    } catch {}
+    setGeneratingSkill(false);
+    setShowSkillGenerate(false);
+    setSkillDescription("");
+  }
+
+  async function handleSave() {
+    if (!name.trim()) { setError("Workflow name is required"); return; }
+    if (phases.length === 0) { setError("At least one phase is required"); return; }
+    for (const p of phases) {
+      if (!p.id || !p.label || !p.type || !p.group) {
+        setError(`Phase "${p.label || p.id || "(unnamed)"}" is missing required fields (id, label, type, group)`);
+        return;
+      }
+    }
+    setError(null);
+    setSaving(true);
+
+    const workflow = { name: name.trim(), prompts, phases };
+    try {
+      if (isNew) {
+        await desktopApi.createWorkflow(workflow);
+      } else {
+        await desktopApi.updateWorkflow(filename, workflow);
+      }
+      setDirty(false);
+      onSaved();
+    } catch (err) {
+      setError(err.message || "Failed to save workflow");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const selected = selectedIdx !== null ? phases[selectedIdx] : null;
+  const autoPhaseIds = phases.filter((p) => p.type === "auto").map((p) => p.id);
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Top bar */}
+      <div className="flex items-center gap-3 px-6 py-4 border-b border-border bg-card">
+        <Button variant="ghost" size="sm" onClick={() => dirty ? setShowBackConfirm(true) : onClose()}>
+          &larr; Back
+        </Button>
+        <Input
+          value={name}
+          onChange={(e) => { setName(e.target.value); setDirty(true); }}
+          placeholder="Workflow name"
+          className="max-w-xs"
+        />
+        <div className="flex-1" />
+        {error && <span className="text-destructive text-xs">{error}</span>}
+        <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
+          {saving ? "Saving..." : "Save"}
+        </Button>
+      </div>
+
+      <div className="flex-1 flex min-h-0">
+        {/* Phase list (left) */}
+        <div className="w-72 shrink-0 border-r border-border bg-sidebar overflow-y-auto py-4">
+          <div className="px-4 pb-4 border-b border-border mb-3">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-semibold text-muted-foreground">Prompts ({prompts.length})</h2>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setPrompts((prev) => [...prev, { key: "", label: "", placeholder: "" }]);
+                  setDirty(true);
+                }}
+              >
+                + Add
+              </Button>
+            </div>
+            {prompts.length === 0 && (
+              <span className="text-[10px] text-muted-foreground">Define inputs the user fills in when starting a new task, e.g. task description.</span>
+            )}
+            {prompts.map((p, i) => (
+              <div key={i} className="mt-2 p-2 border border-border rounded-lg space-y-1.5 bg-card">
+                <div className="flex gap-1.5">
+                  <Input
+                    value={p.key}
+                    onChange={(e) => {
+                      setPrompts((prev) => prev.map((item, idx) => idx === i ? { ...item, key: e.target.value } : item));
+                      setDirty(true);
+                    }}
+                    placeholder="key"
+                    className="text-xs h-7"
+                  />
+                  <button
+                    className="text-muted-foreground hover:text-destructive text-xs px-1 shrink-0"
+                    onClick={() => {
+                      setPrompts((prev) => prev.filter((_, idx) => idx !== i));
+                      setDirty(true);
+                    }}
+                  >
+                    x
+                  </button>
+                </div>
+                <Input
+                  value={p.label}
+                  onChange={(e) => {
+                    setPrompts((prev) => prev.map((item, idx) => idx === i ? { ...item, label: e.target.value } : item));
+                    setDirty(true);
+                  }}
+                  placeholder="Label"
+                  className="text-xs h-7"
+                />
+                <Input
+                  value={p.placeholder}
+                  onChange={(e) => {
+                    setPrompts((prev) => prev.map((item, idx) => idx === i ? { ...item, placeholder: e.target.value } : item));
+                    setDirty(true);
+                  }}
+                  placeholder="Placeholder text"
+                  className="text-xs h-7"
+                />
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between px-4 pb-3">
+            <h2 className="text-xs font-semibold text-muted-foreground">
+              Phases ({phases.length})
+            </h2>
+            <Button variant="outline" size="sm" onClick={addPhase}>+ Add</Button>
+          </div>
+          <ul className="list-none">
+            {phases.map((p, idx) => (
+              <li
+                key={idx}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2.5 cursor-pointer text-sm transition-colors",
+                  "text-muted-foreground hover:bg-accent",
+                  selectedIdx === idx && "bg-primary/30 text-foreground border-l-2 border-l-primary"
+                )}
+                onClick={() => setSelectedIdx(idx)}
+              >
+                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                  <span className="truncate">{p.label || p.id || "(unnamed)"}</span>
+                  <span className="text-xs text-muted-foreground truncate">{p.id}</span>
+                </div>
+                <Badge variant={p.type === "auto" ? "info" : "warning"} className="shrink-0 text-[10px]">
+                  {p.type}
+                </Badge>
+                <div className="flex flex-col gap-0.5 shrink-0">
+                  <button
+                    className="text-muted-foreground hover:text-foreground text-[10px] leading-none px-0.5"
+                    onClick={(e) => { e.stopPropagation(); movePhase(idx, -1); }}
+                    disabled={idx === 0}
+                  >
+                    ▲
+                  </button>
+                  <button
+                    className="text-muted-foreground hover:text-foreground text-[10px] leading-none px-0.5"
+                    onClick={(e) => { e.stopPropagation(); movePhase(idx, 1); }}
+                    disabled={idx === phases.length - 1}
+                  >
+                    ▼
+                  </button>
+                </div>
+                <button
+                  className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded text-xs shrink-0"
+                  onClick={(e) => { e.stopPropagation(); setConfirmRemoveIdx(idx); }}
+                >
+                  x
+                </button>
+              </li>
+            ))}
+          </ul>
+          {phases.length === 0 && (
+            <div className="text-muted-foreground text-xs p-4 text-center">
+              No phases. Click "+ Add" to create one.
+            </div>
+          )}
+        </div>
+
+        {/* Phase edit form (right) */}
+        <div className="flex-1 overflow-y-auto px-6 py-6">
+          {selected ? (
+            <div className="max-w-2xl space-y-5">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1.5">Label *</label>
+                  <Input
+                    value={selected.label}
+                    onChange={(e) => {
+                      updatePhase(selectedIdx, "label", e.target.value);
+                      if (!dirty || selected.id === generateId(selected.label) || !selected.id) {
+                        updatePhase(selectedIdx, "id", (selected.type === "checkpoint" ? "checkpoint_" : "phase_") + generateId(e.target.value));
+                      }
+                    }}
+                    placeholder="e.g., Read Ticket"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1.5">ID *</label>
+                  <Input
+                    value={selected.id}
+                    onChange={(e) => updatePhase(selectedIdx, "id", e.target.value)}
+                    placeholder="e.g., phase_read_ticket"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1.5">Type *</label>
+                <div className="flex gap-3">
+                  {["auto", "checkpoint"].map((t) => (
+                    <button
+                      key={t}
+                      className={cn(
+                        "px-4 py-2 rounded-lg border text-sm font-medium transition-colors cursor-pointer",
+                        selected.type === t
+                          ? "border-ring bg-secondary text-foreground"
+                          : "border-border text-muted-foreground hover:bg-accent"
+                      )}
+                      onClick={() => updatePhase(selectedIdx, "type", t)}
+                    >
+                      {t === "auto" ? "Auto (AI runs)" : "Checkpoint (User reviews)"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1.5">Group Key *</label>
+                  <Input
+                    value={selected.group}
+                    onChange={(e) => updatePhase(selectedIdx, "group", e.target.value)}
+                    placeholder="e.g., plan"
+                  />
+                  <span className="text-[10px] text-muted-foreground mt-0.5 block">Phases with the same group are shown together in the sidebar</span>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1.5">Group Label</label>
+                  <Input
+                    value={selected.groupLabel || ""}
+                    onChange={(e) => updatePhase(selectedIdx, "groupLabel", e.target.value || undefined)}
+                    placeholder="e.g., Plan"
+                  />
+                  <span className="text-[10px] text-muted-foreground mt-0.5 block">Display name for the group (only needed on first phase of group)</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1.5">Artifact Filename</label>
+                <Input
+                  value={selected.artifact || ""}
+                  onChange={(e) => updatePhase(selectedIdx, "artifact", e.target.value)}
+                  placeholder="e.g., plan.md or {{ticketId}}.md"
+                />
+                <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                  {"Variables: {{ticketId}}, or any prompt key. Each phase can save an artifact document; later phases can read earlier artifacts for additional context."}
+                </span>
+              </div>
+
+              {selected.type === "auto" && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-muted-foreground">Skill</label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowSkillGenerate(true)}
+                      disabled={generatingSkill}
+                    >
+                      {generatingSkill ? "Generating..." : "Generate with AI"}
+                    </Button>
+                  </div>
+                  <textarea
+                    value={selected.skill || ""}
+                    onChange={(e) => updatePhase(selectedIdx, "skill", e.target.value)}
+                    placeholder="Skill instructions for this phase (can be generated by AI)"
+                    className="flex w-full rounded-lg border border-input bg-secondary px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring min-h-[80px] resize-y font-mono"
+                    rows={3}
+                  />
+                  <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                    AI-generated or manual skill instructions prepended to the prompt when this phase runs.
+                  </span>
+                </div>
+              )}
+
+              {selected.type === "auto" && (
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1.5">Prompt</label>
+                  <textarea
+                    value={selected.prompt || ""}
+                    onChange={(e) => updatePhase(selectedIdx, "prompt", e.target.value)}
+                    placeholder="e.g., /read-ticket {{ticketId}}\n\nSave output to {{taskDir}}/ticket.md"
+                    className="flex w-full rounded-lg border border-input bg-secondary px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring min-h-[120px] resize-y font-mono"
+                    rows={5}
+                  />
+                  <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                    {"Variables: {{ticketId}} (or any prompt key), {{baseDir}}, {{taskDir}}. Use slash commands like /read-ticket, /plan-ticket, etc."}
+                  </span>
+                </div>
+              )}
+
+              {selected.type === "checkpoint" && (
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1.5">Reject Targets</label>
+                  <div className="flex flex-wrap gap-2">
+                    {autoPhaseIds.length === 0 ? (
+                      <span className="text-xs text-muted-foreground">No auto phases defined yet</span>
+                    ) : (
+                      autoPhaseIds.map((pid) => {
+                        const isSelected = (selected.rejectTargets || []).includes(pid);
+                        return (
+                          <button
+                            key={pid}
+                            className={cn(
+                              "px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer",
+                              isSelected
+                                ? "border-ring bg-secondary text-foreground"
+                                : "border-border text-muted-foreground hover:bg-accent"
+                            )}
+                            onClick={() => toggleRejectTarget(pid)}
+                          >
+                            {phases.find((p) => p.id === pid)?.label || pid}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                    Which phases the user can reject back to from this checkpoint
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+              {phases.length === 0 ? 'Click "+ Add" to create your first phase' : "Select a phase to edit"}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {showBackConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowBackConfirm(false)}>
+          <div className="bg-card border border-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-foreground mb-2">Unsaved Changes</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              You have unsaved changes. Are you sure you want to leave?
+            </p>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" size="sm" onClick={() => setShowBackConfirm(false)}>Cancel</Button>
+              <Button variant="destructive" size="sm" onClick={() => { setShowBackConfirm(false); onClose(); }}>Discard</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSkillGenerate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => { if (!generatingSkill) { setShowSkillGenerate(false); setSkillDescription(""); } }}>
+          <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-foreground mb-2">Generate Skill with AI</h3>
+            <p className="text-sm text-muted-foreground mb-3">
+              Describe what this skill should do (optional). The AI will also use the phase label and prompt as context.
+            </p>
+            <textarea
+              value={skillDescription}
+              onChange={(e) => setSkillDescription(e.target.value)}
+              placeholder="e.g., Review the PR for security issues and code quality..."
+              className="flex w-full rounded-lg border border-input bg-secondary px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring min-h-[80px] resize-y mb-4"
+              rows={3}
+              disabled={generatingSkill}
+            />
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" size="sm" onClick={() => { setShowSkillGenerate(false); setSkillDescription(""); }} disabled={generatingSkill}>Cancel</Button>
+              <Button size="sm" onClick={generateSkill} disabled={generatingSkill}>
+                {generatingSkill ? "Generating..." : "Generate"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmRemoveIdx !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setConfirmRemoveIdx(null)}>
+          <div className="bg-card border border-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-foreground mb-2">Remove Phase</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Are you sure you want to remove <strong>{phases[confirmRemoveIdx]?.label || phases[confirmRemoveIdx]?.id || "this phase"}</strong>?
+            </p>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" size="sm" onClick={() => setConfirmRemoveIdx(null)}>Cancel</Button>
+              <Button variant="destructive" size="sm" onClick={() => { removePhase(confirmRemoveIdx); setConfirmRemoveIdx(null); }}>Remove</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
