@@ -9,16 +9,11 @@ export const useConfigStore = create((set, get) => ({
   activeWorkflowFile: "default.json",
   workFolders: [],
   selectedFolder: "",
-  taskStoragePath: "",
 
   async loadAll() {
     get().loadWorkflowConfig();
     get().loadWorkflows();
     get().loadWorkFolders();
-    try {
-      const config = await desktopApi.getConfig();
-      set({ taskStoragePath: config.taskStoragePath || "" });
-    } catch {}
   },
 
   async loadWorkflowConfig() {
@@ -67,16 +62,6 @@ export const useConfigStore = create((set, get) => ({
       await desktopApi.removeWorkflow(filename);
       get().loadWorkflows();
       get().loadWorkflowConfig();
-    } catch {}
-  },
-
-  async changeStoragePath() {
-    try {
-      const pick = await desktopApi.pickFolder();
-      if (pick.cancelled) return;
-      const data = await desktopApi.updateTaskStoragePath(pick.path);
-      set({ taskStoragePath: data.taskStoragePath });
-      get().loadWorkFolders();
     } catch {}
   },
 

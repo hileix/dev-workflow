@@ -2,9 +2,8 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { killAllChildren } from "../lib/claude.mjs";
+import { setRuntimeBaseDir } from "../models/config.mjs";
 import {
-  getConfig,
-  updateTaskStoragePath,
   pickFolder,
   getWorkflowConfig,
   listWorkflows,
@@ -31,6 +30,19 @@ import {
 
 let mainWindow;
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const rendererDevServerUrl = process.env.ELECTRON_RENDERER_URL;
+const isDev = Boolean(rendererDevServerUrl);
+
+async function waitForRenderer(url, attempts = 40, delayMs = 500) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const response = await fetch(url, { method: "HEAD" });
+      if (response.ok) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new Error(`Renderer dev server not ready: ${url}`);
+}
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -45,12 +57,15 @@ async function createWindow() {
     },
   });
 
-  await mainWindow.loadFile(join(__dirname, "..", "renderer", "dist", "index.html"));
+  if (isDev) {
+    await waitForRenderer(rendererDevServerUrl);
+    await mainWindow.loadURL(rendererDevServerUrl);
+  } else {
+    await mainWindow.loadFile(join(__dirname, "..", "renderer", "dist", "index.html"));
+  }
 }
 
 function registerIpcHandlers() {
-  ipcMain.handle("app:get-config", () => getConfig());
-  ipcMain.handle("app:update-task-storage-path", (_event, path) => updateTaskStoragePath(path));
   ipcMain.handle("app:pick-folder", (event) => pickFolder(BrowserWindow.fromWebContents(event.sender)));
   ipcMain.handle("app:get-workflow-config", () => getWorkflowConfig());
   ipcMain.handle("app:list-workflows", () => listWorkflows());
@@ -89,9 +104,15 @@ function registerIpcHandlers() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  setRuntimeBaseDir(join(app.getPath("userData"), "tasks"));
   registerIpcHandlers();
-  return createWindow();
+  try {
+    await createWindow();
+  } catch (err) {
+    console.error(err);
+    app.quit();
+  }
 });
 
 app.on("window-all-closed", () => {

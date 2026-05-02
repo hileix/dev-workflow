@@ -47,3 +47,5 @@ There is no real automated test suite yet. The current `pnpm test` script intent
 
 - Use Node `25` from `.nvmrc`.
 - Treat `renderer/dist` as build output; edit source files under `renderer/src` instead.
+
+请用中文回复。

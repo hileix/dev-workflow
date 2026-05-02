@@ -5,7 +5,6 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 import "./models/workflow.mjs"; // triggers startup workflow loading
-import configController from "./controllers/configController.mjs";
 import workfoldersController from "./controllers/workfoldersController.mjs";
 import workflowController from "./controllers/workflowController.mjs";
 import { setupWebSocket } from "./controllers/wsController.mjs";
@@ -19,7 +18,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(join(__dirname, "renderer", "dist")));
 
-app.use("/api", configController);
 app.use("/api", workfoldersController);
 app.use("/api", workflowController);
 
@@ -30,9 +28,9 @@ app.get("*", (req, res) => {
 
 function killAllChildren() {
   for (const [, wf] of activeWorkflows) {
-    if (wf.child) {
-      wf.child.kill();
-      wf.child = null;
+    if (wf.abortController) {
+      try { wf.abortController.abort(); } catch {}
+      wf.abortController = null;
     }
   }
 }

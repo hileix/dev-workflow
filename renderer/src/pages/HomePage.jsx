@@ -140,7 +140,10 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
   async function handleSubmit(e) {
     e.preventDefault();
     if (!allFilled || !selectedFolder || !selectedWorkflow || submitting) return;
-    const id = (promptValues[firstKey] || "").trim();
+    const descriptionValue = (promptValues.task || promptValues[firstKey] || "").trim();
+    const id = displayPrompts.length === 1 && firstKey === "task"
+      ? `task-${Date.now()}`
+      : (promptValues[firstKey] || descriptionValue).trim();
 
     setSubmitting(true);
     try {
@@ -211,7 +214,6 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
               ))}
             </div>
           </div>
-
           <form className="space-y-3" onSubmit={handleSubmit}>
             {displayPrompts.map((p, i) => (
               <div key={p.key} className="space-y-2">

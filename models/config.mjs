@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..");
+let runtimeBaseDir = "";
 
 export const CONFIG_FILE = join(PROJECT_ROOT, "config.json");
 export const DEFAULT_BASE_DIR = join(PROJECT_ROOT, ".do-a-ticket-task");
@@ -17,9 +18,12 @@ export async function saveConfig(config) {
   await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
 }
 
+export function setRuntimeBaseDir(baseDir) {
+  runtimeBaseDir = baseDir || "";
+}
+
 export async function getBaseDir() {
-  const config = await readConfig();
-  return config.taskStoragePath || DEFAULT_BASE_DIR;
+  return runtimeBaseDir || DEFAULT_BASE_DIR;
 }
 
 export function getWorkfoldersFile(baseDir) {

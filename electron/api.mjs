@@ -1,8 +1,8 @@
 import { basename, join, resolve } from "path";
 import { readFile, writeFile, readdir, stat, unlink, mkdir } from "fs/promises";
-import { spawn } from "child_process";
 import { dialog } from "electron";
-import { readConfig, saveConfig, WORKFLOW_DIR } from "../models/config.mjs";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { WORKFLOW_DIR } from "../models/config.mjs";
 import {
   getWorkflow,
   getActiveWorkflowFile,
@@ -14,25 +14,6 @@ import { readWorkfolders, saveWorkfolders, deleteTask } from "../models/workfold
 import { getBaseDir } from "../models/config.mjs";
 import { readState } from "../models/state.mjs";
 import { getPhaseContent, readArtifact } from "../lib/claude.mjs";
-
-export async function getConfig() {
-  const config = await readConfig();
-  return { taskStoragePath: config.taskStoragePath || "" };
-}
-
-export async function updateTaskStoragePath(folderPath) {
-  if (!folderPath) throw new Error("path required");
-  const absPath = resolve(folderPath);
-  const fileStat = await stat(absPath).catch(() => null);
-  if (!fileStat) throw new Error("path does not exist");
-  if (!fileStat.isDirectory()) throw new Error("not a directory");
-
-  const config = await readConfig();
-  config.taskStoragePath = join(absPath, ".do-a-ticket-task");
-  await saveConfig(config);
-  await mkdir(config.taskStoragePath, { recursive: true });
-  return { taskStoragePath: config.taskStoragePath };
-}
 
 export async function pickFolder(browserWindow) {
   const result = await dialog.showOpenDialog(browserWindow, {
@@ -141,24 +122,25 @@ description: "<one-line description of what this skill does and when to use it>"
 
 Keep the skill body concise and actionable (under 500 words). No extra explanations outside the format above.`;
 
-  return new Promise((resolvePromise, reject) => {
-    const args = ["-p", metaPrompt, "--output-format", "text"];
-    const child = spawn(process.env.CLAUDE_PATH || "claude", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error("Failed to generate skill"));
-        return;
+  let skill = "";
+  for await (const message of query({
+    prompt: metaPrompt,
+    options: {
+      cwd: process.cwd(),
+      permissionMode: "default",
+      maxTurns: 1,
+    },
+  })) {
+    if (message.type === "result") {
+      if (message.subtype !== "success") {
+        throw new Error(message.errors?.join("; ") || message.result || "Failed to generate skill");
       }
-      resolvePromise({ skill: stdout.trim() });
-    });
-  });
+      skill = message.result?.trim() || "";
+    }
+  }
+
+  if (!skill) throw new Error("Failed to generate skill");
+  return { skill };
 }
 
 export async function updateWorkflow(filename, workflow) {
@@ -172,14 +154,19 @@ export async function updateWorkflow(filename, workflow) {
 }
 
 export async function removeWorkflow(filename) {
-  if (filename === "default.json") throw new Error("cannot delete default workflow");
   if (!filename.endsWith(".json")) throw new Error("invalid filename");
+  const files = (await readdir(WORKFLOW_DIR)).filter((file) => file.endsWith(".json"));
+  if (!files.includes(filename)) throw new Error("workflow not found");
+  if (files.length <= 1) throw new Error("at least one workflow must remain");
+
   await unlink(join(WORKFLOW_DIR, filename));
   if (getActiveWorkflowFile() === filename) {
-    setActiveWorkflowFile("default.json");
-    loadWorkflow(join(WORKFLOW_DIR, "default.json"));
+    const remaining = files.filter((file) => file !== filename).sort();
+    const nextWorkflow = remaining.includes("default.json") ? "default.json" : remaining[0];
+    setActiveWorkflowFile(nextWorkflow);
+    loadWorkflow(join(WORKFLOW_DIR, nextWorkflow));
     const config = await readConfig();
-    delete config.activeWorkflow;
+    config.activeWorkflow = nextWorkflow;
     await saveConfig(config);
   }
   return { ok: true };

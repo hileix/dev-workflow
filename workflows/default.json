@@ -7,6 +7,7 @@
     {
       "id": "phase_read_ticket",
       "type": "auto",
+      "aiBackend": "claude",
       "label": "Read Ticket",
       "group": "read_ticket",
       "groupLabel": "Read Ticket",
@@ -16,6 +17,7 @@
     {
       "id": "phase_plan",
       "type": "auto",
+      "aiBackend": "claude",
       "label": "Plan",
       "group": "plan",
       "groupLabel": "Plan",
@@ -25,6 +27,7 @@
     {
       "id": "checkpoint_plan_review",
       "type": "checkpoint",
+      "aiBackend": "claude",
       "label": "Review Plan",
       "group": "plan",
       "artifact": "plan.md",
@@ -35,6 +38,7 @@
     {
       "id": "phase_implement",
       "type": "auto",
+      "aiBackend": "claude",
       "label": "Implement",
       "group": "implement",
       "groupLabel": "Implement",
@@ -44,6 +48,7 @@
     {
       "id": "checkpoint_code_review",
       "type": "checkpoint",
+      "aiBackend": "claude",
       "label": "Review Code",
       "group": "implement",
       "artifact": "implementation.md",
@@ -55,6 +60,7 @@
     {
       "id": "checkpoint_user_testing",
       "type": "checkpoint",
+      "aiBackend": "claude",
       "label": "User Testing",
       "group": "implement",
       "artifact": "implementation.md",
@@ -65,6 +71,7 @@
     {
       "id": "phase_commit",
       "type": "auto",
+      "aiBackend": "claude",
       "label": "Commit",
       "group": "commit",
       "groupLabel": "Commit",
@@ -74,6 +81,7 @@
     {
       "id": "checkpoint_commit_review",
       "type": "checkpoint",
+      "aiBackend": "claude",
       "label": "Review Commit",
       "group": "commit",
       "artifact": "commit.md",
@@ -84,6 +92,7 @@
     {
       "id": "phase_create_pr",
       "type": "auto",
+      "aiBackend": "claude",
       "label": "Create PR",
       "group": "create_pr",
       "groupLabel": "Create PR",
@@ -93,6 +102,7 @@
     {
       "id": "phase_pr_comments",
       "type": "auto",
+      "aiBackend": "claude",
       "label": "Leave Comments",
       "group": "comments",
       "groupLabel": "Leave Comments",
@@ -102,6 +112,7 @@
     {
       "id": "checkpoint_comments_review",
       "type": "checkpoint",
+      "aiBackend": "claude",
       "label": "Review Comments",
       "group": "comments",
       "artifact": "comments.md",
@@ -112,6 +123,7 @@
     {
       "id": "phase_gen_summary",
       "type": "auto",
+      "aiBackend": "claude",
       "label": "Generate Summary",
       "group": "summary",
       "groupLabel": "Generate Summary",

@@ -14,6 +14,7 @@ function generateId(label) {
 const EMPTY_PHASE = {
   id: "",
   type: "auto",
+  aiBackend: "claude",
   label: "",
   group: "",
   groupLabel: "",
@@ -50,7 +51,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
       .then((wf) => {
         setName(wf.name || "");
         setPrompts(wf.prompts || []);
-        setPhases(wf.phases || []);
+        setPhases((wf.phases || []).map((phase) => ({ aiBackend: "claude", ...phase })));
         setSelectedIdx(wf.phases?.length > 0 ? 0 : null);
       })
       .catch(() => setError("Failed to load workflow"));
@@ -316,6 +317,33 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                 </div>
               </div>
 
+              {selected.type === "auto" && (
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground block mb-1.5">AI Backend *</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { key: "claude", label: "Claude Agent SDK", hint: "@anthropic-ai/claude-agent-sdk" },
+                      { key: "codex", label: "Codex SDK", hint: "@openai/codex-sdk" },
+                    ].map((backend) => (
+                      <button
+                        key={backend.key}
+                        className={cn(
+                          "rounded-lg border p-3 text-left transition-colors cursor-pointer",
+                          selected.aiBackend === backend.key
+                            ? "border-ring bg-secondary text-foreground"
+                            : "border-border text-muted-foreground hover:bg-accent"
+                        )}
+                        onClick={() => updatePhase(selectedIdx, "aiBackend", backend.key)}
+                      >
+                        <div className="text-sm font-semibold">{backend.label}</div>
+                        <div className="text-[10px]">{backend.hint}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground mt-0.5 block">This step will use the selected AI runtime when it runs.</span>
+                </div>
+              )}
+
               <div>
                 <label className="text-xs font-semibold text-muted-foreground block mb-1.5">Type *</label>
                 <div className="flex gap-3">
@@ -406,7 +434,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                     rows={5}
                   />
                   <span className="text-[10px] text-muted-foreground mt-0.5 block">
-                    {"Variables: {{ticketId}} (or any prompt key), {{baseDir}}, {{taskDir}}. Use slash commands like /read-ticket, /plan-ticket, etc."}
+                    {"Variables: {{ticketId}} (or any prompt key), {{baseDir}}, {{taskDir}}. Prefer plain instructions so the workflow can run on either Claude or Codex."}
                   </span>
                 </div>
               )}

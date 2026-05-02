@@ -9,15 +9,15 @@ import { useWorkflowStore } from "../stores/workflowStore";
 export default function SettingsPage() {
   const [editingWorkflow, setEditingWorkflow] = useState(null);
   const [showEditor, setShowEditor] = useState(false);
+  const [confirmRemoveWorkflow, setConfirmRemoveWorkflow] = useState(null);
+  const [confirmRemoveWorkflowStep, setConfirmRemoveWorkflowStep] = useState(1);
   const [confirmRemoveFolder, setConfirmRemoveFolder] = useState(null);
 
   const workflows = useConfigStore((s) => s.workflows);
-  const taskStoragePath = useConfigStore((s) => s.taskStoragePath);
   const workFolders = useConfigStore((s) => s.workFolders);
   const selectedFolder = useConfigStore((s) => s.selectedFolder);
   const setSelectedFolder = useConfigStore((s) => s.setSelectedFolder);
   const deleteWorkflow = useConfigStore((s) => s.deleteWorkflow);
-  const changeStoragePath = useConfigStore((s) => s.changeStoragePath);
   const addFolder = useConfigStore((s) => s.addFolder);
   const removeFolder = useConfigStore((s) => s.removeFolder);
   const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
@@ -71,31 +71,20 @@ export default function SettingsPage() {
                   <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(wf.filename); setShowEditor(true); }}>
                     Edit
                   </Button>
-                  {wf.filename !== "default.json" && (
-                    <button
-                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded text-base"
-                      onClick={() => deleteWorkflow(wf.filename)}
-                    >
-                      x
-                    </button>
-                  )}
+                  <button
+                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded text-base"
+                    onClick={() => {
+                      setConfirmRemoveWorkflow(wf);
+                      setConfirmRemoveWorkflowStep(1);
+                    }}
+                  >
+                    x
+                  </button>
                 </div>
               </li>
             ))}
           </ul>
         )}
-      </div>
-
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold text-foreground">Task Storage</h3>
-          <Button variant="outline" size="sm" onClick={changeStoragePath}>Change</Button>
-        </div>
-        <div className="p-3 border border-border rounded-lg">
-          <span className="text-sm text-muted-foreground truncate block">
-            {taskStoragePath || "Default (./do-a-ticket-task)"}
-          </span>
-        </div>
       </div>
 
       <div className="mb-6">
@@ -146,6 +135,63 @@ export default function SettingsPage() {
             <div className="flex justify-end gap-3">
               <Button variant="outline" size="sm" onClick={() => setConfirmRemoveFolder(null)}>Cancel</Button>
               <Button variant="destructive" size="sm" onClick={() => { removeFolder(confirmRemoveFolder.path); setConfirmRemoveFolder(null); }}>Remove</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmRemoveWorkflow && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => {
+            setConfirmRemoveWorkflow(null);
+            setConfirmRemoveWorkflowStep(1);
+          }}
+        >
+          <div className="bg-card border border-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-foreground mb-2">
+              {confirmRemoveWorkflowStep === 1 ? "Remove Workflow" : "Confirm Delete"}
+            </h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              {confirmRemoveWorkflowStep === 1
+                ? <>Are you sure you want to remove <strong>{confirmRemoveWorkflow.name}</strong>?</>
+                : <>This will permanently delete <strong>{confirmRemoveWorkflow.name}</strong>. This action cannot be undone.</>}
+            </p>
+            <div className="flex justify-end gap-3">
+              {confirmRemoveWorkflowStep === 1 ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setConfirmRemoveWorkflow(null);
+                      setConfirmRemoveWorkflowStep(1);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={() => setConfirmRemoveWorkflowStep(2)}>
+                    Continue
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => setConfirmRemoveWorkflowStep(1)}>
+                    Back
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => {
+                      deleteWorkflow(confirmRemoveWorkflow.filename);
+                      setConfirmRemoveWorkflow(null);
+                      setConfirmRemoveWorkflowStep(1);
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         </div>

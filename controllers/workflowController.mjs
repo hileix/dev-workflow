@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { join } from "path";
 import { readFile, writeFile, readdir, stat, unlink } from "fs/promises";
-import { spawn } from "child_process";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readConfig, saveConfig, WORKFLOW_DIR } from "../models/config.mjs";
 import {
   getWorkflow, getActiveWorkflowFile, setActiveWorkflowFile,
@@ -12,7 +12,7 @@ const router = Router();
 
 // --- AI skill generation ---
 
-router.post("/generate-skill", (req, res) => {
+router.post("/generate-skill", async (req, res) => {
   const { label, id, prompt, description } = req.body;
   if (!label) return res.status(400).json({ error: "label is required" });
 
@@ -40,17 +40,28 @@ description: "<one-line description of what this skill does and when to use it>"
 
 Keep the skill body concise and actionable (under 500 words). No extra explanations outside the format above.`;
 
-  const args = ["-p", metaPrompt, "--output-format", "text"];
-  const child = spawn(process.env.CLAUDE_PATH || "claude", args, {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  let stdout = "";
-  child.stdout.on("data", (d) => { stdout += d.toString(); });
-  child.on("close", (code) => {
-    if (code !== 0) return res.status(500).json({ error: "Failed to generate skill" });
-    res.json({ skill: stdout.trim() });
-  });
+  try {
+    let skill = "";
+    for await (const message of query({
+      prompt: metaPrompt,
+      options: {
+        cwd: process.cwd(),
+        permissionMode: "default",
+        maxTurns: 1,
+      },
+    })) {
+      if (message.type === "result") {
+        if (message.subtype !== "success") {
+          return res.status(500).json({ error: message.errors?.join("; ") || message.result || "Failed to generate skill" });
+        }
+        skill = message.result?.trim() || "";
+      }
+    }
+    if (!skill) return res.status(500).json({ error: "Failed to generate skill" });
+    res.json({ skill });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to generate skill" });
+  }
 });
 
 // --- Workflow metadata ---
@@ -135,15 +146,20 @@ router.put("/workflows/:filename", async (req, res) => {
 
 router.delete("/workflows/:filename", async (req, res) => {
   const { filename } = req.params;
-  if (filename === "default.json") return res.status(400).json({ error: "cannot delete default workflow" });
   if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
   try {
+    const files = (await readdir(WORKFLOW_DIR)).filter((file) => file.endsWith(".json"));
+    if (!files.includes(filename)) return res.status(404).json({ error: "workflow not found" });
+    if (files.length <= 1) return res.status(400).json({ error: "at least one workflow must remain" });
+
     await unlink(join(WORKFLOW_DIR, filename));
     if (getActiveWorkflowFile() === filename) {
-      setActiveWorkflowFile("default.json");
-      loadWorkflow(join(WORKFLOW_DIR, "default.json"));
+      const remaining = files.filter((file) => file !== filename).sort();
+      const nextWorkflow = remaining.includes("default.json") ? "default.json" : remaining[0];
+      setActiveWorkflowFile(nextWorkflow);
+      loadWorkflow(join(WORKFLOW_DIR, nextWorkflow));
       const config = await readConfig();
-      delete config.activeWorkflow;
+      config.activeWorkflow = nextWorkflow;
       await saveConfig(config);
     }
     res.json({ ok: true });

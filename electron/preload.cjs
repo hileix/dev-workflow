@@ -7,8 +7,6 @@ function subscribeWorkflowEvents(callback) {
 }
 
 contextBridge.exposeInMainWorld("desktopApi", {
-  getConfig: () => ipcRenderer.invoke("app:get-config"),
-  updateTaskStoragePath: (path) => ipcRenderer.invoke("app:update-task-storage-path", path),
   pickFolder: () => ipcRenderer.invoke("app:pick-folder"),
   getWorkflowConfig: () => ipcRenderer.invoke("app:get-workflow-config"),
   listWorkflows: () => ipcRenderer.invoke("app:list-workflows"),

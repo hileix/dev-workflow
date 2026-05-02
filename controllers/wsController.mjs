@@ -1,11 +1,10 @@
 import { WebSocketServer } from "ws";
-import { spawn } from "child_process";
 import { mkdir } from "fs/promises";
 import { getBaseDir } from "../models/config.mjs";
 import { getPhaseOrder, getRejectTargets, isAutoPhase, nextPhase } from "../models/workflow.mjs";
 import { taskDir, readState, writeState, makeInitialState, updatePhaseStatus, appendToPhaseFile, clearTaskData } from "../models/state.mjs";
 import { upsertTask } from "../models/workfolders.mjs";
-import { activeWorkflows, wsSend, formatToolLog, runPhase, readArtifact, getPhaseContent } from "../lib/claude.mjs";
+import { activeWorkflows, wsSend, runPhase, readArtifact, getPhaseContent, continuePhaseConversation } from "../lib/claude.mjs";
 
 export function setupWebSocket(server) {
   const wss = new WebSocketServer({ server, path: "/ws" });
@@ -27,7 +26,13 @@ export function setupWebSocket(server) {
           for (const p of existingState.phases) {
             if (p.sessionId) phaseSessionIds[p.id] = p.sessionId;
           }
-          activeWorkflows.set(ticketId, { workFolder: existingState.workFolder, ws, child: null, phaseSessionIds });
+          activeWorkflows.set(ticketId, {
+            workFolder: existingState.workFolder,
+            send: (payload) => wsSend(ws, payload),
+            ws,
+            abortController: null,
+            phaseSessionIds,
+          });
           wsSend(ws, { type: "state", state: existingState });
 
           for (const p of existingState.phases) {
@@ -57,7 +62,14 @@ export function setupWebSocket(server) {
           updatePhaseStatus(state, PHASE_ORDER[0], "in_progress");
           await writeState(ticketId, state);
 
-          activeWorkflows.set(ticketId, { workFolder, ws, child: null, phaseSessionIds: {}, startImages: images || [] });
+          activeWorkflows.set(ticketId, {
+            workFolder,
+            send: (payload) => wsSend(ws, payload),
+            ws,
+            abortController: null,
+            phaseSessionIds: {},
+            startImages: images || [],
+          });
           await upsertTask(workFolder, ticketId, "in_progress");
           wsSend(ws, { type: "state", state });
           runPhase(ticketId, PHASE_ORDER[0]);
@@ -136,84 +148,22 @@ export function setupWebSocket(server) {
         try {
           const state = await readState(ticketId);
           const phase = state.currentPhase;
-          const priorSessionId = wf.phaseSessionIds[phase] || null;
 
           const userBlock = `\n\n---\n\n**You:** ${text}\n\n`;
-          appendToPhaseFile(ticketId, phase, userBlock);
+          await appendToPhaseFile(ticketId, phase, userBlock);
           wsSend(ws, { type: "user_message", phase, text });
-
-          const prompt = text;
-          const args = [
-            "-p", prompt,
-            "--output-format", "stream-json",
-            "--include-partial-messages",
-            "--verbose",
-            "--dangerously-skip-permissions",
-          ];
-          if (images && images.length > 0) {
-            for (const imgPath of images) args.push("--file", imgPath);
-          }
-          if (priorSessionId) args.push("--resume", priorSessionId);
 
           updatePhaseStatus(state, phase, "in_progress");
           state.overallStatus = "in_progress";
           await writeState(ticketId, state);
           wsSend(ws, { type: "state", state });
-
-          const child = spawn(process.env.CLAUDE_PATH || "claude", args, {
-            cwd: wf.workFolder,
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-          wf.child = child;
-
-          let buffer = "";
-          let currentTool = null;
-          let toolInputJson = "";
-          function processLine(line) {
-            if (!line.trim()) return;
-            try {
-              const event = JSON.parse(line);
-              if (event.type === "stream_event") {
-                const inner = event.event;
-                if (inner.type === "content_block_delta" && inner.delta?.type === "text_delta") {
-                  const t = inner.delta.text;
-                  wsSend(ws, { type: "text_delta", phase, text: t });
-                  appendToPhaseFile(ticketId, phase, t);
-                } else if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
-                  currentTool = inner.content_block.name;
-                  toolInputJson = "";
-                } else if (inner.type === "content_block_delta" && inner.delta?.type === "input_json_delta") {
-                  toolInputJson += inner.delta.partial_json;
-                } else if (inner.type === "content_block_stop" && currentTool) {
-                  const log = formatToolLog(currentTool, toolInputJson);
-                  const logMsg = `\n\n*${log}*\n\n`;
-                  wsSend(ws, { type: "tool_use", phase, name: currentTool, log });
-                  appendToPhaseFile(ticketId, phase, logMsg);
-                  currentTool = null;
-                  toolInputJson = "";
-                }
-              } else if (event.type === "result") {
-                wf.phaseSessionIds[phase] = event.session_id;
-              }
-            } catch {}
-          }
-
-          child.stdout.on("data", (chunk) => {
-            buffer += chunk.toString();
-            const lines = buffer.split("\n");
-            buffer = lines.pop();
-            for (const l of lines) processLine(l);
-          });
-          child.stderr.on("data", () => {});
-          child.on("close", async () => {
-            if (buffer.trim()) processLine(buffer);
-            wf.child = null;
-            try {
-              const st = await readState(ticketId);
-              wsSend(ws, { type: "phase_done", phase });
-              wsSend(ws, { type: "state", state: st });
-            } catch {}
-          });
+          await continuePhaseConversation(ticketId, phase, text, images || []);
+          const latestState = await readState(ticketId);
+          updatePhaseStatus(latestState, phase, "awaiting_input");
+          latestState.overallStatus = "awaiting_input";
+          await writeState(ticketId, latestState);
+          wsSend(ws, { type: "phase_done", phase });
+          wsSend(ws, { type: "state", state: latestState });
         } catch (err) {
           wsSend(ws, { type: "error", message: err.message });
         }
@@ -229,8 +179,9 @@ export function setupWebSocket(server) {
 
     ws.on("close", () => {
       for (const [, wf] of activeWorkflows) {
-        if (wf.ws === ws && wf.child) {
-          wf.child.kill();
+        if (wf.ws === ws && wf.abortController) {
+          try { wf.abortController.abort(); } catch {}
+          wf.abortController = null;
         }
       }
     });

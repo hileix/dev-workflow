@@ -24,7 +24,13 @@ export function loadWorkflow(path) {
   PHASE_META = {};
 
   for (const p of raw.phases) {
-    PHASE_META[p.id] = { type: p.type, label: p.label, group: p.group, groupLabel: p.groupLabel || null };
+    PHASE_META[p.id] = {
+      type: p.type,
+      label: p.label,
+      group: p.group,
+      groupLabel: p.groupLabel || null,
+      aiBackend: p.aiBackend || "claude",
+    };
     if (p.prompt || p.skill) {
       PHASE_SKILLS[p.id] = (tid, baseDir, promptValues) => {
         const vars = { ticketId: tid, baseDir, taskDir: join(baseDir, tid), ...promptValues };
@@ -49,6 +55,7 @@ export function getPhaseSkills() { return PHASE_SKILLS; }
 export function getRejectTargets() { return REJECT_TARGETS; }
 export function getPhaseArtifactFiles() { return PHASE_ARTIFACT_FILES; }
 export function getPhaseMeta() { return PHASE_META; }
+export function getPhaseBackend(phaseId) { return PHASE_META[phaseId]?.aiBackend || "claude"; }
 export function getActiveWorkflowFile() { return ACTIVE_WORKFLOW_FILE; }
 export function setActiveWorkflowFile(f) { ACTIVE_WORKFLOW_FILE = f; }
 

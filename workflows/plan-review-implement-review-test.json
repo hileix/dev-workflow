@@ -1,0 +1,78 @@
+{
+  "name": "plan review implement review test",
+  "prompts": [
+    {
+      "key": "task",
+      "label": "Task Description",
+      "placeholder": "Describe the task, constraints, and expected output"
+    }
+  ],
+  "phases": [
+    {
+      "id": "phase_plan",
+      "type": "auto",
+      "aiBackend": "claude",
+      "label": "Plan",
+      "group": "plan",
+      "groupLabel": "Plan",
+      "artifact": "plan.md",
+      "prompt": "Read the task description below and create a concise implementation plan.\n\nTask Description:\n{{task}}\n\nRequirements:\n- Focus only on what was requested.\n- Keep the plan simple and actionable.\n- Call out assumptions and risks.\n- Save or update the final plan at {{taskDir}}/plan.md.\n- The response in chat can be short if the full plan is written to the file."
+    },
+    {
+      "id": "checkpoint_plan_review",
+      "type": "checkpoint",
+      "aiBackend": "claude",
+      "label": "Review",
+      "group": "plan",
+      "artifact": "plan.md",
+      "rejectTargets": [
+        "phase_plan"
+      ]
+    },
+    {
+      "id": "phase_implement",
+      "type": "auto",
+      "aiBackend": "codex",
+      "label": "Implement",
+      "group": "implement",
+      "groupLabel": "Implement",
+      "artifact": "implement.md",
+      "prompt": "Implement the approved plan for this task.\n\nTask Description:\n{{task}}\n\nContext:\n- Read the approved plan from {{taskDir}}/plan.md.\n- Make the smallest reasonable code changes.\n- Preserve existing behavior unless the task requires changing it.\n- Save or update an implementation summary at {{taskDir}}/implement.md with what changed and what was verified."
+    },
+    {
+      "id": "phase_code_review",
+      "type": "auto",
+      "aiBackend": "claude",
+      "label": "Code Review",
+      "group": "code_review",
+      "groupLabel": "Code Review",
+      "artifact": "code-review.md",
+      "prompt": "Review the current implementation for bugs, regressions, and missing verification.\n\nTask Description:\n{{task}}\n\nContext:\n- Read {{taskDir}}/plan.md and {{taskDir}}/implement.md first.\n- Focus on correctness risks and testing gaps.\n- Save the code review result to {{taskDir}}/code-review.md.\n- If there are no findings, say that explicitly."
+    },
+    {
+      "id": "checkpoint_code_review",
+      "type": "checkpoint",
+      "aiBackend": "claude",
+      "label": "Code Review",
+      "group": "code_review",
+      "artifact": "code-review.md",
+      "rejectTargets": [
+        "phase_plan",
+        "phase_implement",
+        "phase_code_review"
+      ]
+    },
+    {
+      "id": "checkpoint_user_test",
+      "type": "checkpoint",
+      "aiBackend": "claude",
+      "label": "User Test",
+      "group": "user_test",
+      "groupLabel": "User Test",
+      "artifact": "implement.md",
+      "rejectTargets": [
+        "phase_implement"
+      ]
+    }
+  ]
+}

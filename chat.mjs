@@ -1,5 +1,5 @@
-import { spawn } from "child_process";
 import * as readline from "readline";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -11,68 +11,41 @@ function ask(prompt) {
 }
 
 async function chat(userMessage, sessionId) {
-  const args = [
-    "-p", userMessage,
-    "--output-format", "stream-json",
-    "--verbose",
-    "--dangerously-skip-permissions",
-  ];
-  if (sessionId) {
-    args.push("--resume", sessionId);
+  let resultSessionId = sessionId;
+
+  for await (const message of query({
+    prompt: userMessage,
+    options: {
+      cwd: process.cwd(),
+      resume: sessionId || undefined,
+      includePartialMessages: true,
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      systemPrompt: { type: "preset", preset: "claude_code" },
+      tools: { type: "preset", preset: "claude_code" },
+      settingSources: ["user", "project", "local"],
+    },
+  })) {
+    if (message.type === "stream_event") {
+      const inner = message.event;
+      if (inner.type === "content_block_delta" && inner.delta?.type === "text_delta") {
+        process.stdout.write(inner.delta.text);
+      } else if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
+        process.stdout.write(`\n[tool: ${inner.content_block.name}]\n`);
+      }
+      continue;
+    }
+
+    if (message.type === "result") {
+      if (message.session_id) resultSessionId = message.session_id;
+      if (message.subtype !== "success") {
+        throw new Error(message.errors?.join("; ") || message.result || "Claude run failed");
+      }
+    }
   }
 
-  return new Promise((resolve, reject) => {
-    const child = spawn("claude", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let buffer = "";
-    let resultSessionId = sessionId;
-
-    child.stdout.on("data", (chunk) => {
-      buffer += chunk.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "assistant" && event.message) {
-            for (const block of event.message.content) {
-              if (block.type === "text") {
-                process.stdout.write(block.text);
-              } else if (block.type === "tool_use") {
-                process.stdout.write(`\n[tool: ${block.name}]\n`);
-              }
-            }
-          } else if (event.type === "content_block_delta" && event.delta) {
-            if (event.delta.type === "text_delta") {
-              process.stdout.write(event.delta.text);
-            }
-          } else if (event.type === "result") {
-            resultSessionId = event.session_id;
-          }
-        } catch {}
-      }
-    });
-
-    child.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      if (!text.includes("Debug") && !text.includes("WARN")) {
-        process.stderr.write(text);
-      }
-    });
-
-    child.on("close", (code) => {
-      process.stdout.write("\n\n");
-      if (code === 0) {
-        resolve(resultSessionId);
-      } else {
-        reject(new Error(`claude exited with code ${code}`));
-      }
-    });
-  });
+  process.stdout.write("\n\n");
+  return resultSessionId;
 }
 
 console.log("Chat with Claude Code");

@@ -1,4 +1,3 @@
-import { spawn } from "child_process";
 import { mkdir } from "fs/promises";
 import { getBaseDir } from "../models/config.mjs";
 import { getPhaseOrder, getRejectTargets, isAutoPhase, nextPhase } from "../models/workflow.mjs";
@@ -15,10 +14,10 @@ import { upsertTask } from "../models/workfolders.mjs";
 import {
   activeWorkflows,
   sendWorkflowEvent,
-  formatToolLog,
   runPhase,
   readArtifact,
   getPhaseContent,
+  continuePhaseConversation,
 } from "../lib/claude.mjs";
 
 function createEmitter(sender) {
@@ -41,7 +40,7 @@ export async function startWorkflowSession(ticketId, workFolder, promptValues, i
     activeWorkflows.set(ticketId, {
       workFolder: existingState.workFolder,
       send: createEmitter(sender),
-      child: null,
+      abortController: null,
       phaseSessionIds,
     });
     sender({ type: "state", state: existingState });
@@ -78,7 +77,7 @@ export async function startWorkflowSession(ticketId, workFolder, promptValues, i
   activeWorkflows.set(ticketId, {
     workFolder,
     send: createEmitter(sender),
-    child: null,
+    abortController: null,
     phaseSessionIds: {},
     startImages: images || [],
   });
@@ -150,93 +149,36 @@ export async function sendWorkflowMessage(ticketId, text, images, sender) {
 
   const state = await readState(ticketId);
   const phase = state.currentPhase;
-  const priorSessionId = wf.phaseSessionIds[phase] || null;
 
   const userBlock = `\n\n---\n\n**You:** ${text}\n\n`;
   await appendToPhaseFile(ticketId, phase, userBlock);
   sender({ type: "user_message", phase, text });
 
-  const args = [
-    "-p", text,
-    "--output-format", "stream-json",
-    "--include-partial-messages",
-    "--verbose",
-    "--dangerously-skip-permissions",
-  ];
-  if (images && images.length > 0) {
-    for (const imgPath of images) args.push("--file", imgPath);
-  }
-  if (priorSessionId) args.push("--resume", priorSessionId);
-
   updatePhaseStatus(state, phase, "in_progress");
   state.overallStatus = "in_progress";
   await writeState(ticketId, state);
   sender({ type: "state", state });
-
-  const child = spawn(process.env.CLAUDE_PATH || "claude", args, {
-    cwd: wf.workFolder,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  wf.child = child;
   wf.send = createEmitter(sender);
-
-  let buffer = "";
-  let currentTool = null;
-  let toolInputJson = "";
-
-  function processLine(line) {
-    if (!line.trim()) return;
-    try {
-      const event = JSON.parse(line);
-      if (event.type === "stream_event") {
-        const inner = event.event;
-        if (inner.type === "content_block_delta" && inner.delta?.type === "text_delta") {
-          const delta = inner.delta.text;
-          sendWorkflowEvent(wf.send, { type: "text_delta", phase, text: delta });
-          appendToPhaseFile(ticketId, phase, delta);
-        } else if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
-          currentTool = inner.content_block.name;
-          toolInputJson = "";
-        } else if (inner.type === "content_block_delta" && inner.delta?.type === "input_json_delta") {
-          toolInputJson += inner.delta.partial_json;
-        } else if (inner.type === "content_block_stop" && currentTool) {
-          const log = formatToolLog(currentTool, toolInputJson);
-          const logMsg = `\n\n*${log}*\n\n`;
-          sendWorkflowEvent(wf.send, { type: "tool_use", phase, name: currentTool, log });
-          appendToPhaseFile(ticketId, phase, logMsg);
-          currentTool = null;
-          toolInputJson = "";
-        }
-      } else if (event.type === "result") {
-        wf.phaseSessionIds[phase] = event.session_id;
-      }
-    } catch {}
+  try {
+    await continuePhaseConversation(ticketId, phase, text, images || []);
+    const latestState = await readState(ticketId);
+    updatePhaseStatus(latestState, phase, "awaiting_input");
+    latestState.overallStatus = "awaiting_input";
+    await writeState(ticketId, latestState);
+    sendWorkflowEvent(wf.send, { type: "phase_done", phase });
+    sendWorkflowEvent(wf.send, { type: "state", state: latestState });
+  } catch (err) {
+    if (err?.name === "AbortError") return;
+    sendWorkflowEvent(wf.send, { type: "error", message: err.message });
   }
-
-  child.stdout.on("data", (chunk) => {
-    buffer += chunk.toString();
-    const lines = buffer.split("\n");
-    buffer = lines.pop();
-    for (const line of lines) processLine(line);
-  });
-  child.stderr.on("data", () => {});
-  child.on("close", async () => {
-    if (buffer.trim()) processLine(buffer);
-    wf.child = null;
-    try {
-      const latestState = await readState(ticketId);
-      sendWorkflowEvent(wf.send, { type: "phase_done", phase });
-      sendWorkflowEvent(wf.send, { type: "state", state: latestState });
-    } catch {}
-  });
 }
 
 export function detachWorkflowSender(ticketId) {
   const wf = activeWorkflows.get(ticketId);
   if (!wf) return;
   wf.send = null;
-  if (wf.child) {
-    wf.child.kill();
-    wf.child = null;
+  if (wf.abortController) {
+    try { wf.abortController.abort(); } catch {}
+    wf.abortController = null;
   }
 }
