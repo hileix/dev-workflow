@@ -48,6 +48,64 @@ pnpm install
 cd apps/mobile && flutter pub get
 ```
 
+## Local Development Flow
+
+Recommended startup order for local development:
+
+1. Start the local workflow server.
+2. Start the cloud backend relay.
+3. Start the desktop connector.
+4. Start the desktop app or the Flutter mobile app.
+
+### Step-by-step
+
+Terminal 1:
+
+```bash
+pnpm server
+```
+
+Terminal 2:
+
+```bash
+pnpm backend:dev
+```
+
+Terminal 3:
+
+```bash
+pnpm connector:dev
+```
+
+Terminal 4:
+
+```bash
+pnpm dev
+```
+
+Optional mobile client:
+
+```bash
+cd apps/mobile
+flutter run
+```
+
+When the mobile app opens, set the backend URL to:
+
+```txt
+http://<your-host-ip>:8787
+```
+
+### Recommended local checks
+
+After startup, verify:
+
+- local workflow server: `http://127.0.0.1:3000`
+- cloud backend health: `http://127.0.0.1:8787/health`
+- backend device list: `http://127.0.0.1:8787/api/devices`
+
+If the connector is working, the device list should show `desktop-local` as `online`.
+
 ## One-Command Startup by Platform
 
 ### macOS
