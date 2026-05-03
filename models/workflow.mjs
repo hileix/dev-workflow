@@ -1,6 +1,7 @@
 import { join } from "path";
 import { readFileSync } from "fs";
 import { CONFIG_FILE, WORKFLOW_DIR } from "./config.mjs";
+import { readManagedSkillContentSync } from "./skills.mjs";
 
 let WORKFLOW = null;
 let PHASE_ORDER = [];
@@ -48,10 +49,14 @@ export function loadWorkflow(path) {
       groupLabel: p.groupLabel || null,
       aiBackend: p.aiBackend || "claude",
     };
-    if (p.prompt || p.skill) {
+    if (p.prompt || p.skill || p.skillRefs?.length) {
       PHASE_SKILLS[p.id] = (tid, baseDir, promptValues) => {
         const vars = { ticketId: tid, baseDir, taskDir: join(baseDir, tid), ...promptValues };
         const parts = [];
+        for (const ref of p.skillRefs || []) {
+          const managedSkill = readManagedSkillContentSync(ref);
+          if (managedSkill) parts.push(interpolate(managedSkill, vars));
+        }
         if (p.skill) parts.push(interpolate(p.skill, vars));
         if (p.prompt) parts.push(interpolate(p.prompt, vars));
         return parts.join("\n\n");

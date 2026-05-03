@@ -6,6 +6,7 @@ import { Badge } from "./components/ui/badge";
 import WorkflowFlowchart from "./components/WorkflowFlowchart";
 import { cn } from "./lib/utils";
 import { getDesktopApi } from "./lib/desktop-api";
+import { useConfigStore } from "./stores/configStore";
 
 const desktopApi = getDesktopApi();
 
@@ -22,6 +23,7 @@ const EMPTY_PHASE = {
   groupLabel: "",
   artifact: "",
   skill: "",
+  skillRefs: [],
   prompt: "",
   rejectTargets: [],
 };
@@ -78,8 +80,11 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const [generatingSkill, setGeneratingSkill] = useState(false);
   const [flowchartCollapsed, setFlowchartCollapsed] = useState(false);
   const isNew = !filename;
+  const skills = useConfigStore((s) => s.skills);
+  const loadSkills = useConfigStore((s) => s.loadSkills);
 
   useEffect(() => {
+    loadSkills();
     if (!filename) {
       setName("");
       setPrompts([]);
@@ -96,7 +101,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
       .then((wf) => {
         setName(wf.name || "");
         setPrompts(wf.prompts || []);
-        setPhases((wf.phases || []).map((phase) => ({ aiBackend: "claude", ...phase })));
+        setPhases((wf.phases || []).map((phase) => ({ aiBackend: "claude", skillRefs: [], ...phase })));
         const worktree = { ...DEFAULT_WORKTREE, ...(wf.worktree || {}) };
         const mergedSelectedFiles = Array.isArray(worktree.files) && worktree.files.length > 0
           ? worktree.files
@@ -158,6 +163,16 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
       ? current.filter((t) => t !== target)
       : [...current, target];
     updatePhase(selectedIdx, "rejectTargets", updated);
+  }
+
+  function toggleSkillRef(ref) {
+    if (selectedIdx === null) return;
+    const selectedPhase = phases[selectedIdx];
+    const current = selectedPhase.skillRefs || [];
+    const updated = current.includes(ref)
+      ? current.filter((item) => item !== ref)
+      : [...current, ref];
+    updatePhase(selectedIdx, "skillRefs", updated);
   }
 
   function toggleWorktreeFile(file) {
@@ -605,6 +620,35 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                     >
                       {generatingSkill ? "Generating..." : "Generate with AI"}
                     </Button>
+                  </div>
+                  <div className="mb-2 rounded-lg border border-border bg-secondary/30 p-2">
+                    {skills.length === 0 ? (
+                      <span className="text-xs text-muted-foreground">
+                        No managed skills yet. Add skills in Settings.
+                      </span>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {skills.map((skill) => {
+                          const isSelected = (selected.skillRefs || []).includes(skill.id);
+                          return (
+                            <button
+                              key={skill.id}
+                              type="button"
+                              className={cn(
+                                "px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer",
+                                isSelected
+                                  ? "border-ring bg-secondary text-foreground"
+                                  : "border-border text-muted-foreground hover:bg-accent"
+                              )}
+                              onClick={() => toggleSkillRef(skill.id)}
+                              title={skill.description || skill.name}
+                            >
+                              {skill.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                   <textarea
                     value={selected.skill || ""}

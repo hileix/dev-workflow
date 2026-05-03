@@ -13,6 +13,7 @@ import {
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../models/workfolders.mjs";
 import { getBaseDir } from "../models/config.mjs";
 import { readState } from "../models/state.mjs";
+import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../models/skills.mjs";
 import { getPhaseContent, readArtifact } from "../lib/claude.mjs";
 
 export async function pickFolder(browserWindow) {
@@ -143,6 +144,35 @@ Keep the skill body concise and actionable (under 500 words). No extra explanati
 
   if (!skill) throw new Error("Failed to generate skill");
   return { skill };
+}
+
+export async function listSkills() {
+  return { skills: await listManagedSkills() };
+}
+
+export async function saveSkill(skill) {
+  await saveManagedSkill(skill);
+  return listSkills();
+}
+
+export async function deleteSkill(slug) {
+  await deleteManagedSkill(slug);
+  return listSkills();
+}
+
+export async function importSkills(browserWindow) {
+  const result = await dialog.showOpenDialog(browserWindow, {
+    properties: ["openFile", "openDirectory", "multiSelections"],
+    filters: [{ name: "Skills", extensions: ["md"] }],
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return { cancelled: true, skills: await listManagedSkills() };
+  }
+
+  for (const filePath of result.filePaths) {
+    await importManagedSkills(filePath);
+  }
+  return { cancelled: false, skills: await listManagedSkills() };
 }
 
 export async function updateWorkflow(filename, workflow) {

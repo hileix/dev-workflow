@@ -16,8 +16,8 @@ function clamp(value, min, max) {
 }
 
 export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }) {
-  const width = 880;
-  const nodeX = 82;
+  const width = 940;
+  const nodeX = 116;
   const nodeW = 172;
   const nodeH = 74;
   const agentX = 416;
@@ -299,7 +299,7 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
             return (phase.rejectTargets || []).map((targetId, targetIdx) => {
               const targetPhaseIdx = phases.findIndex((item) => item.id === targetId);
               if (targetPhaseIdx < 0) return null;
-              const laneX = nodeX - 32 - targetIdx * 18;
+              const laneX = nodeX - 34 - targetIdx * 22;
               const fromY = centerY(idx);
               const toY = centerY(targetPhaseIdx);
               const labelY = Math.min(fromY, toY) + Math.abs(fromY - toY) / 2 - 8;
@@ -314,12 +314,12 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
                     markerEnd="url(#workflow-reject-arrow)"
                   />
                   <text
-                    x={laneX - 8}
+                    x={laneX + 8}
                     y={labelY}
                     fill="var(--destructive)"
                     fontSize="12"
                     fontWeight="700"
-                    textAnchor="end"
+                    textAnchor="start"
                   >
                     Reject
                   </text>

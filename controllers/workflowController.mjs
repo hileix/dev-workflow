@@ -3,6 +3,7 @@ import { join } from "path";
 import { readFile, writeFile, readdir, stat, unlink } from "fs/promises";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readConfig, saveConfig, WORKFLOW_DIR } from "../models/config.mjs";
+import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../models/skills.mjs";
 import {
   getWorkflow, getActiveWorkflowFile, setActiveWorkflowFile,
   getPhaseOrder, loadWorkflow,
@@ -61,6 +62,42 @@ Keep the skill body concise and actionable (under 500 words). No extra explanati
     res.json({ skill });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to generate skill" });
+  }
+});
+
+// --- App-managed skills ---
+
+router.get("/skills", async (_req, res) => {
+  res.json({ skills: await listManagedSkills() });
+});
+
+router.post("/skills", async (req, res) => {
+  try {
+    await saveManagedSkill(req.body);
+    res.json({ skills: await listManagedSkills() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "failed to save skill" });
+  }
+});
+
+router.post("/skills/import", async (req, res) => {
+  try {
+    const paths = Array.isArray(req.body?.paths) ? req.body.paths : [];
+    for (const path of paths) {
+      await importManagedSkills(path);
+    }
+    res.json({ skills: await listManagedSkills() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "failed to import skills" });
+  }
+});
+
+router.delete("/skills/:slug", async (req, res) => {
+  try {
+    await deleteManagedSkill(req.params.slug);
+    res.json({ skills: await listManagedSkills() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "failed to delete skill" });
   }
 });
 

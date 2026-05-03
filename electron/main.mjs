@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { killAllChildren } from "../lib/claude.mjs";
-import { setRuntimeBaseDir } from "../models/config.mjs";
+import { setRuntimeBaseDir, setRuntimeStorageDir } from "../models/config.mjs";
 import {
   pickFolder,
   getWorkflowConfig,
@@ -11,6 +11,10 @@ import {
   createWorkflow,
   updateWorkflow,
   generateSkill,
+  listSkills,
+  saveSkill,
+  deleteSkill,
+  importSkills,
   removeWorkflow,
   activateWorkflow,
   listWorkFolders,
@@ -73,6 +77,10 @@ function registerIpcHandlers() {
   ipcMain.handle("app:create-workflow", (_event, workflow) => createWorkflow(workflow));
   ipcMain.handle("app:update-workflow", (_event, filename, workflow) => updateWorkflow(filename, workflow));
   ipcMain.handle("app:generate-skill", (_event, payload) => generateSkill(payload));
+  ipcMain.handle("app:list-skills", () => listSkills());
+  ipcMain.handle("app:save-skill", (_event, skill) => saveSkill(skill));
+  ipcMain.handle("app:delete-skill", (_event, slug) => deleteSkill(slug));
+  ipcMain.handle("app:import-skills", (event) => importSkills(BrowserWindow.fromWebContents(event.sender)));
   ipcMain.handle("app:remove-workflow", (_event, filename) => removeWorkflow(filename));
   ipcMain.handle("app:activate-workflow", (_event, filename) => activateWorkflow(filename));
   ipcMain.handle("app:list-workfolders", () => listWorkFolders());
@@ -105,6 +113,7 @@ function registerIpcHandlers() {
 }
 
 app.whenReady().then(async () => {
+  setRuntimeStorageDir(app.getPath("userData"));
   setRuntimeBaseDir(join(app.getPath("userData"), "tasks"));
   registerIpcHandlers();
   try {

@@ -2,12 +2,14 @@ import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import WorkflowEditor from "../WorkflowEditor";
+import SkillManager from "../components/SkillManager";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import { useConfigStore } from "../stores/configStore";
 import { useWorkflowStore } from "../stores/workflowStore";
 
 export default function SettingsPage() {
+  const [activeTab, setActiveTab] = useState("workflows");
   const [editingWorkflow, setEditingWorkflow] = useState(null);
   const [showEditor, setShowEditor] = useState(false);
   const [confirmRemoveWorkflow, setConfirmRemoveWorkflow] = useState(null);
@@ -15,15 +17,24 @@ export default function SettingsPage() {
   const [confirmRemoveFolder, setConfirmRemoveFolder] = useState(null);
 
   const workflows = useConfigStore((s) => s.workflows);
+  const skills = useConfigStore((s) => s.skills);
   const workFolders = useConfigStore((s) => s.workFolders);
   const selectedFolder = useConfigStore((s) => s.selectedFolder);
   const setSelectedFolder = useConfigStore((s) => s.setSelectedFolder);
   const deleteWorkflow = useConfigStore((s) => s.deleteWorkflow);
   const addFolder = useConfigStore((s) => s.addFolder);
   const removeFolder = useConfigStore((s) => s.removeFolder);
+  const saveSkill = useConfigStore((s) => s.saveSkill);
+  const deleteSkill = useConfigStore((s) => s.deleteSkill);
+  const importSkills = useConfigStore((s) => s.importSkills);
   const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
   const loadWorkflowConfig = useConfigStore((s) => s.loadWorkflowConfig);
   const showToast = useWorkflowStore((s) => s.showToast);
+  const tabs = [
+    { key: "workflows", label: "Workflows" },
+    { key: "skills", label: "Skills" },
+    { key: "folders", label: "Work Folders" },
+  ];
 
   if (showEditor) {
     return (
@@ -42,13 +53,32 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-6 max-w-3xl mx-auto w-full">
+    <div className="flex-1 overflow-y-auto px-6 py-6 max-w-5xl mx-auto w-full">
       <div className="flex items-center gap-3 mb-6">
         <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors text-sm">&larr; Back</Link>
         <h2 className="text-lg font-semibold text-foreground">Settings</h2>
       </div>
 
-      <div className="mb-6">
+      <div className="flex items-center gap-2 border-b border-border mb-6">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            className={cn(
+              "px-4 py-2 text-sm font-semibold border-b-2 transition-colors",
+              activeTab === tab.key
+                ? "border-ring text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            )}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "workflows" && (
+      <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-foreground">Workflows</h3>
           <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(null); setShowEditor(true); }}>+ New Workflow</Button>
@@ -88,8 +118,19 @@ export default function SettingsPage() {
           </ul>
         )}
       </div>
+      )}
 
-      <div className="mb-6">
+      {activeTab === "skills" && (
+      <SkillManager
+        skills={skills}
+        onSave={saveSkill}
+        onDelete={deleteSkill}
+        onImport={importSkills}
+      />
+      )}
+
+      {activeTab === "folders" && (
+      <div>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-foreground">Work Folders</h3>
           <Button variant="outline" size="sm" onClick={addFolder}>+ Add Folder</Button>
@@ -127,6 +168,7 @@ export default function SettingsPage() {
           </ul>
         )}
       </div>
+      )}
 
       {confirmRemoveFolder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setConfirmRemoveFolder(null)}>

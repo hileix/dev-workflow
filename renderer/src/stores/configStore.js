@@ -6,6 +6,7 @@ const desktopApi = getDesktopApi();
 export const useConfigStore = create((set, get) => ({
   workflowConfig: null,
   workflows: [],
+  skills: [],
   activeWorkflowFile: "default.json",
   workFolders: [],
   selectedFolder: "",
@@ -13,6 +14,7 @@ export const useConfigStore = create((set, get) => ({
   async loadAll() {
     get().loadWorkflowConfig();
     get().loadWorkflows();
+    get().loadSkills();
     get().loadWorkFolders();
   },
 
@@ -30,6 +32,13 @@ export const useConfigStore = create((set, get) => ({
         workflows: data.workflows || [],
         activeWorkflowFile: data.activeWorkflow || "default.json",
       });
+    } catch {}
+  },
+
+  async loadSkills() {
+    try {
+      const data = await desktopApi.listSkills();
+      set({ skills: data.skills || [] });
     } catch {}
   },
 
@@ -62,6 +71,27 @@ export const useConfigStore = create((set, get) => ({
       await desktopApi.removeWorkflow(filename);
       get().loadWorkflows();
       get().loadWorkflowConfig();
+    } catch {}
+  },
+
+  async saveSkill(skill) {
+    try {
+      const data = await desktopApi.saveSkill(skill);
+      set({ skills: data.skills || [] });
+    } catch {}
+  },
+
+  async deleteSkill(slug) {
+    try {
+      const data = await desktopApi.deleteSkill(slug);
+      set({ skills: data.skills || [] });
+    } catch {}
+  },
+
+  async importSkills() {
+    try {
+      const data = await desktopApi.importSkills();
+      if (!data.cancelled) set({ skills: data.skills || [] });
     } catch {}
   },
 
