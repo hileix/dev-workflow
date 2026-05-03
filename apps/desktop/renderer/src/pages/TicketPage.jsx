@@ -56,7 +56,7 @@ export default function TicketPage() {
   const deleteTask = useWorkflowStore((s) => s.deleteTask);
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
 
-  const ticketId = activeTicket || urlTicketId;
+  const taskId = activeTicket || urlTicketId;
   const currentPhase = workflowState?.currentPhase;
   const phases = workflowState?.phases || [];
   const groups = workflowConfig?.groups || [];
@@ -95,7 +95,7 @@ export default function TicketPage() {
           <div className="flex min-w-0 items-center gap-3">
             <div className="min-w-0">
               <BackButton to="/" label={t("common.back")} className="-ml-2 mb-1" />
-              <h1 className="truncate text-[22px] font-semibold text-foreground">{ticketId}</h1>
+              <h1 className="truncate text-[22px] font-semibold text-foreground">{taskId}</h1>
               {selectedGroupObj?.label && (
                 <div className="text-sm text-muted-foreground">{selectedGroupObj.label}</div>
               )}
@@ -141,7 +141,7 @@ export default function TicketPage() {
           <div className="bg-card border border-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-foreground mb-2">{t("ticket.deleteTask")}</h3>
             <p className="text-sm text-muted-foreground mb-4">
-              {t("ticket.deleteTaskConfirm", { name: ticketId })}
+              {t("ticket.deleteTaskConfirm", { name: taskId })}
             </p>
             <div className="flex justify-end gap-3">
               <Button variant="outline" size="sm" onClick={() => setShowDeleteConfirm(false)}>{t("common.cancel")}</Button>

@@ -14,6 +14,7 @@ import {
   getWorkflow,
   getActiveWorkflowFile,
   setActiveWorkflowFile,
+  deriveContextFields,
   getPhaseOrder,
   loadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
@@ -45,7 +46,7 @@ export async function getWorkflowConfig() {
   for (const phase of workflow.phases) {
     phaseLabels[phase.id] = phase.label;
     phaseTypes[phase.id] = phase.type;
-    if (phase.rejectTargets) rejectTargets[phase.id] = phase.rejectTargets;
+    if (phase.checkpoint?.rejectTargets) rejectTargets[phase.id] = phase.checkpoint.rejectTargets;
     if (!seenGroups.has(phase.group)) {
       seenGroups.add(phase.group);
       groups.push({ key: phase.group, label: phase.groupLabel || phase.label, phases: [] });
@@ -61,7 +62,7 @@ export async function getWorkflowConfig() {
     phaseLabels,
     phaseTypes,
     rejectTargets,
-    prompts: workflow.prompts || [],
+    contextFields: deriveContextFields(workflow),
     worktree: workflow.worktree || { enabled: false, files: [] },
     mobileAccessEnabled,
   };
@@ -84,7 +85,7 @@ export async function listWorkflows() {
           filename: file,
           name: raw.name || file,
           phaseCount: raw.phases?.length || 0,
-          prompts: raw.prompts || [],
+          contextFields: deriveContextFields(raw),
           worktree: raw.worktree || { enabled: false, files: [] },
         });
       } catch {}
@@ -234,7 +235,7 @@ export async function listWorkFolders() {
     if (!folder.tasks) continue;
     for (const task of folder.tasks) {
       try {
-        const stateFile = join(baseDir, task.ticketId, "workflow-state.json");
+        const stateFile = join(baseDir, task.taskId, "workflow-state.json");
         const state = JSON.parse(await readFile(stateFile, "utf-8"));
         task.status = state.overallStatus || task.status;
         task.phases = state.phases || [];
@@ -267,33 +268,33 @@ export async function removeWorkFolder(folderPath) {
   return folders;
 }
 
-export async function getTaskState(ticketId) {
-  const state = await readState(ticketId);
+export async function getTaskState(taskId) {
+  const state = await readState(taskId);
   const messages = {};
   const artifacts = {};
   for (const phase of state.phases) {
-    const content = await getPhaseContent(ticketId, phase.id);
+    const content = await getPhaseContent(taskId, phase.id);
     if (content) messages[phase.id] = content;
     if (phase.status !== "pending") {
-      const artifact = await readArtifact(ticketId, phase.id);
+      const artifact = await readArtifact(taskId, phase.id);
       if (artifact) artifacts[phase.id] = artifact;
     }
   }
   return { state, messages, artifacts };
 }
 
-export async function removeTask(ticketId) {
-  if (!ticketId) throw new Error("ticketId required");
-  await deleteTask(ticketId);
+export async function removeTask(taskId) {
+  if (!taskId) throw new Error("taskId required");
+  await deleteTask(taskId);
   return { ok: true };
 }
 
-export async function saveTaskUploads(ticketId, filePaths) {
-  if (!ticketId) throw new Error("ticketId required");
+export async function saveTaskUploads(taskId, filePaths) {
+  if (!taskId) throw new Error("taskId required");
   if (!Array.isArray(filePaths)) return { paths: [] };
 
   const baseDir = await getBaseDir();
-  const uploadDir = join(baseDir, ticketId, "uploads");
+  const uploadDir = join(baseDir, taskId, "uploads");
   await mkdir(uploadDir, { recursive: true });
 
   const savedPaths = [];

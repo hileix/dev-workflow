@@ -12,7 +12,7 @@ import {
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
 import {
   getWorkflow, getActiveWorkflowFile, setActiveWorkflowFile,
-  getPhaseOrder, loadWorkflow,
+  deriveContextFields, getPhaseOrder, loadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
 
 const router = Router();
@@ -122,7 +122,7 @@ router.get("/workflow", async (req, res) => {
   for (const p of WORKFLOW.phases) {
     phaseLabels[p.id] = p.label;
     phaseTypes[p.id] = p.type;
-    if (p.rejectTargets) rejectTargets[p.id] = p.rejectTargets;
+    if (p.checkpoint?.rejectTargets) rejectTargets[p.id] = p.checkpoint.rejectTargets;
     if (!seenGroups.has(p.group)) {
       seenGroups.add(p.group);
       groups.push({ key: p.group, label: p.groupLabel || p.label, phases: [] });
@@ -138,7 +138,7 @@ router.get("/workflow", async (req, res) => {
     phaseLabels,
     phaseTypes,
     rejectTargets,
-    prompts: WORKFLOW.prompts || [],
+    contextFields: deriveContextFields(WORKFLOW),
     worktree: WORKFLOW.worktree || { enabled: false, files: [] },
     mobileAccessEnabled,
   });
@@ -158,7 +158,7 @@ router.put("/settings/mobile-access", async (req, res) => {
     for (const p of WORKFLOW.phases) {
       phaseLabels[p.id] = p.label;
       phaseTypes[p.id] = p.type;
-      if (p.rejectTargets) rejectTargets[p.id] = p.rejectTargets;
+      if (p.checkpoint?.rejectTargets) rejectTargets[p.id] = p.checkpoint.rejectTargets;
       if (!seenGroups.has(p.group)) {
         seenGroups.add(p.group);
         groups.push({ key: p.group, label: p.groupLabel || p.label, phases: [] });
@@ -174,7 +174,7 @@ router.put("/settings/mobile-access", async (req, res) => {
       phaseLabels,
       phaseTypes,
       rejectTargets,
-      prompts: WORKFLOW.prompts || [],
+      contextFields: deriveContextFields(WORKFLOW),
       worktree: WORKFLOW.worktree || { enabled: false, files: [] },
       mobileAccessEnabled: await readMobileAccessEnabled(),
     });
@@ -197,7 +197,7 @@ router.get("/workflows", async (req, res) => {
           filename: f,
           name: raw.name || f,
           phaseCount: raw.phases?.length || 0,
-          prompts: raw.prompts || [],
+          contextFields: deriveContextFields(raw),
           worktree: raw.worktree || { enabled: false, files: [] },
         });
       } catch {}

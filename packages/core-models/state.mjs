@@ -3,47 +3,48 @@ import { readFile, writeFile, mkdir, appendFile, rm } from "fs/promises";
 import { getBaseDir } from "./config.mjs";
 import { getWorkflow, getPhaseOrder, interpolate } from "./workflow.mjs";
 
-export async function taskDir(ticketId) {
+export async function taskDir(taskId) {
   const baseDir = await getBaseDir();
-  return join(baseDir, ticketId);
+  return join(baseDir, taskId);
 }
 
-async function stateFilePath(ticketId) {
-  return join(await taskDir(ticketId), "workflow-state.json");
+async function stateFilePath(taskId) {
+  return join(await taskDir(taskId), "workflow-state.json");
 }
 
-async function messagesDir(ticketId) {
-  return join(await taskDir(ticketId), "messages");
+async function messagesDir(taskId) {
+  return join(await taskDir(taskId), "messages");
 }
 
-export async function appendToPhaseFile(ticketId, phase, text) {
-  if (!ticketId || !phase) return;
-  const dir = await messagesDir(ticketId);
+export async function appendToPhaseFile(taskId, phase, text) {
+  if (!taskId || !phase) return;
+  const dir = await messagesDir(taskId);
   await mkdir(dir, { recursive: true });
   await appendFile(join(dir, `${phase}.md`), text);
 }
 
-export async function readPhaseMessages(ticketId, phase) {
+export async function readPhaseMessages(taskId, phase) {
   try {
-    return await readFile(join(await messagesDir(ticketId), `${phase}.md`), "utf-8");
+    return await readFile(join(await messagesDir(taskId), `${phase}.md`), "utf-8");
   } catch {
     return "";
   }
 }
 
-export function makeInitialState(ticketId, workFolder, baseDir, promptValues, options = {}) {
+export function makeInitialState(taskId, workFolder, baseDir, contextValues, options = {}) {
   const WORKFLOW = getWorkflow();
   const PHASE_ORDER = getPhaseOrder();
   const now = new Date().toISOString();
   const artifacts = {};
-  const vars = { ticketId, ...promptValues };
+  const vars = { taskId, ...contextValues };
   for (const p of WORKFLOW.phases) {
-    if (p.artifact) {
-      artifacts[p.group] = join(baseDir, ticketId, interpolate(p.artifact, vars));
+    const primaryOutput = Array.isArray(p.outputs) ? p.outputs[0] : null;
+    if (primaryOutput?.filename) {
+      artifacts[p.group] = join(baseDir, taskId, interpolate(primaryOutput.filename, vars));
     }
   }
   return {
-    ticketId,
+    taskId,
     workFolder,
     originalWorkFolder: options.originalWorkFolder || workFolder,
     worktree: options.worktree || null,
@@ -53,21 +54,21 @@ export function makeInitialState(ticketId, workFolder, baseDir, promptValues, op
     overallStatus: "in_progress",
     phases: PHASE_ORDER.map((id) => ({ id, status: "pending", updated: null, sessionId: null })),
     artifacts,
-    promptValues: promptValues || {},
+    contextValues: contextValues || {},
   };
 }
 
-export async function readState(ticketId) {
-  return JSON.parse(await readFile(await stateFilePath(ticketId), "utf-8"));
+export async function readState(taskId) {
+  return JSON.parse(await readFile(await stateFilePath(taskId), "utf-8"));
 }
 
-export async function writeState(ticketId, state) {
+export async function writeState(taskId, state) {
   state.updated = new Date().toISOString();
-  await writeFile(await stateFilePath(ticketId), JSON.stringify(state, null, 2));
+  await writeFile(await stateFilePath(taskId), JSON.stringify(state, null, 2));
 }
 
-export async function clearTaskData(ticketId) {
-  const dir = await messagesDir(ticketId);
+export async function clearTaskData(taskId) {
+  const dir = await messagesDir(taskId);
   await rm(dir, { recursive: true, force: true });
 }
 

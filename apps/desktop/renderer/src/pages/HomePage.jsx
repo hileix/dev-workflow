@@ -58,7 +58,7 @@ function TaskCard({ task, groups, onClick, t }) {
       onClick={onClick}
     >
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-        <span className="text-sm font-semibold text-foreground">{task.ticketId}</span>
+        <span className="text-sm font-semibold text-foreground">{task.taskId}</span>
         <Badge
           variant={
             task.status === "completed" ? "success" :
@@ -96,18 +96,18 @@ function TaskCard({ task, groups, onClick, t }) {
 function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, onClose, t }) {
   const [selectedWorkflow, setSelectedWorkflow] = useState(workflows[0]?.filename || null);
   const [selectedFolder, setSelectedFolder] = useState(defaultFolder);
-  const [promptValues, setPromptValues] = useState({});
+  const [contextValues, setContextValues] = useState({});
   const [images, setImages] = useState([]);
   const [submitting, setSubmitting] = useState(false);
 
   const activeWf = workflows.find((wf) => wf.filename === selectedWorkflow);
-  const prompts = activeWf?.prompts || [];
+  const contextFields = activeWf?.contextFields || [];
   const worktreeConfig = activeWf?.worktree || { enabled: false, files: [] };
-  const defaultPrompts = [{ key: "ticketId", label: t("home.instanceId"), placeholder: t("home.instanceIdPlaceholder") }];
-  const displayPrompts = prompts.length > 0 ? prompts : defaultPrompts;
+  const defaultContextFields = [{ key: "taskId", label: t("home.instanceId"), placeholder: t("home.instanceIdPlaceholder") }];
+  const displayContextFields = contextFields.length > 0 ? contextFields : defaultContextFields;
 
-  const firstKey = displayPrompts[0]?.key;
-  const allFilled = displayPrompts.every((p) => (promptValues[p.key] || "").trim());
+  const firstKey = displayContextFields[0]?.key;
+  const allFilled = displayContextFields.every((field) => (contextValues[field.key] || "").trim());
 
   function addImageFiles(files) {
     const newImages = [];
@@ -144,10 +144,10 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
   async function handleSubmit(e) {
     e.preventDefault();
     if (!allFilled || !selectedFolder || !selectedWorkflow || submitting) return;
-    const descriptionValue = (promptValues.task || promptValues[firstKey] || "").trim();
-    const id = displayPrompts.length === 1 && firstKey === "task"
+    const descriptionValue = (contextValues.task || contextValues[firstKey] || "").trim();
+    const id = displayContextFields.length === 1 && firstKey === "taskId"
       ? `task-${Date.now()}`
-      : (promptValues[firstKey] || descriptionValue).trim();
+      : (contextValues[firstKey] || descriptionValue).trim();
 
     setSubmitting(true);
     try {
@@ -161,7 +161,7 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
         uploadedPaths = data.paths || [];
       }
 
-      onStart(id, selectedFolder, promptValues, uploadedPaths.length > 0 ? uploadedPaths : undefined);
+      onStart(id, selectedFolder, contextValues, uploadedPaths.length > 0 ? uploadedPaths : undefined);
     } finally {
       setSubmitting(false);
     }
@@ -237,14 +237,14 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
             </div>
           </div>
           <form className="space-y-3" onSubmit={handleSubmit}>
-            {displayPrompts.map((p, i) => (
-              <div key={p.key} className="space-y-2">
-                <span className="text-xs font-semibold text-muted-foreground">{p.label}</span>
+            {displayContextFields.map((field, i) => (
+              <div key={field.key} className="space-y-2">
+                <span className="text-xs font-semibold text-muted-foreground">{field.label}</span>
                 <textarea
-                  value={promptValues[p.key] || ""}
-                  onChange={(e) => setPromptValues((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                  value={contextValues[field.key] || ""}
+                  onChange={(e) => setContextValues((prev) => ({ ...prev, [field.key]: e.target.value }))}
                   onPaste={handlePaste}
-                  placeholder={p.placeholder || ""}
+                  placeholder={field.placeholder || ""}
                   autoFocus={i === 0}
                   className="flex w-full rounded-lg border border-input bg-secondary px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring min-h-[60px] resize-y"
                   rows={2}
@@ -297,7 +297,7 @@ export default function HomePage() {
 
   const folder = workFolders.find((f) => f.path === selectedFolder);
   const tasks = (folder?.tasks || []).map((t) => {
-    if (workflowState && t.ticketId === workflowState.ticketId && workflowState.overallStatus !== "completed") {
+    if (workflowState && t.taskId === workflowState.taskId && workflowState.overallStatus !== "completed") {
       return { ...t, status: workflowState.overallStatus, phases: workflowState.phases };
     }
     return t;
@@ -305,8 +305,8 @@ export default function HomePage() {
 
   const groups = workflowConfig?.groups || [];
 
-  function handleStartWorkflow(id, folderPath, promptValues, images) {
-    startWorkflow(id, folderPath, promptValues, images);
+  function handleStartWorkflow(id, folderPath, contextValues, images) {
+    startWorkflow(id, folderPath, contextValues, images);
     setShowStartModal(false);
     navigate(`/ticket/${id}`);
   }
@@ -346,10 +346,10 @@ export default function HomePage() {
             </button>
             {tasks.map((task) => (
               <TaskCard
-                key={task.ticketId}
+                key={task.taskId}
                 task={task}
                 groups={groups}
-                onClick={() => handleResume(task.ticketId)}
+                onClick={() => handleResume(task.taskId)}
                 t={t}
               />
             ))}

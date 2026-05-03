@@ -46,7 +46,7 @@ function applyDisconnectedState(set, get) {
   }
 }
 
-function attachWorkflowEvents(set, get, ticketId) {
+function attachWorkflowEvents(set, get, taskId) {
   if (unsubscribeWorkflowEvents) unsubscribeWorkflowEvents();
   unsubscribeWorkflowEvents = desktopApi.onWorkflowEvent((msg) => {
     if (!msg) return;
@@ -116,7 +116,7 @@ function attachWorkflowEvents(set, get, ticketId) {
   });
 
   return () => {
-    if (ticketId) desktopApi.detachWorkflow(ticketId);
+    if (taskId) desktopApi.detachWorkflow(taskId);
     if (unsubscribeWorkflowEvents) {
       unsubscribeWorkflowEvents();
       unsubscribeWorkflowEvents = null;
@@ -144,14 +144,14 @@ export const useWorkflowStore = create((set, get) => ({
     setTimeout(() => set({ toast: null }), duration);
   },
 
-  async loadTicket(ticketId) {
+  async loadTicket(taskId) {
     try {
-      const { state, messages, artifacts } = await desktopApi.getTaskState(ticketId);
+      const { state, messages, artifacts } = await desktopApi.getTaskState(taskId);
       const groups = useConfigStore.getState().workflowConfig?.groups || [];
       let group = null;
       if (state.currentPhase) group = findGroupForPhase(state.currentPhase, groups);
       set({
-        activeTicket: ticketId,
+        activeTicket: taskId,
         workflowState: state,
         phaseMessages: messages || {},
         phaseArtifacts: artifacts || {},
@@ -161,22 +161,22 @@ export const useWorkflowStore = create((set, get) => ({
       });
 
       if (state.workFolder && state.overallStatus !== "completed") {
-        get().connectWorkflow(ticketId, state.workFolder);
+        get().connectWorkflow(taskId, state.workFolder);
       }
     } catch {}
   },
 
-  async connectWorkflow(ticketId, workFolder, promptValues, images) {
-    const detach = attachWorkflowEvents(set, get, ticketId);
+  async connectWorkflow(taskId, workFolder, contextValues, images) {
+    const detach = attachWorkflowEvents(set, get, taskId);
     try {
-      await desktopApi.startWorkflow({ ticketId, workFolder, promptValues, images });
+      await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images });
     } catch {
       detach();
       applyDisconnectedState(set, get);
     }
   },
 
-  startWorkflow(id, folder, promptValues, images) {
+  startWorkflow(id, folder, contextValues, images) {
     const selectedFolder = folder || useConfigStore.getState().selectedFolder;
     if (!id || !selectedFolder) return;
 
@@ -188,7 +188,7 @@ export const useWorkflowStore = create((set, get) => ({
       phaseMessages: {},
       phaseArtifacts: {},
       workflowState: {
-        ticketId: id,
+        taskId: id,
         currentPhase: null,
         overallStatus: "loading",
         phases: (workflowConfig?.phaseOrder || []).map((pid) => ({
@@ -201,7 +201,7 @@ export const useWorkflowStore = create((set, get) => ({
     });
     prevStatusRef = {};
 
-    get().connectWorkflow(id, selectedFolder, promptValues, images);
+    get().connectWorkflow(id, selectedFolder, contextValues, images);
   },
 
   async approve() {

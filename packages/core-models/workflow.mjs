@@ -31,6 +31,64 @@ export function interpolate(template, vars) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? "");
 }
 
+function getPrimaryOutput(phase) {
+  if (!Array.isArray(phase?.outputs) || phase.outputs.length === 0) return null;
+  return phase.outputs[0];
+}
+
+function createArtifactLocator(output) {
+  if (!output?.filename) return null;
+  return (taskId, vars = {}) => interpolate(output.filename, { taskId, ...vars });
+}
+
+function getPhaseOutputLocator(phase, outputKey) {
+  const output = (phase?.outputs || []).find((item) => item.key === outputKey);
+  return createArtifactLocator(output || getPrimaryOutput(phase));
+}
+
+function getContextValue(contextValues, key) {
+  return contextValues && Object.prototype.hasOwnProperty.call(contextValues, key) ? contextValues[key] : "";
+}
+
+export function deriveContextFields(workflow = WORKFLOW) {
+  const contextFields = [];
+  const seen = new Set();
+  for (const phase of workflow?.phases || []) {
+    for (const input of phase.inputs || []) {
+      if (input?.sourceType !== "workflow_context" || !input.name || seen.has(input.name)) continue;
+      seen.add(input.name);
+      contextFields.push({
+        key: input.name,
+        label: input.contextLabel || input.name,
+        placeholder: input.contextPlaceholder || "",
+        required: input.required !== false,
+      });
+    }
+  }
+  return contextFields;
+}
+
+function resolveInputValue(raw, phase, input, tid, baseDir, contextValues) {
+  if (!input?.name) return "";
+  if (input.sourceType === "workflow_context") {
+    return getContextValue(contextValues, input.name);
+  }
+
+  if (input.sourceType === "phase_output") {
+    const sourcePhase = raw.phases.find((item) => item.id === input.phaseId);
+    const locator = getPhaseOutputLocator(sourcePhase, input.outputKey);
+    if (!locator) return "";
+    const artifactPath = join(baseDir, tid, locator(tid, contextValues));
+    try {
+      return readFileSync(artifactPath, "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  return "";
+}
+
 export function loadWorkflow(path) {
   const raw = JSON.parse(readFileSync(path, "utf-8"));
   raw.worktree = normalizeWorktreeConfig(raw.worktree);
@@ -50,8 +108,12 @@ export function loadWorkflow(path) {
       aiBackend: p.aiBackend || "claude",
     };
     if (p.prompt || p.skill || p.skillRefs?.length) {
-      PHASE_SKILLS[p.id] = (tid, baseDir, promptValues) => {
-        const vars = { ticketId: tid, baseDir, taskDir: join(baseDir, tid), ...promptValues };
+      PHASE_SKILLS[p.id] = (taskId, baseDir, contextValues) => {
+        const vars = { taskId, baseDir, taskDir: join(baseDir, taskId) };
+        for (const input of p.inputs || []) {
+          if (!input?.name) continue;
+          vars[input.name] = resolveInputValue(raw, p, input, taskId, baseDir, contextValues);
+        }
         const parts = [];
         for (const ref of p.skillRefs || []) {
           const managedSkill = readManagedSkillContentSync(ref);
@@ -62,11 +124,13 @@ export function loadWorkflow(path) {
         return parts.join("\n\n");
       };
     }
-    if (p.rejectTargets) {
-      REJECT_TARGETS[p.id] = p.rejectTargets;
+    if (p.checkpoint?.rejectTargets) {
+      REJECT_TARGETS[p.id] = p.checkpoint.rejectTargets;
     }
-    if (p.artifact) {
-      PHASE_ARTIFACT_FILES[p.id] = (tid) => interpolate(p.artifact, { ticketId: tid });
+    const primaryOutput = getPrimaryOutput(p);
+    const locator = createArtifactLocator(primaryOutput);
+    if (locator) {
+      PHASE_ARTIFACT_FILES[p.id] = locator;
     }
   }
 }

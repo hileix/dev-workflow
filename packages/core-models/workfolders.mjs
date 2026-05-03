@@ -17,24 +17,24 @@ export async function saveWorkfolders(folders) {
   await writeFile(file, JSON.stringify(folders, null, 2));
 }
 
-export async function upsertTask(workFolder, ticketId, status) {
+export async function upsertTask(workFolder, taskId, status) {
   const folders = await readWorkfolders();
   const folder = folders.find((f) => f.path === workFolder);
   if (!folder) return;
   if (!folder.tasks) folder.tasks = [];
-  const existing = folder.tasks.find((t) => t.ticketId === ticketId);
+  const existing = folder.tasks.find((t) => t.taskId === taskId);
   if (existing) {
     existing.status = status;
   } else {
-    folder.tasks.push({ ticketId, status });
+    folder.tasks.push({ taskId, status });
   }
   await saveWorkfolders(folders);
 }
 
-export async function deleteTask(ticketId) {
+export async function deleteTask(taskId) {
   let state = null;
   try {
-    state = await readState(ticketId);
+    state = await readState(taskId);
   } catch {}
 
   if (state?.worktree?.enabled) {
@@ -44,9 +44,9 @@ export async function deleteTask(ticketId) {
   const folders = await readWorkfolders();
   for (const folder of folders) {
     if (!folder.tasks) continue;
-    folder.tasks = folder.tasks.filter((t) => t.ticketId !== ticketId);
+    folder.tasks = folder.tasks.filter((t) => t.taskId !== taskId);
   }
   await saveWorkfolders(folders);
   const baseDir = await getBaseDir();
-  await rm(join(baseDir, ticketId), { recursive: true, force: true });
+  await rm(join(baseDir, taskId), { recursive: true, force: true });
 }

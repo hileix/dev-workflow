@@ -1,12 +1,5 @@
 {
   "name": "plan review implement review test",
-  "prompts": [
-    {
-      "key": "task",
-      "label": "Task Description",
-      "placeholder": "Describe the task, constraints, and expected output"
-    }
-  ],
   "phases": [
     {
       "aiBackend": "claude",
@@ -15,8 +8,23 @@
       "label": "Plan",
       "group": "plan",
       "groupLabel": "Plan",
-      "artifact": "plan.md",
-      "prompt": "Read the task description below and create a concise implementation plan.\n\nTask Description:\n{{task}}\n\nRequirements:\n- Focus only on what was requested.\n- Keep the plan simple and actionable.\n- Call out assumptions and risks.\n- Save or update the final plan at {{taskDir}}/plan.md.\n- The response in chat can be short if the full plan is written to the file."
+      "inputs": [
+        {
+          "name": "task",
+          "sourceType": "workflow_context",
+          "contextLabel": "Task Description",
+          "contextPlaceholder": "Describe the task, constraints, and expected output",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "plan_draft",
+          "kind": "document",
+          "filename": "plan.draft.md"
+        }
+      ],
+      "prompt": "Read the task description below and create a concise implementation plan.\n\nTask Description:\n{{task}}\n\nRequirements:\n- Focus only on what was requested.\n- Keep the plan simple and actionable.\n- Call out assumptions and risks.\n- Save or update the draft plan at {{taskDir}}/plan.draft.md.\n- The response in chat can be short if the full plan is written to the file."
     },
     {
       "aiBackend": "claude",
@@ -24,10 +32,46 @@
       "type": "checkpoint",
       "label": "Review",
       "group": "plan",
-      "artifact": "plan.md",
-      "rejectTargets": [
-        "phase_plan"
-      ]
+      "inputs": [
+        {
+          "name": "plan",
+          "sourceType": "phase_output",
+          "phaseId": "phase_plan",
+          "outputKey": "plan_draft",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "approved_plan",
+          "kind": "document",
+          "filename": "plan.final.md"
+        }
+      ],
+      "checkpoint": {
+        "actions": [
+          "approve",
+          "edit_and_approve",
+          "request_revision"
+        ],
+        "rejectTargets": [
+          "phase_plan"
+        ],
+        "publish": [
+          {
+            "action": "approve",
+            "sourceName": "plan",
+            "asOutputKey": "approved_plan",
+            "filename": "plan.final.md"
+          },
+          {
+            "action": "edit_and_approve",
+            "sourceName": "plan",
+            "asOutputKey": "approved_plan",
+            "filename": "plan.final.md"
+          }
+        ]
+      }
     },
     {
       "aiBackend": "codex",
@@ -36,8 +80,30 @@
       "label": "Implement",
       "group": "implement",
       "groupLabel": "Implement",
-      "artifact": "implement.md",
-      "prompt": "Implement the approved plan for this task.\n\nTask Description:\n{{task}}\n\nContext:\n- Read the approved plan from {{taskDir}}/plan.md.\n- Make the smallest reasonable code changes.\n- Preserve existing behavior unless the task requires changing it.\n- Save or update an implementation summary at {{taskDir}}/implement.md with what changed and what was verified."
+      "inputs": [
+        {
+          "name": "task",
+          "sourceType": "workflow_context",
+          "contextLabel": "Task Description",
+          "contextPlaceholder": "Describe the task, constraints, and expected output",
+          "required": true
+        },
+        {
+          "name": "plan",
+          "sourceType": "phase_output",
+          "phaseId": "checkpoint_plan_review",
+          "outputKey": "approved_plan",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "implementation_summary",
+          "kind": "document",
+          "filename": "implement.md"
+        }
+      ],
+      "prompt": "Implement the approved plan for this task.\n\nTask Description:\n{{task}}\n\nContext:\n- Read the approved plan from {{taskDir}}/plan.final.md.\n- Make the smallest reasonable code changes.\n- Preserve existing behavior unless the task requires changing it.\n- Save or update an implementation summary at {{taskDir}}/implement.md with what changed and what was verified."
     },
     {
       "aiBackend": "claude",
@@ -46,8 +112,37 @@
       "label": "Code Review",
       "group": "code_review",
       "groupLabel": "Code Review",
-      "artifact": "code-review.md",
-      "prompt": "Review the current implementation for bugs, regressions, and missing verification.\n\nTask Description:\n{{task}}\n\nContext:\n- Read {{taskDir}}/plan.md and {{taskDir}}/implement.md first.\n- Focus on correctness risks and testing gaps.\n- Save the code review result to {{taskDir}}/code-review.md.\n- If there are no findings, say that explicitly."
+      "inputs": [
+        {
+          "name": "task",
+          "sourceType": "workflow_context",
+          "contextLabel": "Task Description",
+          "contextPlaceholder": "Describe the task, constraints, and expected output",
+          "required": true
+        },
+        {
+          "name": "plan",
+          "sourceType": "phase_output",
+          "phaseId": "checkpoint_plan_review",
+          "outputKey": "approved_plan",
+          "required": true
+        },
+        {
+          "name": "implementationSummary",
+          "sourceType": "phase_output",
+          "phaseId": "phase_implement",
+          "outputKey": "implementation_summary",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "key": "review_report",
+          "kind": "document",
+          "filename": "code-review.md"
+        }
+      ],
+      "prompt": "Review the current implementation for bugs, regressions, and missing verification.\n\nTask Description:\n{{task}}\n\nContext:\n- Read {{taskDir}}/plan.final.md and {{taskDir}}/implement.md first.\n- Focus on correctness risks and testing gaps.\n- Save the code review result to {{taskDir}}/code-review.md.\n- If there are no findings, say that explicitly."
     },
     {
       "aiBackend": "claude",
@@ -55,12 +150,41 @@
       "type": "checkpoint",
       "label": "Code Review",
       "group": "code_review",
-      "artifact": "code-review.md",
-      "rejectTargets": [
-        "phase_plan",
-        "phase_implement",
-        "phase_code_review"
-      ]
+      "inputs": [
+        {
+          "name": "reviewReport",
+          "sourceType": "phase_output",
+          "phaseId": "phase_code_review",
+          "outputKey": "review_report",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "approved_review_report",
+          "kind": "document",
+          "filename": "code-review.final.md"
+        }
+      ],
+      "checkpoint": {
+        "actions": [
+          "approve",
+          "request_revision"
+        ],
+        "rejectTargets": [
+          "phase_plan",
+          "phase_implement",
+          "phase_code_review"
+        ],
+        "publish": [
+          {
+            "action": "approve",
+            "sourceName": "reviewReport",
+            "asOutputKey": "approved_review_report",
+            "filename": "code-review.final.md"
+          }
+        ]
+      }
     },
     {
       "aiBackend": "claude",
@@ -69,10 +193,26 @@
       "label": "User Test",
       "group": "user_test",
       "groupLabel": "User Test",
-      "artifact": "implement.md",
-      "rejectTargets": [
-        "phase_implement"
-      ]
+      "inputs": [
+        {
+          "name": "implementationSummary",
+          "sourceType": "phase_output",
+          "phaseId": "phase_implement",
+          "outputKey": "implementation_summary",
+          "required": true
+        }
+      ],
+      "outputs": [],
+      "checkpoint": {
+        "actions": [
+          "approve",
+          "request_revision"
+        ],
+        "rejectTargets": [
+          "phase_implement"
+        ],
+        "publish": []
+      }
     }
   ],
   "worktree": {

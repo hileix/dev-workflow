@@ -17,6 +17,35 @@ function generateId(label) {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 }
 
+const EMPTY_INPUT = {
+  name: "",
+  sourceType: "workflow_context",
+  contextLabel: "",
+  contextPlaceholder: "",
+  phaseId: "",
+  outputKey: "",
+  required: true,
+};
+
+const EMPTY_OUTPUT = {
+  key: "",
+  kind: "document",
+  filename: "",
+};
+
+const EMPTY_PUBLISH_RULE = {
+  action: "approve",
+  sourceName: "",
+  asOutputKey: "",
+  filename: "",
+};
+
+const DEFAULT_CHECKPOINT = {
+  actions: ["approve", "request_revision"],
+  rejectTargets: [],
+  publish: [],
+};
+
 const EMPTY_PHASE = {
   id: "",
   type: "auto",
@@ -24,11 +53,12 @@ const EMPTY_PHASE = {
   label: "",
   group: "",
   groupLabel: "",
-  artifact: "",
+  inputs: [],
+  outputs: [],
   skill: "",
   skillRefs: [],
   prompt: "",
-  rejectTargets: [],
+  checkpoint: { ...DEFAULT_CHECKPOINT },
 };
 
 const DEFAULT_WORKTREE = {
@@ -63,10 +93,67 @@ function normalizeCustomWorktreeFiles(customFiles) {
   return result;
 }
 
+function normalizeCheckpoint(checkpoint) {
+  return {
+    actions: Array.isArray(checkpoint?.actions) && checkpoint.actions.length > 0
+      ? checkpoint.actions
+      : [...DEFAULT_CHECKPOINT.actions],
+    rejectTargets: Array.isArray(checkpoint?.rejectTargets) ? checkpoint.rejectTargets : [],
+    publish: Array.isArray(checkpoint?.publish) ? checkpoint.publish : [],
+  };
+}
+
+function normalizePhase(phase) {
+  return {
+    ...EMPTY_PHASE,
+    ...phase,
+    aiBackend: phase?.aiBackend || "claude",
+    skillRefs: Array.isArray(phase?.skillRefs) ? phase.skillRefs : [],
+    inputs: Array.isArray(phase?.inputs) ? phase.inputs : [],
+    outputs: Array.isArray(phase?.outputs) ? phase.outputs : [],
+    checkpoint: normalizeCheckpoint(phase?.checkpoint),
+  };
+}
+
+function getDefaultPhaseLabel(type, index) {
+  if (type === "checkpoint") return `Review ${index}`;
+  return `Phase ${index}`;
+}
+
+function normalizeFirstPhaseInputs(phases) {
+  return phases.map((phase, idx) => {
+    if (idx !== 0) return phase;
+    return {
+      ...phase,
+      inputs: (phase.inputs || []).map((input) => ({
+        ...input,
+        sourceType: "workflow_context",
+        phaseId: "",
+        outputKey: "",
+      })),
+    };
+  });
+}
+
+function getOutputSummary(phase) {
+  const outputs = Array.isArray(phase?.outputs) ? phase.outputs : [];
+  if (outputs.length === 0) return "Produces 0";
+  return `out: ${outputs.map((output) => output.key || output.filename || "output").join(", ")}`;
+}
+
+function getInputSummary(phase) {
+  const inputs = Array.isArray(phase?.inputs) ? phase.inputs : [];
+  if (inputs.length === 0) return "Consumes 0";
+  return `in: ${inputs.map((input) => input.name || "input").join(", ")}`;
+}
+
+function extractTemplateVariables(text) {
+  return Array.from(String(text || "").matchAll(/\{\{(\w+)\}\}/g)).map((match) => match[1]);
+}
+
 export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const { t } = useI18n();
   const [name, setName] = useState("");
-  const [prompts, setPrompts] = useState([]);
   const [phases, setPhases] = useState([]);
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [selectedWorktreeFiles, setSelectedWorktreeFiles] = useState([...COMMON_WORKTREE_FILES]);
@@ -82,7 +169,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const [showSkillGenerate, setShowSkillGenerate] = useState(false);
   const [skillDescription, setSkillDescription] = useState("");
   const [generatingSkill, setGeneratingSkill] = useState(false);
-  const [flowchartCollapsed, setFlowchartCollapsed] = useState(false);
+  const [flowchartCollapsed, setFlowchartCollapsed] = useState(true);
   const isNew = !filename;
   const skills = useConfigStore((s) => s.skills);
   const loadSkills = useConfigStore((s) => s.loadSkills);
@@ -91,7 +178,6 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
     loadSkills();
     if (!filename) {
       setName("");
-      setPrompts([]);
       setPhases([]);
       setWorktreeEnabled(false);
       setSelectedWorktreeFiles([...COMMON_WORKTREE_FILES]);
@@ -104,8 +190,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
     desktopApi.getWorkflow(filename)
       .then((wf) => {
         setName(wf.name || "");
-        setPrompts(wf.prompts || []);
-        setPhases((wf.phases || []).map((phase) => ({ aiBackend: "claude", skillRefs: [], ...phase })));
+        setPhases(normalizeFirstPhaseInputs((wf.phases || []).map((phase) => normalizePhase(phase))));
         const worktree = { ...DEFAULT_WORKTREE, ...(wf.worktree || {}) };
         const mergedSelectedFiles = Array.isArray(worktree.files) && worktree.files.length > 0
           ? worktree.files
@@ -126,19 +211,32 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   }, [filename]);
 
   function updatePhase(idx, field, value) {
-    setPhases((prev) => prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p)));
+    setPhases((prev) => normalizeFirstPhaseInputs(prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p))));
+    setDirty(true);
+  }
+
+  function updatePhaseWith(fn) {
+    if (selectedIdx === null) return;
+    setPhases((prev) => normalizeFirstPhaseInputs(prev.map((phase, idx) => (
+      idx === selectedIdx ? fn(phase) : phase
+    ))));
     setDirty(true);
   }
 
   function addPhase() {
-    const newPhase = { ...EMPTY_PHASE, id: `phase_new_${phases.length + 1}`, label: "New Phase" };
-    setPhases((prev) => [...prev, newPhase]);
+    const nextIndex = phases.length + 1;
+    const newPhase = normalizePhase({
+      ...EMPTY_PHASE,
+      id: `phase_new_${nextIndex}`,
+      label: getDefaultPhaseLabel("auto", nextIndex),
+    });
+    setPhases((prev) => normalizeFirstPhaseInputs([...prev, newPhase]));
     setSelectedIdx(phases.length);
     setDirty(true);
   }
 
   function removePhase(idx) {
-    setPhases((prev) => prev.filter((_, i) => i !== idx));
+    setPhases((prev) => normalizeFirstPhaseInputs(prev.filter((_, i) => i !== idx)));
     setSelectedIdx((prev) => {
       if (prev === idx) return phases.length > 1 ? Math.min(idx, phases.length - 2) : null;
       if (prev > idx) return prev - 1;
@@ -153,20 +251,10 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
     setPhases((prev) => {
       const copy = [...prev];
       [copy[idx], copy[newIdx]] = [copy[newIdx], copy[idx]];
-      return copy;
+      return normalizeFirstPhaseInputs(copy);
     });
     setSelectedIdx(newIdx);
     setDirty(true);
-  }
-
-  function toggleRejectTarget(target) {
-    if (selectedIdx === null) return;
-    const phase = phases[selectedIdx];
-    const current = phase.rejectTargets || [];
-    const updated = current.includes(target)
-      ? current.filter((t) => t !== target)
-      : [...current, target];
-    updatePhase(selectedIdx, "rejectTargets", updated);
   }
 
   function toggleSkillRef(ref) {
@@ -186,6 +274,131 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
         : [...prev, file]
     ));
     setDirty(true);
+  }
+
+  function updateSelectedPhaseInput(inputIdx, field, value) {
+    updatePhaseWith((phase) => ({
+      ...phase,
+      inputs: phase.inputs.map((input, idx) => idx === inputIdx ? { ...input, [field]: value } : input),
+    }));
+  }
+
+  function addSelectedPhaseInput() {
+    updatePhaseWith((phase) => ({
+      ...phase,
+      inputs: [...phase.inputs, { ...EMPTY_INPUT, sourceType: selectedIdx === 0 ? "workflow_context" : "workflow_context" }],
+    }));
+  }
+
+  function removeSelectedPhaseInput(inputIdx) {
+    updatePhaseWith((phase) => ({
+      ...phase,
+      inputs: phase.inputs.filter((_, idx) => idx !== inputIdx),
+    }));
+  }
+
+  function updateSelectedPhaseOutput(outputIdx, field, value) {
+    updatePhaseWith((phase) => ({
+      ...phase,
+      outputs: phase.outputs.map((output, idx) => idx === outputIdx ? { ...output, [field]: value } : output),
+    }));
+  }
+
+  function addSelectedPhaseOutput() {
+    updatePhaseWith((phase) => ({
+      ...phase,
+      outputs: [...phase.outputs, { ...EMPTY_OUTPUT }],
+    }));
+  }
+
+  function removeSelectedPhaseOutput(outputIdx) {
+    updatePhaseWith((phase) => ({
+      ...phase,
+      outputs: phase.outputs.filter((_, idx) => idx !== outputIdx),
+    }));
+  }
+
+  function updateSelectedCheckpoint(field, value) {
+    updatePhaseWith((phase) => ({
+      ...phase,
+      checkpoint: {
+        ...normalizeCheckpoint(phase.checkpoint),
+        [field]: value,
+      },
+    }));
+  }
+
+  function toggleCheckpointAction(action) {
+    updatePhaseWith((phase) => {
+      const checkpoint = normalizeCheckpoint(phase.checkpoint);
+      const currentActions = checkpoint.actions || [];
+      const nextActions = currentActions.includes(action)
+        ? currentActions.filter((item) => item !== action)
+        : [...currentActions, action];
+      return {
+        ...phase,
+        checkpoint: {
+          ...checkpoint,
+          actions: nextActions.length > 0 ? nextActions : [action],
+        },
+      };
+    });
+  }
+
+  function toggleCheckpointRejectTarget(target) {
+    updatePhaseWith((phase) => {
+      const checkpoint = normalizeCheckpoint(phase.checkpoint);
+      const current = checkpoint.rejectTargets || [];
+      const updated = current.includes(target)
+        ? current.filter((item) => item !== target)
+        : [...current, target];
+      return {
+        ...phase,
+        checkpoint: {
+          ...checkpoint,
+          rejectTargets: updated,
+        },
+      };
+    });
+  }
+
+  function updateSelectedPublishRule(ruleIdx, field, value) {
+    updatePhaseWith((phase) => {
+      const checkpoint = normalizeCheckpoint(phase.checkpoint);
+      return {
+        ...phase,
+        checkpoint: {
+          ...checkpoint,
+          publish: checkpoint.publish.map((rule, idx) => idx === ruleIdx ? { ...rule, [field]: value } : rule),
+        },
+      };
+    });
+  }
+
+  function addSelectedPublishRule() {
+    updatePhaseWith((phase) => {
+      const checkpoint = normalizeCheckpoint(phase.checkpoint);
+      return {
+        ...phase,
+        checkpoint: {
+          ...checkpoint,
+          publish: [...checkpoint.publish, { ...EMPTY_PUBLISH_RULE }],
+        },
+      };
+    });
+  }
+
+  function removeSelectedPublishRule(ruleIdx) {
+    updatePhaseWith((phase) => {
+      const checkpoint = normalizeCheckpoint(phase.checkpoint);
+      return {
+        ...phase,
+        checkpoint: {
+          ...checkpoint,
+          publish: checkpoint.publish.filter((_, idx) => idx !== ruleIdx),
+        },
+      };
+    });
   }
 
   function addCustomWorktreeFile() {
@@ -231,6 +444,44 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
         setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
         return;
       }
+      for (const input of p.inputs || []) {
+        if (!input.name || !input.sourceType) {
+          setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
+          return;
+        }
+        if (input.sourceType === "workflow_context" && !input.contextLabel) {
+          setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
+          return;
+        }
+        if (input.sourceType === "phase_output" && (!input.phaseId || !input.outputKey)) {
+          setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
+          return;
+        }
+      }
+      for (const output of p.outputs || []) {
+        if (!output.key || !output.filename) {
+          setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
+          return;
+        }
+      }
+      if (p.type === "checkpoint") {
+        const checkpoint = normalizeCheckpoint(p.checkpoint);
+        for (const rule of checkpoint.publish || []) {
+          if (!rule.action || !rule.sourceName || !rule.asOutputKey || !rule.filename) {
+            setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
+            return;
+          }
+        }
+      }
+      if (p.type === "auto") {
+        const allowedVariables = new Set(["taskId", "baseDir", "taskDir", ...(p.inputs || []).map((input) => input.name).filter(Boolean)]);
+        const referencedVariables = extractTemplateVariables([p.skill, p.prompt].filter(Boolean).join("\n\n"));
+        const invalidVariable = referencedVariables.find((name) => !allowedVariables.has(name));
+        if (invalidVariable) {
+          setError(`Phase "${p.label || p.id}" uses undeclared variable "{{${invalidVariable}}}"`);
+          return;
+        }
+      }
     }
     setError(null);
     setSaving(true);
@@ -239,8 +490,10 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
 
     const workflow = {
       name: name.trim(),
-      prompts,
-      phases,
+      phases: normalizeFirstPhaseInputs(phases).map((phase) => ({
+        ...phase,
+        checkpoint: phase.type === "checkpoint" ? normalizeCheckpoint(phase.checkpoint) : undefined,
+      })),
       worktree: {
         enabled: worktreeEnabled,
         files: worktreeFiles,
@@ -288,67 +541,6 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
       <div className="relative flex min-h-0 flex-1">
         {/* Phase list (left) */}
         <div className="w-96 shrink-0 border-r border-border bg-sidebar/60 overflow-y-auto py-4">
-          <div className="px-4 pb-4 border-b border-border mb-3">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-semibold text-muted-foreground">{t("editor.prompts", { count: prompts.length })}</h2>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setPrompts((prev) => [...prev, { key: "", label: "", placeholder: "" }]);
-                  setDirty(true);
-                }}
-              >
-                {t("editor.add")}
-              </Button>
-            </div>
-            {prompts.length === 0 && (
-              <span className="text-[10px] text-muted-foreground">{t("editor.promptHint")}</span>
-            )}
-            {prompts.map((p, i) => (
-              <div key={i} className="mt-2 p-2 border border-border rounded-lg space-y-1.5 bg-card">
-                <div className="flex gap-1.5">
-                  <Input
-                    value={p.key}
-                    onChange={(e) => {
-                      setPrompts((prev) => prev.map((item, idx) => idx === i ? { ...item, key: e.target.value } : item));
-                      setDirty(true);
-                    }}
-                    placeholder={t("editor.promptKey")}
-                    className="text-xs h-7"
-                  />
-                  <button
-                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded shrink-0"
-                    onClick={() => {
-                      setPrompts((prev) => prev.filter((_, idx) => idx !== i));
-                      setDirty(true);
-                    }}
-                    aria-label="Remove prompt"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <Input
-                  value={p.label}
-                  onChange={(e) => {
-                    setPrompts((prev) => prev.map((item, idx) => idx === i ? { ...item, label: e.target.value } : item));
-                    setDirty(true);
-                  }}
-                  placeholder={t("editor.label")}
-                  className="text-xs h-7"
-                />
-                <Input
-                  value={p.placeholder}
-                  onChange={(e) => {
-                    setPrompts((prev) => prev.map((item, idx) => idx === i ? { ...item, placeholder: e.target.value } : item));
-                    setDirty(true);
-                  }}
-                  placeholder={t("editor.placeholderText")}
-                  className="text-xs h-7"
-                />
-              </div>
-            ))}
-          </div>
           <div className="px-4 pb-4 border-b border-border mb-3">
             <div className="flex items-center justify-between mb-2 gap-3">
               <div>
@@ -465,6 +657,8 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                 <div className="flex flex-col gap-0.5 flex-1 min-w-0">
                   <span className="truncate">{p.label || p.id || t("editor.unnamed")}</span>
                   <span className="text-xs text-muted-foreground truncate">{p.id}</span>
+                  <span className="text-[10px] text-muted-foreground truncate">{getInputSummary(p)}</span>
+                  <span className="text-[10px] text-muted-foreground truncate">{getOutputSummary(p)}</span>
                 </div>
                 <Badge variant={p.type === "auto" ? "info" : "warning"} className="shrink-0 text-[10px]">
                   {p.type === "auto" ? t("editor.typeAuto") : t("editor.typeCheckpoint")}
@@ -512,10 +706,18 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                   <Input
                     value={selected.label}
                     onChange={(e) => {
-                      updatePhase(selectedIdx, "label", e.target.value);
-                      if (!dirty || selected.id === generateId(selected.label) || !selected.id) {
-                        updatePhase(selectedIdx, "id", (selected.type === "checkpoint" ? "checkpoint_" : "phase_") + generateId(e.target.value));
-                      }
+                      const nextLabel = e.target.value;
+                      const nextId = (selected.type === "checkpoint" ? "checkpoint_" : "phase_") + generateId(nextLabel);
+                      setPhases((prev) => prev.map((phase, idx) => (
+                        idx === selectedIdx
+                          ? {
+                              ...phase,
+                              label: nextLabel,
+                              id: !phase.id || phase.id === selected.id ? nextId : phase.id,
+                            }
+                          : phase
+                      )));
+                      setDirty(true);
                     }}
                     placeholder="e.g., Read Ticket"
                   />
@@ -569,7 +771,14 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                           ? "border-ring bg-secondary text-foreground"
                           : "border-border text-muted-foreground hover:bg-accent"
                       )}
-                      onClick={() => updatePhase(selectedIdx, "type", phaseType)}
+                      onClick={() => updatePhaseWith((phase) => ({
+                        ...phase,
+                        type: phaseType,
+                        id: phase.id.startsWith("checkpoint_") || phase.id.startsWith("phase_")
+                          ? `${phaseType === "checkpoint" ? "checkpoint_" : "phase_"}${generateId(phase.label || phase.id)}`
+                          : phase.id,
+                        checkpoint: normalizeCheckpoint(phase.checkpoint),
+                      }))}
                     >
                       {phaseType === "auto" ? t("editor.typeAuto") : t("editor.typeCheckpoint")}
                     </button>
@@ -598,16 +807,119 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground block mb-1.5">{t("editor.artifactFilename")}</label>
-                <Input
-                  value={selected.artifact || ""}
-                  onChange={(e) => updatePhase(selectedIdx, "artifact", e.target.value)}
-                  placeholder="e.g., plan.md or {{ticketId}}.md"
-                />
-                <span className="text-[10px] text-muted-foreground mt-0.5 block">
-                  {t("editor.artifactHint")}
-                </span>
+              <div className="rounded-2xl border border-border bg-card/60 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground block">{t("editor.inputs")}</label>
+                    <span className="text-[10px] text-muted-foreground">{t("editor.inputsHint")}</span>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={addSelectedPhaseInput}>{t("editor.add")}</Button>
+                </div>
+                <div className="space-y-3">
+                  {selected.inputs.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
+                      {t("editor.noInputs")}
+                    </div>
+                  ) : selected.inputs.map((input, inputIdx) => (
+                    <div key={inputIdx} className="rounded-xl border border-border bg-background/75 p-3">
+                      {(() => {
+                        const isFirstPhase = selectedIdx === 0;
+                        const sourceType = isFirstPhase ? "workflow_context" : (input.sourceType || "workflow_context");
+                        return (
+                          <>
+                      <div className="mb-3 flex items-start gap-2">
+                        <div className={cn("grid flex-1 gap-3", isFirstPhase ? "grid-cols-1" : "grid-cols-2")}>
+                          <Input
+                            value={input.name || ""}
+                            onChange={(e) => updateSelectedPhaseInput(inputIdx, "name", e.target.value)}
+                            placeholder={t("editor.inputNamePlaceholder")}
+                          />
+                          {!isFirstPhase && (
+                            <select
+                              value={sourceType}
+                              onChange={(e) => updateSelectedPhaseInput(inputIdx, "sourceType", e.target.value)}
+                              className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                            >
+                              <option value="workflow_context">{t("editor.sourceWorkflowContext")}</option>
+                              <option value="phase_output">{t("editor.sourcePhaseOutput")}</option>
+                            </select>
+                          )}
+                        </div>
+                        <button
+                          className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded shrink-0"
+                          onClick={() => removeSelectedPhaseInput(inputIdx)}
+                          aria-label="Remove input"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      {sourceType === "workflow_context" ? (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-[1fr_auto] gap-3">
+                            <Input
+                              value={input.contextLabel || ""}
+                              onChange={(e) => updateSelectedPhaseInput(inputIdx, "contextLabel", e.target.value)}
+                              placeholder={t("editor.contextLabelPlaceholder")}
+                            />
+                            <label className="flex items-center gap-2 rounded-lg border border-border px-3 text-xs text-muted-foreground">
+                              <input
+                                type="checkbox"
+                                checked={input.required !== false}
+                                onChange={(e) => updateSelectedPhaseInput(inputIdx, "required", e.target.checked)}
+                              />
+                              {t("editor.required")}
+                            </label>
+                          </div>
+                          <Input
+                            value={input.contextPlaceholder || ""}
+                            onChange={(e) => updateSelectedPhaseInput(inputIdx, "contextPlaceholder", e.target.value)}
+                            placeholder={t("editor.contextPlaceholderPlaceholder")}
+                          />
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-[1fr_1fr_auto] gap-3">
+                          <select
+                            value={input.phaseId || ""}
+                            onChange={(e) => updateSelectedPhaseInput(inputIdx, "phaseId", e.target.value)}
+                            className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                          >
+                            <option value="">{t("editor.selectPhaseSource")}</option>
+                            {phases
+                              .filter((phase, idx) => idx !== selectedIdx)
+                              .map((phase) => (
+                                <option key={phase.id} value={phase.id}>
+                                  {phase.label || phase.id}
+                                </option>
+                              ))}
+                          </select>
+                          <select
+                            value={input.outputKey || ""}
+                            onChange={(e) => updateSelectedPhaseInput(inputIdx, "outputKey", e.target.value)}
+                            className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                          >
+                            <option value="">{t("editor.selectOutputSource")}</option>
+                            {(phases.find((phase) => phase.id === input.phaseId)?.outputs || []).map((output) => (
+                              <option key={output.key} value={output.key}>
+                                {output.key || output.filename}
+                              </option>
+                            ))}
+                          </select>
+                          <label className="flex items-center gap-2 rounded-lg border border-border px-3 text-xs text-muted-foreground">
+                            <input
+                              type="checkbox"
+                              checked={input.required !== false}
+                              onChange={(e) => updateSelectedPhaseInput(inputIdx, "required", e.target.checked)}
+                            />
+                            {t("editor.required")}
+                          </label>
+                        </div>
+                      )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  ))}
+                </div>
               </div>
 
               {selected.type === "auto" && (
@@ -682,36 +994,173 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
               )}
 
               {selected.type === "checkpoint" && (
-                <div>
-                  <label className="text-xs font-semibold text-muted-foreground block mb-1.5">{t("editor.rejectTargets")}</label>
-                  <div className="flex flex-wrap gap-2">
-                    {autoPhaseIds.length === 0 ? (
-                      <span className="text-xs text-muted-foreground">{t("editor.noAutoPhases")}</span>
-                    ) : (
-                      autoPhaseIds.map((pid) => {
-                        const isSelected = (selected.rejectTargets || []).includes(pid);
+                <div className="space-y-4 rounded-2xl border border-border bg-card/60 p-4">
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground block">{t("editor.checkpointRules")}</label>
+                    <span className="text-[10px] text-muted-foreground">{t("editor.checkpointRulesHint")}</span>
+                  </div>
+
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold text-muted-foreground">{t("editor.availableActions")}</label>
+                    <div className="flex flex-wrap gap-2">
+                      {["approve", "edit_and_approve", "request_revision", "stop"].map((action) => {
+                        const isSelected = (selected.checkpoint?.actions || []).includes(action);
                         return (
                           <button
-                            key={pid}
+                            key={action}
                             className={cn(
                               "px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer",
                               isSelected
                                 ? "border-ring bg-secondary text-foreground"
                                 : "border-border text-muted-foreground hover:bg-accent"
                             )}
-                            onClick={() => toggleRejectTarget(pid)}
+                            onClick={() => toggleCheckpointAction(action)}
                           >
-                            {phases.find((p) => p.id === pid)?.label || pid}
+                            {t(`editor.action.${action}`)}
                           </button>
                         );
-                      })
-                    )}
+                      })}
+                    </div>
                   </div>
-                  <span className="text-[10px] text-muted-foreground mt-0.5 block">
-                    {t("editor.rejectTargetsHint")}
-                  </span>
+
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold text-muted-foreground">{t("editor.rejectTargets")}</label>
+                    <div className="flex flex-wrap gap-2">
+                      {autoPhaseIds.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">{t("editor.noAutoPhases")}</span>
+                      ) : (
+                        autoPhaseIds.map((pid) => {
+                          const isSelected = (selected.checkpoint?.rejectTargets || []).includes(pid);
+                          return (
+                            <button
+                              key={pid}
+                              className={cn(
+                                "px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer",
+                                isSelected
+                                  ? "border-ring bg-secondary text-foreground"
+                                  : "border-border text-muted-foreground hover:bg-accent"
+                              )}
+                              onClick={() => toggleCheckpointRejectTarget(pid)}
+                            >
+                              {phases.find((p) => p.id === pid)?.label || pid}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                    <span className="text-[10px] text-muted-foreground mt-1 block">{t("editor.rejectTargetsHint")}</span>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <label className="text-xs font-semibold text-muted-foreground">{t("editor.publishRules")}</label>
+                      <Button variant="outline" size="sm" onClick={addSelectedPublishRule}>{t("editor.add")}</Button>
+                    </div>
+                    <div className="space-y-3">
+                      {(selected.checkpoint?.publish || []).length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
+                          {t("editor.noPublishRules")}
+                        </div>
+                      ) : (selected.checkpoint?.publish || []).map((rule, ruleIdx) => (
+                        <div key={ruleIdx} className="rounded-xl border border-border bg-background/75 p-3">
+                          <div className="mb-3 flex items-start gap-2">
+                            <div className="grid flex-1 grid-cols-2 gap-3">
+                              <select
+                                value={rule.action || "approve"}
+                                onChange={(e) => updateSelectedPublishRule(ruleIdx, "action", e.target.value)}
+                                className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                              >
+                                {["approve", "edit_and_approve", "request_revision", "stop"].map((action) => (
+                                  <option key={action} value={action}>{t(`editor.action.${action}`)}</option>
+                                ))}
+                              </select>
+                              <select
+                                value={rule.sourceName || ""}
+                                onChange={(e) => updateSelectedPublishRule(ruleIdx, "sourceName", e.target.value)}
+                                className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                              >
+                                <option value="">{t("editor.selectInputSource")}</option>
+                                {selected.inputs.map((input) => (
+                                  <option key={input.name} value={input.name}>
+                                    {input.name || t("editor.unnamed")}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <button
+                              className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded shrink-0"
+                              onClick={() => removeSelectedPublishRule(ruleIdx)}
+                              aria-label="Remove publish rule"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <Input
+                              value={rule.asOutputKey || ""}
+                              onChange={(e) => updateSelectedPublishRule(ruleIdx, "asOutputKey", e.target.value)}
+                              placeholder={t("editor.publishOutputKeyPlaceholder")}
+                            />
+                            <Input
+                              value={rule.filename || ""}
+                              onChange={(e) => updateSelectedPublishRule(ruleIdx, "filename", e.target.value)}
+                              placeholder={t("editor.publishFilenamePlaceholder")}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
+
+              <div className="rounded-2xl border border-border bg-card/60 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground block">{t("editor.outputs")}</label>
+                    <span className="text-[10px] text-muted-foreground">{t("editor.outputsHint")}</span>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={addSelectedPhaseOutput}>{t("editor.add")}</Button>
+                </div>
+                <div className="space-y-3">
+                  {selected.outputs.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
+                      {t("editor.noOutputs")}
+                    </div>
+                  ) : selected.outputs.map((output, outputIdx) => (
+                    <div key={outputIdx} className="rounded-xl border border-border bg-background/75 p-3">
+                      <div className="mb-3 flex items-start gap-2">
+                        <div className="grid flex-1 grid-cols-3 gap-3">
+                          <Input
+                            value={output.key || ""}
+                            onChange={(e) => updateSelectedPhaseOutput(outputIdx, "key", e.target.value)}
+                            placeholder={t("editor.outputKeyPlaceholder")}
+                          />
+                          <select
+                            value={output.kind || "document"}
+                            onChange={(e) => updateSelectedPhaseOutput(outputIdx, "kind", e.target.value)}
+                            className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                          >
+                            <option value="document">{t("editor.outputKindDocument")}</option>
+                          </select>
+                          <Input
+                            value={output.filename || ""}
+                            onChange={(e) => updateSelectedPhaseOutput(outputIdx, "filename", e.target.value)}
+                            placeholder={t("editor.outputFilenamePlaceholder")}
+                          />
+                        </div>
+                        <button
+                          className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded shrink-0"
+                          onClick={() => removeSelectedPhaseOutput(outputIdx)}
+                          aria-label="Remove output"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">

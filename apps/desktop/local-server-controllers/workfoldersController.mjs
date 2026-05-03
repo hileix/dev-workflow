@@ -11,7 +11,7 @@ import { getPhaseContent, readArtifact } from "../../../packages/core-lib/claude
 const upload = multer({ storage: multer.diskStorage({
   async destination(req, _file, cb) {
     const baseDir = await getBaseDir();
-    const dir = join(baseDir, req.params.ticketId, "uploads");
+    const dir = join(baseDir, req.params.taskId, "uploads");
     await mkdir(dir, { recursive: true });
     cb(null, dir);
   },
@@ -29,7 +29,7 @@ router.get("/workfolders", async (req, res) => {
     if (!folder.tasks) continue;
     for (const task of folder.tasks) {
       try {
-        const stateFile = join(baseDir, task.ticketId, "workflow-state.json");
+        const stateFile = join(baseDir, task.taskId, "workflow-state.json");
         const state = JSON.parse(await readFile(stateFile, "utf-8"));
         task.status = state.overallStatus || task.status;
         task.phases = state.phases || [];
@@ -67,30 +67,30 @@ router.delete("/workfolders", async (req, res) => {
   res.json(folders);
 });
 
-router.get("/tasks/:ticketId/state", async (req, res) => {
-  const { ticketId } = req.params;
+router.get("/tasks/:taskId/state", async (req, res) => {
+  const { taskId } = req.params;
   try {
-    const state = await readState(ticketId);
+    const state = await readState(taskId);
     const messages = {};
     const artifacts = {};
     for (const p of state.phases) {
-      const content = await getPhaseContent(ticketId, p.id);
+      const content = await getPhaseContent(taskId, p.id);
       if (content) messages[p.id] = content;
       if (p.status !== "pending") {
-        const artifact = await readArtifact(ticketId, p.id);
+        const artifact = await readArtifact(taskId, p.id);
         if (artifact) artifacts[p.id] = artifact;
       }
     }
     res.json({ state, messages, artifacts });
   } catch {
-    res.status(404).json({ error: "ticket not found" });
+    res.status(404).json({ error: "task not found" });
   }
 });
 
-router.delete("/tasks/:ticketId", async (req, res) => {
-  const { ticketId } = req.params;
-  if (!ticketId) return res.status(400).json({ error: "ticketId required" });
-  await deleteTask(ticketId);
+router.delete("/tasks/:taskId", async (req, res) => {
+  const { taskId } = req.params;
+  if (!taskId) return res.status(400).json({ error: "taskId required" });
+  await deleteTask(taskId);
   res.json({ ok: true });
 });
 
@@ -106,7 +106,7 @@ router.post("/pick-folder", (req, res) => {
   });
 });
 
-router.post("/tasks/:ticketId/upload", upload.array("images", 10), (req, res) => {
+router.post("/tasks/:taskId/upload", upload.array("images", 10), (req, res) => {
   const paths = (req.files || []).map((f) => f.path);
   res.json({ paths });
 });

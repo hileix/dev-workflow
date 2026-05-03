@@ -75,16 +75,16 @@ function createWebApi() {
     listWorkFolders: async () => request("/api/workfolders"),
     addWorkFolder: async (path) => request("/api/workfolders", { method: "POST", body: JSON.stringify({ path }) }),
     removeWorkFolder: async (path) => request("/api/workfolders", { method: "DELETE", body: JSON.stringify({ path }) }),
-    getTaskState: async (ticketId) => request(`/api/tasks/${ticketId}/state`),
-    removeTask: async (ticketId) => request(`/api/tasks/${ticketId}`, { method: "DELETE" }),
-    saveTaskUploads: async (ticketId, filePaths) => {
+    getTaskState: async (taskId) => request(`/api/tasks/${taskId}/state`),
+    removeTask: async (taskId) => request(`/api/tasks/${taskId}`, { method: "DELETE" }),
+    saveTaskUploads: async (taskId, filePaths) => {
       if (!Array.isArray(filePaths) || filePaths.length === 0) return { paths: [] };
       const form = new FormData();
       for (const entry of filePaths) {
         if (!entry || typeof entry !== "object" || !entry.name || !entry.data) continue;
         form.append("images", new File([new Uint8Array(entry.data)], entry.name));
       }
-      const response = await fetch(`${baseUrl}/api/tasks/${ticketId}/upload`, {
+      const response = await fetch(`${baseUrl}/api/tasks/${taskId}/upload`, {
         method: "POST",
         body: form,
       });
@@ -93,24 +93,24 @@ function createWebApi() {
       return data;
     },
     startWorkflow: async (payload) => {
-      activeTicketId = payload.ticketId;
+      activeTicketId = payload.taskId;
       activeWorkFolder = payload.workFolder;
       sendSocket({
         type: "start",
-        ticketId: payload.ticketId,
+        taskId: payload.taskId,
         workFolder: payload.workFolder,
-        promptValues: payload.promptValues,
+        contextValues: payload.contextValues,
         images: payload.images,
       });
     },
-    approveWorkflow: async (ticketId) => {
-      sendSocket({ type: "approve", ticketId });
+    approveWorkflow: async (taskId) => {
+      sendSocket({ type: "approve", taskId });
     },
-    rejectWorkflow: async (ticketId, rejectTo) => {
-      sendSocket({ type: "reject", ticketId, rejectTo });
+    rejectWorkflow: async (taskId, rejectTo) => {
+      sendSocket({ type: "reject", taskId, rejectTo });
     },
-    sendWorkflowMessage: async (ticketId, text, images) => {
-      sendSocket({ type: "message", ticketId, text, images });
+    sendWorkflowMessage: async (taskId, text, images) => {
+      sendSocket({ type: "message", taskId, text, images });
     },
     onWorkflowEvent(callback) {
       workflowHandler = callback;
@@ -119,8 +119,8 @@ function createWebApi() {
         workflowHandler = null;
       };
     },
-    detachWorkflow(ticketId) {
-      if (activeTicketId === ticketId) {
+    detachWorkflow(taskId) {
+      if (activeTicketId === taskId) {
         activeTicketId = null;
         activeWorkFolder = "";
       }
