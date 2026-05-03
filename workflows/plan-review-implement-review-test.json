@@ -9,9 +9,9 @@
   ],
   "phases": [
     {
+      "aiBackend": "claude",
       "id": "phase_plan",
       "type": "auto",
-      "aiBackend": "claude",
       "label": "Plan",
       "group": "plan",
       "groupLabel": "Plan",
@@ -19,9 +19,9 @@
       "prompt": "Read the task description below and create a concise implementation plan.\n\nTask Description:\n{{task}}\n\nRequirements:\n- Focus only on what was requested.\n- Keep the plan simple and actionable.\n- Call out assumptions and risks.\n- Save or update the final plan at {{taskDir}}/plan.md.\n- The response in chat can be short if the full plan is written to the file."
     },
     {
+      "aiBackend": "claude",
       "id": "checkpoint_plan_review",
       "type": "checkpoint",
-      "aiBackend": "claude",
       "label": "Review",
       "group": "plan",
       "artifact": "plan.md",
@@ -30,9 +30,9 @@
       ]
     },
     {
+      "aiBackend": "codex",
       "id": "phase_implement",
       "type": "auto",
-      "aiBackend": "codex",
       "label": "Implement",
       "group": "implement",
       "groupLabel": "Implement",
@@ -40,9 +40,9 @@
       "prompt": "Implement the approved plan for this task.\n\nTask Description:\n{{task}}\n\nContext:\n- Read the approved plan from {{taskDir}}/plan.md.\n- Make the smallest reasonable code changes.\n- Preserve existing behavior unless the task requires changing it.\n- Save or update an implementation summary at {{taskDir}}/implement.md with what changed and what was verified."
     },
     {
+      "aiBackend": "claude",
       "id": "phase_code_review",
       "type": "auto",
-      "aiBackend": "claude",
       "label": "Code Review",
       "group": "code_review",
       "groupLabel": "Code Review",
@@ -50,9 +50,9 @@
       "prompt": "Review the current implementation for bugs, regressions, and missing verification.\n\nTask Description:\n{{task}}\n\nContext:\n- Read {{taskDir}}/plan.md and {{taskDir}}/implement.md first.\n- Focus on correctness risks and testing gaps.\n- Save the code review result to {{taskDir}}/code-review.md.\n- If there are no findings, say that explicitly."
     },
     {
+      "aiBackend": "claude",
       "id": "checkpoint_code_review",
       "type": "checkpoint",
-      "aiBackend": "claude",
       "label": "Code Review",
       "group": "code_review",
       "artifact": "code-review.md",
@@ -63,9 +63,9 @@
       ]
     },
     {
+      "aiBackend": "claude",
       "id": "checkpoint_user_test",
       "type": "checkpoint",
-      "aiBackend": "claude",
       "label": "User Test",
       "group": "user_test",
       "groupLabel": "User Test",
@@ -74,5 +74,20 @@
         "phase_implement"
       ]
     }
-  ]
+  ],
+  "worktree": {
+    "enabled": true,
+    "files": [
+      ".env",
+      ".env.development",
+      ".env.production",
+      ".npmrc",
+      ".pnpmrc",
+      ".yarnrc.yml",
+      ".claude/settings.local.json",
+      ".env.local"
+    ],
+    "customFiles": [],
+    "removeOnComplete": false
+  }
 }

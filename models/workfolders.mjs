@@ -1,6 +1,8 @@
 import { dirname, join } from "path";
 import { readFile, writeFile, mkdir, rm } from "fs/promises";
 import { getBaseDir, getWorkfoldersFile } from "./config.mjs";
+import { readState } from "./state.mjs";
+import { removeWorktree } from "../lib/worktree.mjs";
 
 export async function readWorkfolders() {
   const baseDir = await getBaseDir();
@@ -30,6 +32,15 @@ export async function upsertTask(workFolder, ticketId, status) {
 }
 
 export async function deleteTask(ticketId) {
+  let state = null;
+  try {
+    state = await readState(ticketId);
+  } catch {}
+
+  if (state?.worktree?.enabled) {
+    await removeWorktree(state.worktree, { force: true }).catch(() => {});
+  }
+
   const folders = await readWorkfolders();
   for (const folder of folders) {
     if (!folder.tasks) continue;

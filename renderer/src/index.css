@@ -116,6 +116,11 @@
     color: var(--fg);
   }
 
+  .vertical-rl {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+  }
+
   *::-webkit-scrollbar {
     width: 6px;
   }

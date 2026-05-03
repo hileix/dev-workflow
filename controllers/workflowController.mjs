@@ -86,7 +86,17 @@ router.get("/workflow", (req, res) => {
     groups.find((g) => g.key === p.group).phases.push(p.id);
   }
 
-  res.json({ name: WORKFLOW.name, activeWorkflow: getActiveWorkflowFile(), phaseOrder: PHASE_ORDER, groups, phaseLabels, phaseTypes, rejectTargets, prompts: WORKFLOW.prompts || [] });
+  res.json({
+    name: WORKFLOW.name,
+    activeWorkflow: getActiveWorkflowFile(),
+    phaseOrder: PHASE_ORDER,
+    groups,
+    phaseLabels,
+    phaseTypes,
+    rejectTargets,
+    prompts: WORKFLOW.prompts || [],
+    worktree: WORKFLOW.worktree || { enabled: false, files: [] },
+  });
 });
 
 // --- Workflow CRUD ---
@@ -99,7 +109,13 @@ router.get("/workflows", async (req, res) => {
       if (!f.endsWith(".json")) continue;
       try {
         const raw = JSON.parse(await readFile(join(WORKFLOW_DIR, f), "utf-8"));
-        workflows.push({ filename: f, name: raw.name || f, phaseCount: raw.phases?.length || 0, prompts: raw.prompts || [] });
+        workflows.push({
+          filename: f,
+          name: raw.name || f,
+          phaseCount: raw.phases?.length || 0,
+          prompts: raw.prompts || [],
+          worktree: raw.worktree || { enabled: false, files: [] },
+        });
       } catch {}
     }
     res.json({ workflows, activeWorkflow: getActiveWorkflowFile() });

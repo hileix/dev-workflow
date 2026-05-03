@@ -99,6 +99,7 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
 
   const activeWf = workflows.find((wf) => wf.filename === selectedWorkflow);
   const prompts = activeWf?.prompts || [];
+  const worktreeConfig = activeWf?.worktree || { enabled: false, files: [] };
   const defaultPrompts = [{ key: "ticketId", label: "Instance ID", placeholder: "Enter an identifier" }];
   const displayPrompts = prompts.length > 0 ? prompts : defaultPrompts;
 
@@ -193,6 +194,24 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
                 </div>
               ))}
             </div>
+            {worktreeConfig.enabled && (
+              <div className="rounded-lg border border-border bg-secondary/60 px-3 py-2">
+                <div className="text-xs font-semibold text-foreground">Git Worktree enabled</div>
+                <div className="text-[10px] text-muted-foreground mt-1">
+                  A sibling worktree will be created before the workflow starts.
+                </div>
+                {worktreeConfig.removeOnComplete && (
+                  <div className="text-[10px] text-muted-foreground mt-1">
+                    It will be removed automatically when the task is completed.
+                  </div>
+                )}
+                {worktreeConfig.files.length > 0 && (
+                  <div className="text-[10px] text-muted-foreground mt-1">
+                    Migrated files: {worktreeConfig.files.join(", ")}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">

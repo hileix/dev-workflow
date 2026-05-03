@@ -1,0 +1,33 @@
+{
+  "name": "test",
+  "prompts": [],
+  "phases": [
+    {
+      "id": "phase_new_1",
+      "type": "auto",
+      "aiBackend": "claude",
+      "label": "New Phase",
+      "group": "1",
+      "groupLabel": "1",
+      "artifact": "",
+      "skill": "---\nname: new-phase\ndescription: \"Initialize and begin a new workflow phase — use when starting fresh work on a phase that lacks specific prior context\"\n---\n\n## When to Use\nTrigger this skill when beginning a new phase of work that has no prior context, constraints, or specialized instructions defined. It establishes the baseline discipline for any new phase.\n\n## Steps\n\n1. **Clarify the objective.** Before writing any code, state what this phase must accomplish in one or two sentences. If the goal is ambiguous, ask the user for clarification — do not assume.\n\n2. **Identify scope.** List the files, modules, or systems this phase will touch. If you cannot determine scope from the request, explore the codebase briefly and then confirm with the user.\n\n3. **Define success criteria.** Convert the objective into verifiable checks. Prefer concrete outcomes (e.g., \"test X passes\", \"endpoint returns Y\") over vague ones (e.g., \"make it work\").\n\n4. **State assumptions.** Write down any assumptions you are making. If there are multiple valid interpretations, present them and let the user choose.\n\n5. **Execute.** Implement the minimum code that satisfies the success criteria. Follow simplicity-first principles: no speculative features, no over-engineering, no refactoring of unrelated code.\n\n6. **Verify.** Run the success criteria checks. If any fail, loop back and fix — do not declare completion until all checks pass.\n\n## Constraints\n\n- Touch only what is necessary. Match existing code style; do not reformat or refactor adjacent code.\n- If a simpler approach exists, use it and say so.\n- Surface tradeoffs before committing to a direction.\n- Remove only the dead code your own changes create.\n\n## Output Format\n\nAt phase start, produce a brief plan:\n\n```\nPhase: [label]\nObjective: [one-liner]\nScope: [files/modules]\nAssumptions: [bulleted list, or \"none\"]\nSuccess criteria:\n  1. [check]\n  2. [check]\n```\n\nAt phase end, report:\n\n```\nPhase complete: [label]\nChecks:\n  1. [pass/fail — detail]\n  2. [pass/fail — detail]\nIssues: [none / description]\n```",
+      "prompt": "",
+      "rejectTargets": []
+    }
+  ],
+  "worktree": {
+    "enabled": true,
+    "files": [
+      ".env",
+      ".env.local",
+      ".env.development",
+      ".env.production",
+      ".npmrc",
+      ".pnpmrc",
+      ".yarnrc.yml",
+      ".claude/settings.local.json"
+    ],
+    "customFiles": [],
+    "removeOnComplete": false
+  }
+}

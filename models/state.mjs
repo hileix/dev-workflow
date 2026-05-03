@@ -31,7 +31,7 @@ export async function readPhaseMessages(ticketId, phase) {
   }
 }
 
-export function makeInitialState(ticketId, workFolder, baseDir, promptValues) {
+export function makeInitialState(ticketId, workFolder, baseDir, promptValues, options = {}) {
   const WORKFLOW = getWorkflow();
   const PHASE_ORDER = getPhaseOrder();
   const now = new Date().toISOString();
@@ -45,6 +45,8 @@ export function makeInitialState(ticketId, workFolder, baseDir, promptValues) {
   return {
     ticketId,
     workFolder,
+    originalWorkFolder: options.originalWorkFolder || workFolder,
+    worktree: options.worktree || null,
     created: now,
     updated: now,
     currentPhase: PHASE_ORDER[0],

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import WorkflowEditor from "../WorkflowEditor";
 import { Button } from "../components/ui/button";
@@ -72,13 +73,14 @@ export default function SettingsPage() {
                     Edit
                   </Button>
                   <button
-                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded text-base"
+                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded"
                     onClick={() => {
                       setConfirmRemoveWorkflow(wf);
                       setConfirmRemoveWorkflowStep(1);
                     }}
+                    aria-label={`Remove ${wf.name}`}
                   >
-                    x
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </li>
@@ -114,10 +116,11 @@ export default function SettingsPage() {
                   <span className="text-xs text-muted-foreground truncate">{f.path}</span>
                 </div>
                 <button
-                  className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded text-base"
+                  className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded"
                   onClick={(e) => { e.stopPropagation(); setConfirmRemoveFolder(f); }}
+                  aria-label={`Remove ${f.name}`}
                 >
-                  x
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </li>
             ))}

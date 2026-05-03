@@ -54,6 +54,7 @@ export async function getWorkflowConfig() {
     phaseTypes,
     rejectTargets,
     prompts: workflow.prompts || [],
+    worktree: workflow.worktree || { enabled: false, files: [] },
   };
 }
 
@@ -70,6 +71,7 @@ export async function listWorkflows() {
           name: raw.name || file,
           phaseCount: raw.phases?.length || 0,
           prompts: raw.prompts || [],
+          worktree: raw.worktree || { enabled: false, files: [] },
         });
       } catch {}
     }

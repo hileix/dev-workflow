@@ -89,6 +89,9 @@ export default function TicketPage() {
         <div className="flex items-center gap-4">
           <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors text-sm">&larr; Back</Link>
           <h1 className="text-lg font-semibold text-foreground">{ticketId}</h1>
+          {workflowState?.worktree?.enabled && (
+            <Badge variant="secondary">Git Worktree</Badge>
+          )}
           {isStreaming && (
             <Badge variant="info" className="animate-pulse-subtle">Working...</Badge>
           )}

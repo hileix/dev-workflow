@@ -19,9 +19,17 @@ import {
   getPhaseContent,
   continuePhaseConversation,
 } from "../lib/claude.mjs";
+import { getWorkflow } from "../models/workflow.mjs";
+import { prepareWorktree, removeWorktree } from "../lib/worktree.mjs";
 
 function createEmitter(sender) {
   return (event) => sender(event);
+}
+
+async function finalizeWorktreeIfNeeded(state, forceRemove = false) {
+  if (!state?.worktree?.enabled) return;
+  if (!forceRemove && !state.worktree.removeOnComplete) return;
+  await removeWorktree(state.worktree, { force: forceRemove });
 }
 
 export async function startWorkflowSession(ticketId, workFolder, promptValues, images, sender) {
@@ -69,13 +77,33 @@ export async function startWorkflowSession(ticketId, workFolder, promptValues, i
   const dir = await taskDir(ticketId);
   await mkdir(dir, { recursive: true });
 
+  const workflow = getWorkflow();
+  const preparedWorktree = await prepareWorktree({
+    repoRoot: workFolder,
+    ticketId,
+    worktree: workflow.worktree,
+  });
+  const runtimeWorkFolder = preparedWorktree.workFolder;
   const baseDir = await getBaseDir();
-  const state = makeInitialState(ticketId, workFolder, baseDir, promptValues);
+  const state = makeInitialState(ticketId, runtimeWorkFolder, baseDir, promptValues, {
+    originalWorkFolder: workFolder,
+    worktree: preparedWorktree.enabled
+      ? {
+          enabled: true,
+          sourceRoot: preparedWorktree.sourceRoot,
+          rootPath: preparedWorktree.rootPath,
+          branchName: preparedWorktree.branchName,
+          migratedFiles: preparedWorktree.migratedFiles,
+          skippedFiles: preparedWorktree.skippedFiles,
+          removeOnComplete: preparedWorktree.removeOnComplete,
+        }
+      : null,
+  });
   updatePhaseStatus(state, phaseOrder[0], "in_progress");
   await writeState(ticketId, state);
 
   activeWorkflows.set(ticketId, {
-    workFolder,
+    workFolder: runtimeWorkFolder,
     send: createEmitter(sender),
     abortController: null,
     phaseSessionIds: {},
@@ -106,7 +134,8 @@ export async function approveWorkflow(ticketId, sender) {
   } else {
     state.overallStatus = "completed";
     state.currentPhase = "completed";
-    upsertTask(wf.workFolder, ticketId, "completed").catch(() => {});
+    await finalizeWorktreeIfNeeded(state);
+    upsertTask(state.originalWorkFolder || wf.workFolder, ticketId, "completed").catch(() => {});
   }
   await writeState(ticketId, state);
   sender({ type: "state", state });
@@ -181,4 +210,15 @@ export function detachWorkflowSender(ticketId) {
     try { wf.abortController.abort(); } catch {}
     wf.abortController = null;
   }
+}
+
+export async function cleanupWorkflowWorktree(ticketId, options = {}) {
+  let state = null;
+  try {
+    state = await readState(ticketId);
+  } catch {
+    return false;
+  }
+  await finalizeWorktreeIfNeeded(state, Boolean(options.forceRemove));
+  return true;
 }

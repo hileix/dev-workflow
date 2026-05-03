@@ -10,12 +10,29 @@ let PHASE_ARTIFACT_FILES = {};
 let PHASE_META = {};
 let ACTIVE_WORKFLOW_FILE = "default.json";
 
+function normalizeWorktreeConfig(worktree) {
+  const files = Array.isArray(worktree?.files)
+    ? worktree.files.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const customFiles = Array.isArray(worktree?.customFiles)
+    ? worktree.customFiles.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    enabled: Boolean(worktree?.enabled),
+    files,
+    customFiles,
+    removeOnComplete: worktree?.removeOnComplete !== undefined ? Boolean(worktree.removeOnComplete) : false,
+  };
+}
+
 export function interpolate(template, vars) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? "");
 }
 
 export function loadWorkflow(path) {
   const raw = JSON.parse(readFileSync(path, "utf-8"));
+  raw.worktree = normalizeWorktreeConfig(raw.worktree);
   WORKFLOW = raw;
   PHASE_ORDER = raw.phases.map((p) => p.id);
   PHASE_SKILLS = {};
