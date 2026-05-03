@@ -2,11 +2,11 @@
 
 ## Directory layout
 
-- `apps/desktop-electron`: Electron main/preload/runtime
-- `apps/desktop-renderer`: React renderer
-- `apps/local-server-controllers`: existing local workflow HTTP/WebSocket controllers
+- `apps/desktop/electron`: Electron main/preload/runtime
+- `apps/desktop/renderer`: React renderer
+- `apps/desktop/local-server-controllers`: existing local workflow HTTP/WebSocket controllers
 - `apps/backend`: cloud relay backend
-- `apps/desktop-connector`: local connector between local workflow server and cloud backend
+- `apps/desktop/connector`: local connector between local workflow server and cloud backend
 - `apps/mobile`: Flutter mobile app
 - `packages/core-models`: shared workflow/config/state models
 - `packages/core-lib`: shared runtime helpers
@@ -16,32 +16,31 @@
 ### Existing desktop app
 
 ```bash
-pnpm dev
+pnpm dev:desktop
 ```
 
 ### Local workflow server
 
 ```bash
-pnpm server
+pnpm dev:server
 ```
 
 ### Cloud backend
 
 ```bash
-pnpm backend:dev
+pnpm dev:backend
 ```
 
 ### Desktop connector
 
 ```bash
-pnpm connector:dev
+pnpm dev:connector
 ```
 
 ### Flutter mobile app
 
 ```bash
-cd apps/mobile
-flutter run
+pnpm dev:mobile
 ```
 
 Set backend URL in the app to:

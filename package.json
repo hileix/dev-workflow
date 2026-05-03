@@ -4,21 +4,23 @@
   "type": "module",
   "description": "",
   "private": true,
-  "main": "apps/desktop-electron/main.mjs",
+  "main": "apps/desktop/electron/main.mjs",
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "chat": "node chat.mjs",
-    "server": "node server.mjs",
-    "dev:renderer": "pnpm --dir apps/desktop-renderer dev --host 127.0.0.1",
+    "dev:renderer": "pnpm --dir apps/desktop/renderer dev --host 127.0.0.1 --port 5173 --strictPort",
     "dev:electron": "wait-on http://127.0.0.1:5173 && ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electronmon .",
-    "dev": "concurrently -k \"pnpm dev:renderer\" \"pnpm dev:electron\"",
-    "dev:desktop-stack": "concurrently -k \"pnpm server\" \"pnpm backend:dev\" \"pnpm connector:dev\"",
-    "dev:all": "concurrently -k \"pnpm dev\" \"pnpm server\" \"pnpm backend:dev\" \"pnpm connector:dev\"",
-    "electron": "pnpm build && electron .",
-    "build": "pnpm --dir apps/desktop-renderer build",
-    "start": "electron .",
-    "backend:dev": "node apps/backend/src/server.mjs",
-    "connector:dev": "node apps/desktop-connector/src/index.mjs",
+    "dev:desktop-ui": "concurrently -k --names \"renderer,electron\" --prefix name --prefix-colors \"blue,magenta\" \"pnpm dev:renderer\" \"pnpm dev:electron\"",
+    "dev:desktop": "concurrently -k --names \"desktop,server,connector\" --prefix name --prefix-colors \"green,blue,cyan\" \"pnpm run dev:desktop-ui\" \"node scripts/run-if-port-free.mjs 3000 pnpm run dev:server\" \"pnpm run dev:connector\"",
+    "dev:backend": "node --watch apps/backend/src/server.mjs",
+    "dev:mobile": "cd apps/mobile && flutter run",
+    "dev:server": "node server.mjs",
+    "dev:connector": "node apps/desktop/connector/src/index.mjs",
+    "dev:desktop-stack": "concurrently -k --names \"server,backend,connector\" --prefix name --prefix-colors \"blue,magenta,cyan\" \"node scripts/run-if-port-free.mjs 3000 pnpm run dev:server\" \"node scripts/run-if-port-free.mjs 8787 pnpm run dev:backend\" \"pnpm run dev:connector\"",
+    "dev:mobile-stack": "concurrently -k --names \"server,backend,connector\" --prefix name --prefix-colors \"blue,magenta,cyan\" \"node scripts/run-if-port-free.mjs 3000 pnpm run dev:server\" \"node scripts/run-if-port-free.mjs 8787 pnpm run dev:backend\" \"pnpm run dev:connector\"",
+    "dev:all": "concurrently -k --names \"desktop,backend\" --prefix name --prefix-colors \"green,magenta\" \"pnpm run dev:desktop\" \"node scripts/run-if-port-free.mjs 8787 pnpm run dev:backend\"",
+    "build:desktop": "pnpm --dir apps/desktop/renderer build",
+    "start:desktop": "electron .",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -43,5 +45,10 @@
     "electron": "^41.3.0",
     "electronmon": "^2.0.4",
     "wait-on": "^9.0.5"
+  },
+  "electronmon": {
+    "patterns": [
+      "!apps/mobile/**"
+    ]
   }
 }

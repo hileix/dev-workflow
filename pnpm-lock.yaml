@@ -58,7 +58,7 @@ importers:
         specifier: ^9.0.5
         version: 9.0.5
 
-  apps/desktop-renderer:
+  apps/desktop/renderer:
     dependencies:
       '@radix-ui/react-slot':
         specifier: ^1.2.4

@@ -24,11 +24,11 @@ Local Workflow Server + Electron App
 
 ## Repository Layout
 
-- `apps/desktop-electron`: Electron main process, preload bridge, and workflow runtime
-- `apps/desktop-renderer`: React renderer for the desktop app
-- `apps/local-server-controllers`: local Express and WebSocket controllers for workflow execution
+- `apps/desktop/electron`: Electron main process, preload bridge, and workflow runtime
+- `apps/desktop/renderer`: React renderer for the desktop app
+- `apps/desktop/local-server-controllers`: local Express and WebSocket controllers for workflow execution
 - `apps/backend`: cloud relay backend
-- `apps/desktop-connector`: local bridge process that syncs local workflow state to the backend and forwards remote commands
+- `apps/desktop/connector`: local bridge process that syncs local workflow state to the backend and forwards remote commands
 - `apps/mobile`: Flutter mobile app for iOS and Android
 - `packages/core-models`: shared workflow, config, state, and storage modules
 - `packages/core-lib`: shared runtime helpers
@@ -50,55 +50,204 @@ cd apps/mobile && flutter pub get
 
 ## Local Development Flow
 
-Recommended startup order for local development:
+### 1. Develop the Electron App
 
-1. Start the local workflow server.
-2. Start the cloud backend relay.
-3. Start the desktop connector.
-4. Start the desktop app or the Flutter mobile app.
+Use this flow when you are working only on the desktop app experience.
 
-### Step-by-step
-
-Terminal 1:
+Start the Electron renderer and shell:
 
 ```bash
-pnpm server
+pnpm dev:desktop
 ```
 
-Terminal 2:
+Build the renderer:
 
 ```bash
-pnpm backend:dev
+pnpm build:desktop
 ```
 
-Terminal 3:
+Run Electron with the existing build:
 
 ```bash
-pnpm connector:dev
+pnpm start:desktop
 ```
 
-Terminal 4:
+Use this mode for:
+
+- desktop UI changes
+- Electron main/preload changes
+- local workflow runtime changes
+- workflow editor and task UI changes
+
+### 2. Develop the Backend and Mobile App
+
+Use this flow when you are working on the cloud relay, connector, or Flutter app.
+
+Start the backend/mobile development stack:
 
 ```bash
-pnpm dev
+pnpm dev:mobile-stack
 ```
 
-Optional mobile client:
+Then start Flutter in a separate terminal:
+
+```bash
+pnpm dev:mobile
+```
+
+### Local mobile development
+
+`pnpm dev:mobile-stack` starts these three processes:
+
+- `pnpm dev:server`
+  Runs the local workflow server on your computer. This is the process that knows about local tasks, local workflow state, local files, and the workflow runtime.
+
+- `pnpm dev:backend`
+  Runs the cloud relay backend. The mobile app talks to this service over HTTP and WebSocket.
+
+- `pnpm dev:connector`
+  Runs the local connector. It bridges the local workflow server and the cloud backend by syncing task state upward and forwarding mobile commands back down.
+
+So the chain is:
+
+```txt
+mobile app -> backend -> connector -> local workflow server
+```
+
+This is why mobile development needs all three:
+
+- without `server`, there is no local workflow state to read or control
+- without `backend`, the mobile app has nothing to connect to
+- without `connector`, the backend and your local machine are not linked
+
+Before running the app, make sure the stack is already up:
+
+```bash
+pnpm dev:mobile-stack
+```
+
+The terminal output is prefixed by process name:
+
+- `server`
+- `backend`
+- `connector`
+
+So if one process fails, the error will appear with its prefix in the same terminal.
+
+Then start Flutter from `apps/mobile`:
 
 ```bash
 cd apps/mobile
 flutter run
 ```
 
-When the mobile app opens, set the backend URL to:
+Useful commands:
+
+```bash
+cd apps/mobile
+flutter devices
+flutter run -d ios
+flutter run -d android
+flutter analyze
+```
+
+### Prepare a local mobile device target
+
+If `flutter run` only shows something like:
+
+```txt
+Mac Designed for iPad
+```
+
+that means there is no active iOS simulator, Android emulator, or physical phone connected yet.
+
+#### iOS Simulator
+
+Start the simulator:
+
+```bash
+open -a Simulator
+```
+
+Then check devices again:
+
+```bash
+cd apps/mobile
+flutter devices
+flutter run -d ios
+```
+
+#### Android Emulator
+
+List available emulators:
+
+```bash
+flutter emulators
+```
+
+Launch one:
+
+```bash
+flutter emulators --launch <emulator_id>
+```
+
+Then run:
+
+```bash
+cd apps/mobile
+flutter devices
+flutter run -d android
+```
+
+#### Real device
+
+You can also run on a real iPhone or Android phone after enabling the usual platform developer options and trusting the machine.
+
+### Backend URL for mobile
+
+Set the backend URL inside the mobile app to one of the following:
+
+#### iOS Simulator
+
+```txt
+http://127.0.0.1:8787
+```
+
+#### Android Emulator
+
+```txt
+http://10.0.2.2:8787
+```
+
+#### Real iPhone or Android device on the same LAN
 
 ```txt
 http://<your-host-ip>:8787
 ```
 
+Example:
+
+```txt
+http://192.168.1.23:8787
+```
+
+### Mobile development notes
+
+- The phone or simulator only talks to the cloud backend.
+- The desktop connector must stay connected, or the mobile app will not see any active device.
+- If you use a real device, make sure the phone and your computer are on the same local network when testing locally.
+- If the app connects but shows no device, check `http://127.0.0.1:8787/api/devices` on your computer.
+
+Use this mode for:
+
+- cloud backend API and WebSocket changes
+- desktop connector changes
+- mobile UI and command flow changes
+- remote task sync debugging
+
 ### Recommended local checks
 
-After startup, verify:
+For backend/mobile development, verify:
 
 - local workflow server: `http://127.0.0.1:3000`
 - cloud backend health: `http://127.0.0.1:8787/health`
@@ -194,19 +343,19 @@ For Android emulators, use the host machine IP instead of `127.0.0.1`.
 Start the desktop renderer and Electron shell:
 
 ```bash
-pnpm dev
+pnpm dev:desktop
 ```
 
 Build the renderer:
 
 ```bash
-pnpm build
+pnpm build:desktop
 ```
 
 Start Electron with the existing build:
 
 ```bash
-pnpm start
+pnpm start:desktop
 ```
 
 ## Run the Local Workflow Server
@@ -214,7 +363,7 @@ pnpm start
 This exposes the local workflow API and WebSocket used by the connector.
 
 ```bash
-pnpm server
+pnpm dev:server
 ```
 
 Default port:
@@ -226,7 +375,7 @@ http://127.0.0.1:3000
 ## Run the Cloud Backend
 
 ```bash
-pnpm backend:dev
+pnpm dev:backend
 ```
 
 Default port:
@@ -253,7 +402,7 @@ WebSocket endpoints:
 The connector links the local workflow server to the cloud backend.
 
 ```bash
-pnpm connector:dev
+pnpm dev:connector
 ```
 
 Default environment values:
@@ -267,11 +416,12 @@ DEVICE_NAME=Desktop Local
 DEFAULT_WORK_FOLDER=
 ```
 
+If the mobile app shows `Device metadata is incomplete` after tapping `Add`, the connector did not report any available work folder. Either add at least one work folder in the local workflow server, or set `DEFAULT_WORK_FOLDER` before starting `pnpm dev:connector`.
+
 ## Run the Mobile App
 
 ```bash
-cd apps/mobile
-flutter run
+pnpm dev:mobile
 ```
 
 ## Current MVP Scope
@@ -298,7 +448,7 @@ Not implemented yet:
 Verified in this repo:
 
 - `pnpm install`
-- `pnpm build`
+- `pnpm build:desktop`
 - `cd apps/mobile && flutter pub get`
 - `cd apps/mobile && flutter analyze`
 - `node --check` for backend, connector, local server, and Electron runtime files

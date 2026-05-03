@@ -1,16 +1,96 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { createStore } from "./store.mjs";
+import { nanoid } from "nanoid";
 
 const fastify = Fastify({ logger: true });
-const store = createStore();
-const desktopSockets = new Map();
+const desktopConnections = new Map();
 const mobileSockets = new Set();
+const pendingDesktopRequests = new Map();
+const pendingCommands = new Map();
+const ALLOWED_COMMANDS = new Set([
+  "approve",
+  "reject",
+  "message",
+  "sync_task",
+  "start_workflow",
+  "delete_task",
+]);
+
+function now() {
+  return new Date().toISOString();
+}
 
 function sendJson(socket, payload) {
   if (!socket || socket.readyState !== 1) return;
   socket.send(JSON.stringify(payload));
+}
+
+function isDeviceExposed(connection) {
+  return connection?.meta?.mobileAccessEnabled === true;
+}
+
+function publicDevice(connection) {
+  if (!connection || !isDeviceExposed(connection)) return null;
+  return {
+    deviceId: connection.deviceId,
+    name: connection.name || connection.deviceId,
+    status: "online",
+    lastSeenAt: connection.lastSeenAt || now(),
+    meta: connection.meta || {},
+  };
+}
+
+function publicTask(task, fallback = {}) {
+  if (!task) return null;
+  const deviceId = String(task.deviceId || fallback.deviceId || "").trim();
+  const ticketId = String(task.ticketId || fallback.ticketId || "").trim();
+  if (!deviceId || !ticketId) return null;
+  return {
+    key: task.key || `${deviceId}:${ticketId}`,
+    deviceId,
+    ticketId,
+    workFolder: task.workFolder || "",
+    state: task.state || null,
+    messages: task.messages || {},
+    artifacts: task.artifacts || {},
+    updatedAt: task.updatedAt || task.state?.updated || now(),
+  };
+}
+
+function listDevices() {
+  return Array.from(desktopConnections.values())
+    .map(publicDevice)
+    .filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function listHiddenDesktopConnections() {
+  return Array.from(desktopConnections.values()).filter((connection) => !isDeviceExposed(connection));
+}
+
+function getMobileAvailability() {
+  const devices = listDevices();
+  if (devices.length > 0) {
+    return { status: "available" };
+  }
+
+  const hiddenConnections = listHiddenDesktopConnections();
+  if (hiddenConnections.length > 0) {
+    return {
+      status: "desktop_mobile_access_disabled",
+      hiddenDesktopCount: hiddenConnections.length,
+    };
+  }
+
+  return { status: "no_desktop_online" };
+}
+
+function broadcastMobileAvailability() {
+  broadcastMobile({
+    type: "availability",
+    availability: getMobileAvailability(),
+  });
 }
 
 function broadcastMobile(payload) {
@@ -19,18 +99,142 @@ function broadcastMobile(payload) {
   }
 }
 
-function publicTask(task) {
-  if (!task) return null;
-  return {
-    key: task.key,
-    deviceId: task.deviceId,
-    ticketId: task.ticketId,
-    workFolder: task.workFolder,
-    state: task.state,
-    messages: task.messages,
-    artifacts: task.artifacts,
-    updatedAt: task.updatedAt,
+function rejectPendingDesktopRequestsForDevice(deviceId) {
+  for (const [requestId, pending] of pendingDesktopRequests) {
+    if (pending.deviceId !== deviceId) continue;
+    clearTimeout(pending.timeout);
+    pendingDesktopRequests.delete(requestId);
+    pending.reject(new Error("device is offline"));
+  }
+}
+
+function createDesktopRequest(deviceId, action, payload = {}, timeoutMs = 10000) {
+  const connection = desktopConnections.get(deviceId);
+  if (!connection || connection.socket.readyState !== 1 || !isDeviceExposed(connection)) {
+    throw new Error("device is offline");
+  }
+
+  const requestId = nanoid();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingDesktopRequests.delete(requestId);
+      reject(new Error("desktop request timed out"));
+    }, timeoutMs);
+
+    pendingDesktopRequests.set(requestId, {
+      deviceId,
+      resolve,
+      reject,
+      timeout,
+    });
+
+    sendJson(connection.socket, {
+      type: "query.request",
+      requestId,
+      action,
+      payload,
+    });
+  });
+}
+
+function resolveDesktopRequest(message) {
+  const pending = pendingDesktopRequests.get(message.requestId);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  pendingDesktopRequests.delete(message.requestId);
+  if (message.ok === false) {
+    pending.reject(new Error(message.error || "desktop query failed"));
+    return;
+  }
+  pending.resolve(message.data || {});
+}
+
+async function listTasksForDevice(deviceId) {
+  const data = await createDesktopRequest(deviceId, "list_tasks");
+  const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  return tasks
+    .map((task) => publicTask(task, { deviceId }))
+    .filter(Boolean);
+}
+
+async function getTaskForDevice(deviceId, ticketId) {
+  const data = await createDesktopRequest(deviceId, "get_task", { ticketId });
+  return publicTask(data.task, { deviceId, ticketId });
+}
+
+async function listAllTasks() {
+  const devices = listDevices();
+  const snapshots = await Promise.all(
+    devices.map(async (device) => {
+      try {
+        return await listTasksForDevice(device.deviceId);
+      } catch {
+        return [];
+      }
+    })
+  );
+  return snapshots.flat();
+}
+
+async function broadcastDeviceTasks(deviceId) {
+  const tasks = await listTasksForDevice(deviceId).catch(() => []);
+  for (const task of tasks) {
+    broadcastMobile({ type: "task.snapshot", task });
+  }
+}
+
+function createPendingCommand(deviceId, ticketId, type, payload = {}) {
+  const command = {
+    id: nanoid(),
+    deviceId,
+    ticketId,
+    type,
+    payload,
+    status: "pending",
+    createdAt: now(),
+    completedAt: null,
+    error: "",
   };
+  const timeout = setTimeout(() => {
+    pendingCommands.delete(command.id);
+  }, 30000);
+  pendingCommands.set(command.id, { command, timeout });
+  return command;
+}
+
+function resolvePendingCommand(commandId, status, error = "") {
+  const pending = pendingCommands.get(commandId);
+  if (!pending) {
+    return {
+      id: commandId,
+      status,
+      error,
+      completedAt: now(),
+    };
+  }
+  clearTimeout(pending.timeout);
+  pendingCommands.delete(commandId);
+  pending.command.status = status;
+  pending.command.error = error;
+  pending.command.completedAt = now();
+  return pending.command;
+}
+
+function sendCommandToDesktop(deviceId, ticketId, type, payload = {}) {
+  const connection = desktopConnections.get(deviceId);
+  if (!connection || connection.socket.readyState !== 1 || !isDeviceExposed(connection)) {
+    throw new Error("device is offline");
+  }
+  const command = createPendingCommand(deviceId, ticketId, type, payload);
+  sendJson(connection.socket, {
+    type: "command.request",
+    commandId: command.id,
+    ticketId,
+    command: type,
+    payload,
+  });
+  broadcastMobile({ type: "command.status", command });
+  return command;
 }
 
 await fastify.register(cors, { origin: true });
@@ -39,47 +243,51 @@ await fastify.register(websocket);
 fastify.get("/health", async () => ({ ok: true }));
 
 fastify.get("/api/devices", async () => ({
-  devices: store.listDevices(),
+  devices: listDevices(),
+  availability: getMobileAvailability(),
 }));
 
 fastify.get("/api/tasks", async () => ({
-  tasks: store.listTasks(),
+  tasks: await listAllTasks(),
 }));
 
 fastify.get("/api/tasks/:deviceId/:ticketId", async (request, reply) => {
   const { deviceId, ticketId } = request.params;
-  const task = store.getTask(deviceId, ticketId);
-  if (!task) return reply.code(404).send({ error: "task not found" });
-  return { task: publicTask(task) };
+  try {
+    const task = await getTaskForDevice(deviceId, ticketId);
+    if (!task) return reply.code(404).send({ error: "task not found" });
+    return { task };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "request failed";
+    if (message === "device is offline") {
+      return reply.code(409).send({ error: message });
+    }
+    return reply.code(502).send({ error: message });
+  }
 });
 
 fastify.post("/api/tasks/:deviceId/:ticketId/commands", async (request, reply) => {
   const { deviceId, ticketId } = request.params;
   const { type, payload } = request.body || {};
-  const desktopSocket = desktopSockets.get(deviceId);
-  if (!desktopSocket || desktopSocket.readyState !== 1) {
-    return reply.code(409).send({ error: "device is offline" });
-  }
-  if (!["approve", "reject", "message", "sync_task"].includes(type)) {
+  if (!ALLOWED_COMMANDS.has(type)) {
     return reply.code(400).send({ error: "unsupported command" });
   }
-
-  const command = store.createCommand(deviceId, ticketId, type, payload);
-  sendJson(desktopSocket, {
-    type: "command.request",
-    commandId: command.id,
-    ticketId,
-    command: type,
-    payload: payload || {},
-  });
-  broadcastMobile({ type: "command.status", command });
-  return { command };
+  try {
+    const command = sendCommandToDesktop(deviceId, ticketId, type, payload || {});
+    return { command };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "request failed";
+    if (message === "device is offline") {
+      return reply.code(409).send({ error: message });
+    }
+    return reply.code(502).send({ error: message });
+  }
 });
 
 fastify.get("/ws/desktop", { websocket: true }, (socket) => {
-  let deviceId = null;
+  let deviceId = "";
 
-  socket.on("message", (raw) => {
+  socket.on("message", async (raw) => {
     let message;
     try {
       message = JSON.parse(String(raw));
@@ -90,79 +298,145 @@ fastify.get("/ws/desktop", { websocket: true }, (socket) => {
     if (message.type === "device.hello") {
       deviceId = String(message.deviceId || "").trim();
       if (!deviceId) return;
-      desktopSockets.set(deviceId, socket);
-      const device = store.upsertDevice({
+      const previousConnection = desktopConnections.get(deviceId);
+      const connection = {
         deviceId,
         name: message.name || deviceId,
-        status: "online",
-        lastSeenAt: new Date().toISOString(),
         meta: message.meta || {},
-      });
-      sendJson(socket, {
-        type: "device.accepted",
-        device,
-        tasks: store.listTasks().filter((task) => task.deviceId === deviceId),
-      });
-      broadcastMobile({ type: "device.status", device });
+        lastSeenAt: now(),
+        socket,
+      };
+      desktopConnections.set(deviceId, connection);
+      const device = publicDevice(connection);
+      sendJson(socket, { type: "device.accepted", device });
+      broadcastMobile({ type: "tasks.remove_device", deviceId });
+      if (device) {
+        broadcastMobile({ type: "device.status", device });
+        broadcastMobileAvailability();
+        await broadcastDeviceTasks(deviceId);
+        return;
+      }
+      broadcastMobileAvailability();
+      if (isDeviceExposed(previousConnection)) {
+        broadcastMobile({
+          type: "device.status",
+          device: {
+            deviceId,
+            name: connection.name || deviceId,
+            status: "offline",
+            lastSeenAt: connection.lastSeenAt,
+            meta: connection.meta || {},
+          },
+        });
+      }
       return;
     }
 
     if (!deviceId) return;
 
+    if (message.type === "query.response") {
+      resolveDesktopRequest(message);
+      return;
+    }
+
     if (message.type === "task.snapshot") {
-      const task = store.setTaskSnapshot({
+      const task = publicTask(message.task, {
         deviceId,
         ticketId: message.ticketId,
-        workFolder: message.workFolder,
-        state: message.state,
-        messages: message.messages,
-        artifacts: message.artifacts,
       });
-      broadcastMobile({ type: "task.snapshot", task: publicTask(task) });
+      if (task) {
+        broadcastMobile({ type: "task.snapshot", task });
+      }
       return;
     }
 
     if (message.type === "task.event") {
-      const task = store.patchTaskEvent(deviceId, message.ticketId, message.event || {});
+      if (message.task) {
+        const task = publicTask(message.task, {
+          deviceId,
+          ticketId: message.ticketId,
+        });
+        if (task) {
+          broadcastMobile({
+            type: "task.event",
+            taskId: task.key,
+            deviceId,
+            ticketId: task.ticketId,
+            event: message.event,
+            task,
+          });
+        }
+      }
+      return;
+    }
+
+    if (message.type === "task.removed") {
       broadcastMobile({
-        type: "task.event",
-        taskId: task.key,
+        type: "tasks.remove_task",
+        taskKey: `${deviceId}:${message.ticketId}`,
         deviceId,
         ticketId: message.ticketId,
-        event: message.event,
-        task: publicTask(task),
       });
       return;
     }
 
     if (message.type === "command.result") {
-      const command = store.resolveCommand(message.commandId, message.status || "ok", message.error || "");
-      if (command) {
-        broadcastMobile({ type: "command.status", command });
-      }
-      return;
+      const command = resolvePendingCommand(
+        message.commandId,
+        message.status || "ok",
+        message.error || ""
+      );
+      broadcastMobile({ type: "command.status", command });
     }
   });
 
   socket.on("close", () => {
     if (!deviceId) return;
-    desktopSockets.delete(deviceId);
-    const device = store.upsertDevice({
-      deviceId,
-      status: "offline",
-      lastSeenAt: new Date().toISOString(),
+    const connection = desktopConnections.get(deviceId);
+    if (connection?.socket !== socket) return;
+    desktopConnections.delete(deviceId);
+    rejectPendingDesktopRequestsForDevice(deviceId);
+    broadcastMobile({
+      type: "device.status",
+      device: {
+        deviceId,
+        name: connection.name || deviceId,
+        status: "offline",
+        lastSeenAt: now(),
+        meta: connection.meta || {},
+      },
     });
-    broadcastMobile({ type: "device.status", device });
+    broadcastMobile({ type: "tasks.remove_device", deviceId });
+    broadcastMobileAvailability();
   });
 });
 
 fastify.get("/ws/mobile", { websocket: true }, (socket) => {
   mobileSockets.add(socket);
-  sendJson(socket, {
-    type: "bootstrap",
-    devices: store.listDevices(),
-    tasks: store.listTasks(),
-  });
+  Promise.resolve()
+    .then(async () => {
+      const availability = getMobileAvailability();
+      if (availability.status === "desktop_mobile_access_disabled") {
+        fastify.log.info(
+          { hiddenDesktopCount: availability.hiddenDesktopCount },
+          "mobile websocket connected but desktop mobile access is disabled"
+        );
+      }
+      sendJson(socket, {
+        type: "bootstrap",
+        devices: listDevices(),
+        tasks: await listAllTasks(),
+        availability,
+      });
+    })
+    .catch(() => {
+      sendJson(socket, {
+        type: "bootstrap",
+        devices: listDevices(),
+        tasks: [],
+        availability: getMobileAvailability(),
+      });
+    });
 
   socket.on("message", (raw) => {
     let message;
@@ -173,21 +447,23 @@ fastify.get("/ws/mobile", { websocket: true }, (socket) => {
     }
 
     if (message.type === "command.create") {
-      const { deviceId, ticketId, command, payload } = message;
-      const desktopSocket = desktopSockets.get(deviceId);
-      if (!desktopSocket || desktopSocket.readyState !== 1) {
-        sendJson(socket, { type: "command.error", error: "device is offline" });
+      const { deviceId: targetDeviceId, ticketId, command, payload } = message;
+      if (!ALLOWED_COMMANDS.has(command)) {
+        sendJson(socket, { type: "command.error", error: "unsupported command" });
         return;
       }
-      const created = store.createCommand(deviceId, ticketId, command, payload);
-      sendJson(desktopSocket, {
-        type: "command.request",
-        commandId: created.id,
-        ticketId,
-        command,
-        payload: payload || {},
-      });
-      broadcastMobile({ type: "command.status", command: created });
+      try {
+        const created = sendCommandToDesktop(
+          String(targetDeviceId || "").trim(),
+          String(ticketId || "").trim(),
+          command,
+          payload || {}
+        );
+        sendJson(socket, { type: "command.accepted", command: created });
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : "request failed";
+        sendJson(socket, { type: "command.error", error: messageText });
+      }
     }
   });
 

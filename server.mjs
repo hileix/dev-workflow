@@ -5,9 +5,9 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 import "./packages/core-models/workflow.mjs";
-import workfoldersController from "./apps/local-server-controllers/workfoldersController.mjs";
-import workflowController from "./apps/local-server-controllers/workflowController.mjs";
-import { setupWebSocket } from "./apps/local-server-controllers/wsController.mjs";
+import workfoldersController from "./apps/desktop/local-server-controllers/workfoldersController.mjs";
+import workflowController from "./apps/desktop/local-server-controllers/workflowController.mjs";
+import { setupWebSocket } from "./apps/desktop/local-server-controllers/wsController.mjs";
 import { activeWorkflows } from "./packages/core-lib/claude.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -16,14 +16,14 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(join(__dirname, "apps", "desktop-renderer", "dist")));
+app.use(express.static(join(__dirname, "apps", "desktop", "renderer", "dist")));
 
 app.use("/api", workfoldersController);
 app.use("/api", workflowController);
 
 // SPA fallback
 app.get("*", (req, res) => {
-  res.sendFile(join(__dirname, "apps", "desktop-renderer", "dist", "index.html"));
+  res.sendFile(join(__dirname, "apps", "desktop", "renderer", "dist", "index.html"));
 });
 
 function killAllChildren() {

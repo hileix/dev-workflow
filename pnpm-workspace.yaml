@@ -1,4 +1,4 @@
 allowBuilds:
   electron: true
 packages:
-  - "apps/desktop-renderer"
+  - "apps/desktop/renderer"
