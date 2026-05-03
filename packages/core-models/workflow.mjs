@@ -1,6 +1,6 @@
 import { join } from "path";
 import { readFileSync } from "fs";
-import { CONFIG_FILE, WORKFLOW_DIR } from "./config.mjs";
+import { readConfigSync, WORKFLOW_DIR } from "./config.mjs";
 import { readManagedSkillContentSync } from "./skills.mjs";
 
 let WORKFLOW = null;
@@ -94,7 +94,7 @@ export function nextPhase(currentPhaseId) {
 
 // Startup: load active workflow
 try {
-  const startupConfig = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+  const startupConfig = readConfigSync();
   if (startupConfig.activeWorkflow) ACTIVE_WORKFLOW_FILE = startupConfig.activeWorkflow;
 } catch {}
 

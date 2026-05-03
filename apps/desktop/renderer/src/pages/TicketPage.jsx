@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import StepList from "../StepList";
 import StepDetail from "../StepDetail";
+import { BackButton } from "../components/back-button";
 import { useI18n } from "../components/i18n-provider";
 import { ThemeToggle } from "../components/theme-toggle";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { WindowChrome } from "../components/window-chrome";
 import { useWorkflowStore } from "../stores/workflowStore";
 import { useConfigStore } from "../stores/configStore";
 
@@ -87,45 +89,51 @@ export default function TicketPage() {
 
   return (
     <>
-      <div className="app-toolbar flex items-center justify-between h-[52px] border-b border-border bg-card/80 px-5 pl-24">
-        <div className="no-drag flex items-center gap-3 min-w-0">
-          <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors text-sm">&larr; {t("common.back")}</Link>
-          <h1 className="truncate text-[13px] font-semibold text-foreground">{ticketId}</h1>
-          {workflowState?.worktree?.enabled && (
-            <Badge variant="secondary">{t("ticket.gitWorktree")}</Badge>
-          )}
-          {isStreaming && (
-            <Badge variant="info" className="animate-pulse-subtle">{t("ticket.working")}</Badge>
-          )}
+      <WindowChrome />
+      <div className="flex-1 flex min-h-0 flex-col">
+        <div className="flex items-center justify-between gap-4 border-b border-border/70 bg-background/55 px-8 py-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="min-w-0">
+              <BackButton to="/" label={t("common.back")} className="-ml-2 mb-1" />
+              <h1 className="truncate text-[22px] font-semibold text-foreground">{ticketId}</h1>
+              {selectedGroupObj?.label && (
+                <div className="text-sm text-muted-foreground">{selectedGroupObj.label}</div>
+              )}
+            </div>
+            {workflowState?.worktree?.enabled && (
+              <Badge variant="secondary">{t("ticket.gitWorktree")}</Badge>
+            )}
+            {isStreaming && (
+              <Badge variant="info" className="animate-pulse-subtle">{t("ticket.working")}</Badge>
+            )}
+            <ThemeToggle />
+          </div>
         </div>
-        <div className="no-drag">
-          <ThemeToggle />
+        <div className="flex flex-1 min-h-0">
+          <StepList
+            phases={phases.map((p) => ({ name: p.id || p.name, status: p.status, updated: p.updated }))}
+            currentPhase={currentPhase}
+            selectedGroup={selectedGroup}
+            onSelect={setSelectedGroup}
+            groups={groups}
+            phaseLabels={workflowConfig?.phaseLabels || {}}
+            onDelete={() => setShowDeleteConfirm(true)}
+          />
+          <StepDetail
+            phase={activePhase}
+            content={allGroupContent}
+            artifact={groupArtifact}
+            isStreaming={isPhaseStreaming}
+            isRunning={isPhaseRunning}
+            isAwaiting={isPhaseAwaiting}
+            onApprove={approve}
+            onReject={reject}
+            onSendMessage={sendMessage}
+            phaseLabels={workflowConfig?.phaseLabels || {}}
+            phaseTypes={workflowConfig?.phaseTypes || {}}
+            rejectTargets={workflowConfig?.rejectTargets || {}}
+          />
         </div>
-      </div>
-      <div className="flex-1 flex min-h-0">
-        <StepList
-          phases={phases.map((p) => ({ name: p.id || p.name, status: p.status, updated: p.updated }))}
-          currentPhase={currentPhase}
-          selectedGroup={selectedGroup}
-          onSelect={setSelectedGroup}
-          groups={groups}
-          phaseLabels={workflowConfig?.phaseLabels || {}}
-          onDelete={() => setShowDeleteConfirm(true)}
-        />
-        <StepDetail
-          phase={activePhase}
-          content={allGroupContent}
-          artifact={groupArtifact}
-          isStreaming={isPhaseStreaming}
-          isRunning={isPhaseRunning}
-          isAwaiting={isPhaseAwaiting}
-          onApprove={approve}
-          onReject={reject}
-          onSendMessage={sendMessage}
-          phaseLabels={workflowConfig?.phaseLabels || {}}
-          phaseTypes={workflowConfig?.phaseTypes || {}}
-          rejectTargets={workflowConfig?.rejectTargets || {}}
-        />
       </div>
 
       {showDeleteConfirm && (

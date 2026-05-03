@@ -337,7 +337,7 @@ heartbeat
 当前项目已经有两套类似能力：
 
 - Electron IPC：`electron/main.mjs`、`electron/preload.cjs`、`electron/workflow-runtime.mjs`
-- Local server + WebSocket：`server.mjs`、`controllers/wsController.mjs`
+- Local server + WebSocket：`apps/desktop/server.mjs`、`apps/desktop/local-server-controllers/wsController.mjs`
 
 为了避免大改 Electron，建议第一版复用现有 local server 的能力：
 

@@ -67,7 +67,7 @@ export default function SkillManager({ skills, onSave, onDelete, onImport }) {
               {t("skillManager.noSkills")}
             </div>
           ) : (
-            <ul className="list-none divide-y divide-border overflow-hidden rounded-xl border border-border bg-card/70">
+            <ul className="list-none divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
               {skills.map((skill) => (
                 <li
                   key={skill.id}
@@ -95,10 +95,10 @@ export default function SkillManager({ skills, onSave, onDelete, onImport }) {
                 </li>
               ))}
             </ul>
-          )}
+            )}
         </div>
 
-        <div className="border border-border rounded-xl p-3 bg-card/70 space-y-3">
+        <div className="space-y-3 rounded-2xl border border-border bg-card/78 p-3 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
           <Input
             value={draft.name}
             onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}

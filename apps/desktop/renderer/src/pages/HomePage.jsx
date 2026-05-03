@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { Settings2, X } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { X } from "lucide-react";
 import { useI18n } from "../components/i18n-provider";
+import { ThemeToggle } from "../components/theme-toggle";
+import { WindowChrome } from "../components/window-chrome";
 import { useConfigStore } from "../stores/configStore";
 import { useWorkflowStore } from "../stores/workflowStore";
 import { getAppApi } from "../lib/api-client";
@@ -50,7 +52,7 @@ function TaskCard({ task, groups, onClick, t }) {
 
   return (
     <div
-      className={`inline-block overflow-hidden border rounded-xl bg-card/70 cursor-pointer transition-colors hover:bg-accent/70 ${
+      className={`inline-block min-w-[18rem] overflow-hidden rounded-2xl border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset] cursor-pointer transition-colors hover:bg-accent/65 ${
         task.status === "awaiting_input" ? "border-2 border-warning animate-pulse-subtle" : "border-border"
       }`}
       onClick={onClick}
@@ -167,8 +169,8 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-card border border-border rounded-xl shadow-xl w-full max-w-lg max-h-[80vh] overflow-y-auto">
+      <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-2xl border border-border bg-card/92 shadow-[0_24px_80px_rgba(15,23,42,0.2)]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h2 className="text-base font-semibold text-foreground">{t("home.startWorkflow")}</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-lg leading-none">&times;</button>
@@ -315,26 +317,43 @@ export default function HomePage() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-6">
-      <div className="mb-6">
-        <h2 className="text-[20px] font-semibold text-foreground mb-5">{t("home.tasks")}</h2>
-        <div className="flex flex-wrap gap-3 items-stretch">
-          <div
-            className="inline-flex flex-col items-center justify-center w-48 min-h-[200px] border border-dashed border-border rounded-xl bg-card/50 cursor-pointer transition-colors hover:bg-accent hover:border-ring text-muted-foreground hover:text-foreground"
-            onClick={() => setShowStartModal(true)}
-          >
-            <span className="text-2xl leading-none mb-1">+</span>
-            <span className="text-sm">{t("home.start")}</span>
+    <div className="flex h-full flex-col">
+      <WindowChrome />
+
+      <div className="flex-1 overflow-y-auto px-8 py-6">
+        <div className="mx-auto w-full max-w-5xl">
+          <div className="mb-6 flex items-center justify-between gap-4">
+            <div>
+              <h1 className="text-[24px] font-semibold text-foreground">{t("home.tasks")}</h1>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link to="/settings" aria-label={t("nav.settings")} title={t("nav.settings")}>
+                  <Settings2 className="h-4 w-4" />
+                </Link>
+              </Button>
+              <ThemeToggle />
+            </div>
           </div>
-          {tasks.map((task) => (
-            <TaskCard
-              key={task.ticketId}
-              task={task}
-              groups={groups}
-              onClick={() => handleResume(task.ticketId)}
-              t={t}
-            />
-          ))}
+          <div className="flex flex-wrap gap-3 items-stretch">
+            <button
+              type="button"
+              className="inline-flex min-h-[196px] w-52 flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card/55 text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.55)_inset] transition-colors hover:border-ring hover:bg-accent/70 hover:text-foreground"
+              onClick={() => setShowStartModal(true)}
+            >
+              <span className="mb-1 text-2xl leading-none">+</span>
+              <span className="text-sm font-medium">{t("home.start")}</span>
+            </button>
+            {tasks.map((task) => (
+              <TaskCard
+                key={task.ticketId}
+                task={task}
+                groups={groups}
+                onClick={() => handleResume(task.ticketId)}
+                t={t}
+              />
+            ))}
+          </div>
         </div>
       </div>
 

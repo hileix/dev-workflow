@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import { PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
+import { BackButton } from "./components/back-button";
 import { useI18n } from "./components/i18n-provider";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Badge } from "./components/ui/badge";
 import WorkflowFlowchart from "./components/WorkflowFlowchart";
+import { WindowChrome } from "./components/window-chrome";
 import { cn } from "./lib/utils";
 import { getAppApi } from "./lib/api-client";
 import { useConfigStore } from "./stores/configStore";
@@ -267,11 +269,9 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Top bar */}
-      <div className="app-toolbar flex items-center gap-3 h-[52px] border-b border-border bg-card/80 px-5 pl-24">
-        <Button className="no-drag" variant="ghost" size="sm" onClick={() => dirty ? setShowBackConfirm(true) : onClose()}>
-          &larr; {t("editor.back")}
-        </Button>
+      <WindowChrome />
+      <div className="flex items-center gap-4 border-b border-border/70 bg-background/55 px-8 py-5">
+        <BackButton onClick={() => dirty ? setShowBackConfirm(true) : onClose()} label={t("editor.back")} className="-ml-2" />
         <Input
           value={name}
           onChange={(e) => { setName(e.target.value); setDirty(true); }}
@@ -287,7 +287,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
 
       <div className="flex-1 flex min-h-0">
         {/* Phase list (left) */}
-        <div className="w-96 shrink-0 border-r border-border bg-sidebar/80 overflow-y-auto py-4">
+        <div className="w-96 shrink-0 border-r border-border bg-sidebar/60 overflow-y-auto py-4">
           <div className="px-4 pb-4 border-b border-border mb-3">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-xs font-semibold text-muted-foreground">{t("editor.prompts", { count: prompts.length })}</h2>
@@ -503,7 +503,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
         </div>
 
         {/* Phase edit form (middle) */}
-        <div className="flex-1 overflow-y-auto px-6 py-6">
+        <div className="flex-1 overflow-y-auto bg-background/55 px-6 py-6">
           {selected ? (
             <div className="max-w-2xl space-y-5">
               <div className="grid grid-cols-2 gap-4">

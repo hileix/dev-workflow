@@ -23,7 +23,7 @@ Use `pnpm` at the repo root.
 - `pnpm build:desktop`: build the renderer into `apps/desktop/renderer/dist`.
 - `pnpm dev:desktop`: build the renderer, then launch Electron.
 - `pnpm start:desktop`: open Electron using the existing renderer build.
-- `pnpm dev:server`: run the local Express server from `server.mjs`.
+- `pnpm dev:server`: run the local Express server from `apps/desktop/server.mjs`.
 - `pnpm dev:backend`: run the cloud relay backend.
 - `pnpm dev:connector`: run the local desktop connector.
 
