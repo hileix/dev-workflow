@@ -285,7 +285,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
         </Button>
       </div>
 
-      <div className="flex-1 flex min-h-0">
+      <div className="relative flex min-h-0 flex-1">
         {/* Phase list (left) */}
         <div className="w-96 shrink-0 border-r border-border bg-sidebar/60 overflow-y-auto py-4">
           <div className="px-4 pb-4 border-b border-border mb-3">
@@ -721,42 +721,40 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
         </div>
 
         {/* Workflow preview (right) */}
-        <div
-          className={cn(
-            "shrink-0 border-l border-border bg-secondary/30 transition-all duration-200",
-            flowchartCollapsed ? "w-14" : "w-[34rem]"
-          )}
-        >
-          <div className="flex h-full flex-col min-h-0">
-            <div
-              className={cn(
-                "flex items-center gap-2 border-b border-border px-4 py-3",
-                flowchartCollapsed && "justify-center px-2"
-              )}
+        {flowchartCollapsed ? (
+          <div className="absolute right-3 top-3 z-10">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 w-8 px-0"
+              onClick={() => setFlowchartCollapsed(false)}
+              aria-label={t("editor.expandPreview")}
+              title={t("editor.expandPreview")}
             >
-              {!flowchartCollapsed && (
+              <PanelRightOpen className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div className="shrink-0 w-[34rem] border-l border-border bg-secondary/30 transition-all duration-200">
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="flex items-center gap-2 border-b border-border px-4 py-3">
                 <div className="min-w-0 flex-1">
                   <h2 className="text-xs font-semibold text-muted-foreground">{t("editor.workflowPreview")}</h2>
                   <span className="text-[10px] text-muted-foreground">{t("editor.workflowPreviewHint")}</span>
                 </div>
-              )}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 w-8 px-0"
-                onClick={() => setFlowchartCollapsed((prev) => !prev)}
-                aria-label={flowchartCollapsed ? t("editor.expandPreview") : t("editor.collapsePreview")}
-                title={flowchartCollapsed ? t("editor.expandPreview") : t("editor.collapsePreview")}
-              >
-                {flowchartCollapsed ? (
-                  <PanelRightOpen className="h-4 w-4" />
-                ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 px-0"
+                  onClick={() => setFlowchartCollapsed(true)}
+                  aria-label={t("editor.collapsePreview")}
+                  title={t("editor.collapsePreview")}
+                >
                   <PanelRightClose className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-            {!flowchartCollapsed && (
+                </Button>
+              </div>
               <div className="min-h-0 flex-1 p-4">
                 <WorkflowFlowchart
                   phases={phases}
@@ -764,16 +762,9 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                   onSelectPhase={setSelectedIdx}
                 />
               </div>
-            )}
-            {flowchartCollapsed && (
-              <div className="flex flex-1 items-start justify-center pt-4">
-                <span className="vertical-rl text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                  {t("editor.workflow")}
-                </span>
-              </div>
-            )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {showBackConfirm && (
