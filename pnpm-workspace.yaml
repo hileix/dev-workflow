@@ -1,2 +1,4 @@
 allowBuilds:
   electron: true
+packages:
+  - "apps/desktop-renderer"

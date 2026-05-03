@@ -460,13 +460,24 @@ phase 内容和 artifact 可能很大。
 
 ### Mobile App
 
-可选方案：
+使用 Flutter 实现，同时支持 iOS 和 Android。
 
-- React Native / Expo：适合快速开发 iOS 和 Android。
-- PWA：最快，但系统通知和后台能力较弱。
-- 原生 Swift/Kotlin：体验最好，但开发成本更高。
+建议依赖：
 
-第一版建议用 React Native / Expo。
+- `dio`：处理 REST API 请求。
+- `web_socket_channel`：连接 cloud backend WebSocket。
+- `flutter_secure_storage`：保存登录 token 和设备信息。
+- `riverpod` 或 `bloc`：管理 task 状态和命令状态。
+- `go_router`：管理 task 列表、详情、设置等页面路由。
+
+第一版 Flutter 页面建议保持简单：
+
+- 登录页。
+- 设备列表页。
+- Task 列表页。
+- Task 详情页。
+- Phase 内容页。
+- 设置页。
 
 ## 最小可行版本
 
@@ -479,4 +490,3 @@ phase 内容和 artifact 可能很大。
 5. desktop connector 收到 approve 后调用本机 workflow。
 
 只要这个闭环跑通，就证明方案成立。
-

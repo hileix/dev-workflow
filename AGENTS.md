@@ -2,11 +2,15 @@
 
 ## Project Structure & Module Organization
 
-This repo is an Electron app with a React renderer.
+This repo is now a monorepo centered around the desktop workflow app, a cloud relay backend, a desktop connector, and a Flutter mobile client.
 
-- `electron/`: Electron entrypoints, preload bridge, and workflow runtime.
-- `renderer/src/`: UI code. `pages/` holds route screens, `components/` holds shared UI, `stores/` contains Zustand state, and `lib/` contains renderer helpers.
-- `controllers/`, `models/`, `lib/`: Node-side API handlers, persistence, and workflow logic used by the desktop app and local server.
+- `apps/desktop-electron/`: Electron entrypoints, preload bridge, and workflow runtime.
+- `apps/desktop-renderer/src/`: React UI. `pages/` holds route screens, `components/` holds shared UI, `stores/` contains Zustand state, and `lib/` contains renderer helpers.
+- `apps/local-server-controllers/`: local Express/WebSocket controllers used by the desktop workflow server.
+- `apps/backend/`: cloud relay backend for remote mobile access.
+- `apps/desktop-connector/`: local bridge process that syncs local workflow state to the cloud backend and forwards remote commands.
+- `apps/mobile/`: Flutter app for iOS and Android.
+- `packages/core-models/`, `packages/core-lib/`: shared Node-side state, config, workflow, and runtime helpers.
 - `workflows/`: JSON workflow definitions shipped with the app.
 - `docs/` and `references/`: internal notes and reference material.
 
@@ -15,25 +19,35 @@ This repo is an Electron app with a React renderer.
 Use `pnpm` at the repo root.
 
 - `pnpm install`: install workspace dependencies.
-- `pnpm dev:renderer`: start the Vite renderer for UI work.
-- `pnpm build`: build the renderer into `renderer/dist`.
+- `pnpm dev:renderer`: start the Vite desktop renderer for UI work.
+- `pnpm build`: build the renderer into `apps/desktop-renderer/dist`.
 - `pnpm dev`: build the renderer, then launch Electron.
 - `pnpm start`: open Electron using the existing renderer build.
 - `pnpm server`: run the local Express server from `server.mjs`.
+- `pnpm backend:dev`: run the cloud relay backend.
+- `pnpm connector:dev`: run the local desktop connector.
+
+Mobile app commands:
+
+- `cd apps/mobile && flutter pub get`
+- `cd apps/mobile && flutter analyze`
+- `cd apps/mobile && flutter run`
 
 There is no real automated test suite yet. The current `pnpm test` script intentionally fails.
 
 ## Coding Style & Naming Conventions
 
-- Use ES modules (`.mjs`, `.js`, `.jsx`) and keep changes surgical.
+- Use ES modules (`.mjs`, `.js`, `.jsx`) for Node/React code and keep changes surgical.
 - Match the existing style: 2-space indentation, double quotes, and semicolons.
 - Use `PascalCase` for React components (`HomePage.jsx`), `camelCase` for functions/variables, and lowercase descriptive filenames for Node modules (`workflowController.mjs`).
+- For Flutter, follow Dart defaults and keep widgets and state management straightforward.
 - Keep new abstractions minimal; prefer extending the current file structure over introducing new layers.
 
 ## Testing Guidelines
 
-- For UI changes, verify `pnpm build` succeeds and smoke-test the Electron flow with `pnpm dev` or `pnpm start`.
-- For server or workflow changes, manually verify the affected API or runtime path.
+- For desktop UI changes, verify `pnpm build` succeeds and smoke-test the Electron flow with `pnpm dev` or `pnpm start`.
+- For backend or connector changes, manually verify the affected API/WebSocket path with `pnpm backend:dev`, `pnpm connector:dev`, and `pnpm server`.
+- For Flutter changes, run `flutter analyze` under `apps/mobile`.
 - If you add tests later, place them next to the feature or under a dedicated `tests/` folder and name them `*.test.*`.
 
 ## Commit & Pull Request Guidelines
@@ -46,6 +60,8 @@ There is no real automated test suite yet. The current `pnpm test` script intent
 ## Configuration Notes
 
 - Use Node `25` from `.nvmrc`.
-- Treat `renderer/dist` as build output; edit source files under `renderer/src` instead.
+- Treat `apps/desktop-renderer/dist` as build output; edit source files under `apps/desktop-renderer/src` instead.
+- The cloud backend defaults to port `8787`.
+- The local workflow server defaults to port `3000`.
 
 请用中文回复。
