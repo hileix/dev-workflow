@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
+import { ChevronDown, PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
 import { BackButton } from "./components/back-button";
 import { useI18n } from "./components/i18n-provider";
 import { Button } from "./components/ui/button";
@@ -1136,13 +1136,16 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                             onChange={(e) => updateSelectedPhaseOutput(outputIdx, "key", e.target.value)}
                             placeholder={t("editor.outputKeyPlaceholder")}
                           />
-                          <select
-                            value={output.kind || "document"}
-                            onChange={(e) => updateSelectedPhaseOutput(outputIdx, "kind", e.target.value)}
-                            className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
-                          >
-                            <option value="document">{t("editor.outputKindDocument")}</option>
-                          </select>
+                          <div className="relative">
+                            <select
+                              value={output.kind || "document"}
+                              onChange={(e) => updateSelectedPhaseOutput(outputIdx, "kind", e.target.value)}
+                              className="h-9 w-full appearance-none rounded-md border border-input bg-secondary px-3 pr-9 text-sm text-foreground outline-none focus:border-ring"
+                            >
+                              <option value="document">{t("editor.outputKindDocument")}</option>
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                          </div>
                           <Input
                             value={output.filename || ""}
                             onChange={(e) => updateSelectedPhaseOutput(outputIdx, "filename", e.target.value)}
