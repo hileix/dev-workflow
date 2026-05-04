@@ -39,6 +39,10 @@ async function messagesDir(taskId) {
   return join(await taskDir(taskId), "messages");
 }
 
+async function interactionsDir(taskId) {
+  return join(await taskDir(taskId), "interactions");
+}
+
 export async function appendToPhaseFile(taskId, phase, text) {
   if (!taskId || !phase) return;
   const dir = await messagesDir(taskId);
@@ -46,11 +50,38 @@ export async function appendToPhaseFile(taskId, phase, text) {
   await appendFile(join(dir, `${phase}.md`), text);
 }
 
+export async function appendPhaseInteraction(taskId, phase, interaction) {
+  if (!taskId || !phase || !interaction) return null;
+  const dir = await interactionsDir(taskId);
+  await mkdir(dir, { recursive: true });
+  const entry = {
+    id: interaction.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    at: interaction.at || new Date().toISOString(),
+    phase,
+    ...interaction,
+  };
+  await appendFile(join(dir, `${phase}.jsonl`), `${JSON.stringify(entry)}\n`);
+  return entry;
+}
+
 export async function readPhaseMessages(taskId, phase) {
   try {
     return await readFile(join(await messagesDir(taskId), `${phase}.md`), "utf-8");
   } catch {
     return "";
+  }
+}
+
+export async function readPhaseInteractions(taskId, phase) {
+  try {
+    const raw = await readFile(join(await interactionsDir(taskId), `${phase}.jsonl`), "utf-8");
+    return raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
   }
 }
 

@@ -5,7 +5,7 @@ import { spawn } from "child_process";
 import multer from "multer";
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
-import { readState, getTaskRunId } from "../../../packages/core-models/state.mjs";
+import { readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
 import { getPhaseContent, readArtifact } from "../../../packages/core-lib/claude.mjs";
 
 const upload = multer({ storage: multer.diskStorage({
@@ -78,15 +78,18 @@ router.get("/tasks/:taskId/state", async (req, res) => {
     const state = await readState(taskId);
     const messages = {};
     const artifacts = {};
+    const interactions = {};
     for (const p of state.phases) {
       const content = await getPhaseContent(taskId, p.id);
       if (content) messages[p.id] = content;
+      const phaseInteractions = await readPhaseInteractions(taskId, p.id);
+      if (phaseInteractions.length > 0) interactions[p.id] = phaseInteractions;
       if (p.status !== "pending") {
         const artifact = await readArtifact(taskId, p.id);
         if (artifact) artifacts[p.id] = artifact;
       }
     }
-    res.json({ state, messages, artifacts });
+    res.json({ state, messages, artifacts, interactions });
   } catch {
     res.status(404).json({ error: "task not found" });
   }

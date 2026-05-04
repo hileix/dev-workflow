@@ -167,6 +167,7 @@ function buildTaskSnapshot(taskId, data, fallbackWorkFolder = "", runId = "") {
     state,
     messages: data?.messages || {},
     artifacts: data?.artifacts || {},
+    interactions: data?.interactions || {},
     updatedAt: state?.updated || new Date().toISOString(),
   };
 }

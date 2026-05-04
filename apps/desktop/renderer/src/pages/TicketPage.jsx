@@ -63,6 +63,7 @@ export default function TicketPage() {
   const setSelectedGroup = useWorkflowStore((s) => s.setSelectedGroup);
   const phaseMessages = useWorkflowStore((s) => s.phaseMessages);
   const phaseArtifacts = useWorkflowStore((s) => s.phaseArtifacts);
+  const phaseInteractions = useWorkflowStore((s) => s.phaseInteractions);
   const isStreaming = useWorkflowStore((s) => s.isStreaming);
   const streamingPhase = useWorkflowStore((s) => s.streamingPhase);
   const debugEvents = useWorkflowStore((s) => s.debugEvents);
@@ -99,6 +100,12 @@ export default function TicketPage() {
         .filter(Boolean)
         .join("\n\n---\n\n")
     : "";
+
+  const groupInteractions = selectedGroupObj
+    ? selectedGroupObj.phases.flatMap((pid) =>
+        (phaseInteractions[pid] || []).map((interaction) => ({ ...interaction, phase: pid }))
+      )
+    : [];
 
   async function handleDelete() {
     setShowDeleteConfirm(false);
@@ -192,6 +199,8 @@ export default function TicketPage() {
             phase={activePhase}
             content={allGroupContent}
             artifact={groupArtifact}
+            interactions={groupInteractions}
+            activeBackend={workflowConfig?.phaseBackends?.[activePhase]}
             isStreaming={isPhaseStreaming}
             isRunning={isPhaseRunning}
             isAwaiting={isPhaseAwaiting}

@@ -8,6 +8,7 @@ import {
   makeInitialState,
   updatePhaseStatus,
   appendToPhaseFile,
+  appendPhaseInteraction,
   clearTaskData,
 } from "../../../packages/core-models/state.mjs";
 import { upsertTask } from "../../../packages/core-models/workfolders.mjs";
@@ -228,6 +229,13 @@ export async function sendWorkflowMessage(taskId, text, images, sender) {
 
   const userBlock = `\n\n---\n\n**You:** ${text}\n\n`;
   await appendToPhaseFile(taskId, phase, userBlock);
+  const interaction = await appendPhaseInteraction(taskId, phase, {
+    role: "user",
+    type: "user_message",
+    text,
+    imageCount: images?.length || 0,
+  });
+  if (interaction) sender({ type: "phase_interaction", phase, interaction });
   sender({ type: "user_message", phase, text });
 
   updatePhaseStatus(state, phase, "in_progress");

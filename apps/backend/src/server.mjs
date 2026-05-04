@@ -54,6 +54,7 @@ function publicTask(task, fallback = {}) {
     state: task.state || null,
     messages: task.messages || {},
     artifacts: task.artifacts || {},
+    interactions: task.interactions || {},
     updatedAt: task.updatedAt || task.state?.updated || now(),
   };
 }

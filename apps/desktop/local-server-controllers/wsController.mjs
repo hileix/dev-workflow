@@ -2,7 +2,7 @@ import { WebSocketServer } from "ws";
 import { mkdir } from "fs/promises";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
 import { getPhaseOrder, getRejectTargets, isAutoPhase, nextPhase } from "../../../packages/core-models/workflow.mjs";
-import { createTaskRunDir, readState, writeState, makeInitialState, updatePhaseStatus, appendToPhaseFile, clearTaskData } from "../../../packages/core-models/state.mjs";
+import { createTaskRunDir, readState, writeState, makeInitialState, updatePhaseStatus, appendToPhaseFile, appendPhaseInteraction, clearTaskData } from "../../../packages/core-models/state.mjs";
 import { upsertTask } from "../../../packages/core-models/workfolders.mjs";
 import { activeWorkflows, wsSend, runPhase, readArtifact, getPhaseContent, continuePhaseConversation } from "../../../packages/core-lib/claude.mjs";
 
@@ -152,6 +152,13 @@ export function setupWebSocket(server) {
 
           const userBlock = `\n\n---\n\n**You:** ${text}\n\n`;
           await appendToPhaseFile(taskId, phase, userBlock);
+          const interaction = await appendPhaseInteraction(taskId, phase, {
+            role: "user",
+            type: "user_message",
+            text,
+            imageCount: images?.length || 0,
+          });
+          if (interaction) wsSend(ws, { type: "phase_interaction", phase, interaction });
           wsSend(ws, { type: "user_message", phase, text });
 
           updatePhaseStatus(state, phase, "in_progress");

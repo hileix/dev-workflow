@@ -65,6 +65,16 @@ function appendDebugEvent(set, payload, source = "workflow") {
   });
 }
 
+function appendPhaseInteraction(set, phase, interaction) {
+  if (!phase || !interaction) return;
+  set((state) => ({
+    phaseInteractions: {
+      ...state.phaseInteractions,
+      [phase]: [...(state.phaseInteractions[phase] || []), interaction],
+    },
+  }));
+}
+
 function applyDisconnectedState(set, get) {
   const state = get().workflowState;
   if (state) {
@@ -134,6 +144,8 @@ function attachWorkflowEvents(set, get, taskId) {
       set({ isStreaming: false, streamingPhase: null });
     } else if (msg.type === "phase_content") {
       set((state) => ({ phaseMessages: { ...state.phaseMessages, [msg.phase]: msg.content } }));
+    } else if (msg.type === "phase_interaction") {
+      appendPhaseInteraction(set, msg.phase, msg.interaction);
     } else if (msg.type === "user_message") {
       set((state) => ({
         phaseMessages: {
@@ -179,6 +191,7 @@ export const useWorkflowStore = create((set, get) => ({
   selectedGroup: null,
   phaseMessages: {},
   phaseArtifacts: {},
+  phaseInteractions: {},
   isStreaming: false,
   streamingPhase: null,
   connectionState: "disconnected",
@@ -198,7 +211,7 @@ export const useWorkflowStore = create((set, get) => ({
 
   async loadTicket(taskId) {
     try {
-      const { state, messages, artifacts } = await desktopApi.getTaskState(taskId);
+      const { state, messages, artifacts, interactions } = await desktopApi.getTaskState(taskId);
       const groups = useConfigStore.getState().workflowConfig?.groups || [];
       let group = null;
       if (state.currentPhase) group = findGroupForPhase(state.currentPhase, groups);
@@ -207,6 +220,7 @@ export const useWorkflowStore = create((set, get) => ({
         workflowState: state,
         phaseMessages: messages || {},
         phaseArtifacts: artifacts || {},
+        phaseInteractions: interactions || {},
         selectedGroup: group,
         isStreaming: false,
         streamingPhase: null,
@@ -246,6 +260,7 @@ export const useWorkflowStore = create((set, get) => ({
       selectedGroup: null,
       phaseMessages: {},
       phaseArtifacts: {},
+      phaseInteractions: {},
       workflowState: {
         taskId: id,
         currentPhase: null,
@@ -312,6 +327,7 @@ export const useWorkflowStore = create((set, get) => ({
         workflowState: null,
         phaseMessages: {},
         phaseArtifacts: {},
+        phaseInteractions: {},
         isStreaming: false,
         streamingPhase: null,
         connectionState: "disconnected",

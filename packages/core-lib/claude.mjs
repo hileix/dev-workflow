@@ -4,7 +4,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Codex } from "@openai/codex-sdk";
 import { getBaseDir } from "../core-models/config.mjs";
 import { getPhaseSkills, getPhaseArtifactFiles, getPhaseBackend, getWorkflow, interpolate, isAutoPhase, nextPhase } from "../core-models/workflow.mjs";
-import { readState, writeState, updatePhaseStatus, appendToPhaseFile, readPhaseMessages, taskDir } from "../core-models/state.mjs";
+import { readState, writeState, updatePhaseStatus, appendToPhaseFile, appendPhaseInteraction, readPhaseMessages, taskDir } from "../core-models/state.mjs";
 import { upsertTask } from "../core-models/workfolders.mjs";
 import { removeWorktree } from "./worktree.mjs";
 
@@ -296,6 +296,12 @@ async function publishCheckpointArtifacts(taskId, phaseId, state) {
   }
 }
 
+async function recordPhaseInteraction(taskId, phase, send, interaction) {
+  const entry = await appendPhaseInteraction(taskId, phase, interaction);
+  if (entry) sendWorkflowEvent(send, { type: "phase_interaction", phase, interaction: entry });
+  return entry;
+}
+
 export async function readArtifact(taskId, phase) {
   const PHASE_ARTIFACT_FILES = getPhaseArtifactFiles();
   const fn = PHASE_ARTIFACT_FILES[phase];
@@ -332,7 +338,6 @@ async function runPromptForPhase({ taskId, phase, prompt, sessionId = null, imag
     resumed: Boolean(sessionId),
     imageCount: imagePaths.length,
   });
-
   try {
     await streamAgentTurn({
       backend,
@@ -343,10 +348,22 @@ async function runPromptForPhase({ taskId, phase, prompt, sessionId = null, imag
       abortController,
       onText: async (text) => {
         sendWorkflowEvent(wf.send, { type: "text_delta", phase, text });
+        await recordPhaseInteraction(taskId, phase, wf.send, {
+          role: "assistant",
+          type: "assistant_delta",
+          text,
+          backend,
+        });
         await appendToPhaseFile(taskId, phase, text);
       },
       onTool: async (log) => {
         sendWorkflowEvent(wf.send, { type: "tool_use", phase, name: backend, log });
+        await recordPhaseInteraction(taskId, phase, wf.send, {
+          role: "tool",
+          type: "tool_use",
+          text: log,
+          backend,
+        });
         await appendToolLog(taskId, phase, log);
       },
       onSession: (nextSessionId) => {

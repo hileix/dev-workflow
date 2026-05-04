@@ -20,7 +20,7 @@ import {
   unloadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
-import { readState, getTaskRunId } from "../../../packages/core-models/state.mjs";
+import { readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
 import { getPhaseContent, readArtifact } from "../../../packages/core-lib/claude.mjs";
 
@@ -67,12 +67,15 @@ export async function getWorkflowConfig() {
   const seenGroups = new Set();
   const phaseLabels = {};
   const phaseTypes = {};
+  const phaseBackends = {};
   const rejectTargets = {};
 
   for (const phase of workflow.phases) {
     phaseLabels[phase.id] = phase.label;
     phaseTypes[phase.id] = phase.type;
-    if (phase.checkpoint?.rejectTargets) rejectTargets[phase.id] = phase.checkpoint.rejectTargets;
+    phaseBackends[phase.id] = phase.aiBackend || "claude";
+    const targets = phase.checkpoint?.rejectTargets || phase.rejectTargets;
+    if (targets) rejectTargets[phase.id] = targets;
     if (!seenGroups.has(phase.group)) {
       seenGroups.add(phase.group);
       groups.push({ key: phase.group, label: phase.groupLabel || phase.label, phases: [] });
@@ -87,6 +90,7 @@ export async function getWorkflowConfig() {
     groups,
     phaseLabels,
     phaseTypes,
+    phaseBackends,
     rejectTargets,
     contextFields: deriveContextFields(workflow),
     worktree: workflow.worktree || { enabled: false, files: [] },
@@ -317,15 +321,18 @@ export async function getTaskState(taskId) {
   const state = await readState(taskId);
   const messages = {};
   const artifacts = {};
+  const interactions = {};
   for (const phase of state.phases) {
     const content = await getPhaseContent(taskId, phase.id);
     if (content) messages[phase.id] = content;
+    const phaseInteractions = await readPhaseInteractions(taskId, phase.id);
+    if (phaseInteractions.length > 0) interactions[phase.id] = phaseInteractions;
     if (phase.status !== "pending") {
       const artifact = await readArtifact(taskId, phase.id);
       if (artifact) artifacts[phase.id] = artifact;
     }
   }
-  return { state, messages, artifacts };
+  return { state, messages, artifacts, interactions };
 }
 
 export async function removeTask(taskId) {

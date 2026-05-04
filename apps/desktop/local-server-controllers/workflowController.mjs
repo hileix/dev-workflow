@@ -142,12 +142,15 @@ router.get("/workflow", async (req, res) => {
   const seenGroups = new Set();
   const phaseLabels = {};
   const phaseTypes = {};
+  const phaseBackends = {};
   const rejectTargets = {};
 
   for (const p of WORKFLOW.phases) {
     phaseLabels[p.id] = p.label;
     phaseTypes[p.id] = p.type;
-    if (p.checkpoint?.rejectTargets) rejectTargets[p.id] = p.checkpoint.rejectTargets;
+    phaseBackends[p.id] = p.aiBackend || "claude";
+    const targets = p.checkpoint?.rejectTargets || p.rejectTargets;
+    if (targets) rejectTargets[p.id] = targets;
     if (!seenGroups.has(p.group)) {
       seenGroups.add(p.group);
       groups.push({ key: p.group, label: p.groupLabel || p.label, phases: [] });
@@ -162,6 +165,7 @@ router.get("/workflow", async (req, res) => {
     groups,
     phaseLabels,
     phaseTypes,
+    phaseBackends,
     rejectTargets,
     contextFields: deriveContextFields(WORKFLOW),
     worktree: WORKFLOW.worktree || { enabled: false, files: [] },
@@ -182,12 +186,15 @@ router.put("/settings/mobile-access", async (req, res) => {
     const seenGroups = new Set();
     const phaseLabels = {};
     const phaseTypes = {};
+    const phaseBackends = {};
     const rejectTargets = {};
 
     for (const p of WORKFLOW.phases) {
       phaseLabels[p.id] = p.label;
       phaseTypes[p.id] = p.type;
-      if (p.checkpoint?.rejectTargets) rejectTargets[p.id] = p.checkpoint.rejectTargets;
+      phaseBackends[p.id] = p.aiBackend || "claude";
+      const targets = p.checkpoint?.rejectTargets || p.rejectTargets;
+      if (targets) rejectTargets[p.id] = targets;
       if (!seenGroups.has(p.group)) {
         seenGroups.add(p.group);
         groups.push({ key: p.group, label: p.groupLabel || p.label, phases: [] });
@@ -202,6 +209,7 @@ router.put("/settings/mobile-access", async (req, res) => {
       groups,
       phaseLabels,
       phaseTypes,
+      phaseBackends,
       rejectTargets,
       contextFields: deriveContextFields(WORKFLOW),
       worktree: WORKFLOW.worktree || { enabled: false, files: [] },
