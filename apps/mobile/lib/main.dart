@@ -528,6 +528,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
   Future<void> _startWorkflow({
     required String deviceId,
     required String taskId,
+    required String runId,
     required String workFolder,
     required String workflowFilename,
     required Map<String, String> contextValues,
@@ -539,6 +540,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
         data: {
           "type": "start_workflow",
           "payload": {
+            "runId": runId,
             "workFolder": workFolder,
             "workflowFilename": workflowFilename,
             "contextValues": contextValues,
@@ -604,6 +606,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
       await _startWorkflow(
         deviceId: onlineDevices.first["deviceId"]?.toString() ?? "",
         taskId: result.taskId,
+        runId: result.runId,
         workFolder: result.workFolder,
         workflowFilename: result.workflowFilename,
         contextValues: result.contextValues,
@@ -1161,6 +1164,7 @@ class _SelectedImageStrip extends StatelessWidget {
 class _StartWorkflowResult {
   const _StartWorkflowResult({
     required this.taskId,
+    required this.runId,
     required this.workFolder,
     required this.workflowFilename,
     required this.contextValues,
@@ -1168,6 +1172,7 @@ class _StartWorkflowResult {
   });
 
   final String taskId;
+  final String runId;
   final String workFolder;
   final String workflowFilename;
   final Map<String, String> contextValues;
@@ -1361,10 +1366,12 @@ class _StartWorkflowSheetState extends State<_StartWorkflowSheet> {
             (contextValues[firstKey]?.trim().isNotEmpty ?? false)
         ? contextValues[firstKey]!.trim()
         : "task-${DateTime.now().millisecondsSinceEpoch}";
+    final runId = "run-${DateTime.now().millisecondsSinceEpoch}";
 
     Navigator.of(context).pop(
       _StartWorkflowResult(
         taskId: taskId,
+        runId: runId,
         workFolder: _selectedFolder,
         workflowFilename: _selectedWorkflow,
         contextValues: contextValues,

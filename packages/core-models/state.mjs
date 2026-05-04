@@ -1,11 +1,34 @@
 import { join } from "path";
 import { readFile, writeFile, mkdir, appendFile, rm } from "fs/promises";
-import { getBaseDir } from "./config.mjs";
+import { getBaseDir, getWorkfoldersFile } from "./config.mjs";
 import { getWorkflow, getPhaseOrder, interpolate } from "./workflow.mjs";
+
+async function resolveTaskRunId(taskId) {
+  if (!taskId) return "";
+  const baseDir = await getBaseDir();
+  const file = getWorkfoldersFile(baseDir);
+  try {
+    const folders = JSON.parse(await readFile(file, "utf-8"));
+    for (const folder of folders || []) {
+      for (const task of folder.tasks || []) {
+        if (task.taskId === taskId && task.runId) {
+          return task.runId;
+        }
+      }
+    }
+  } catch {}
+  return "";
+}
+
+export async function getTaskRunId(taskId) {
+  return resolveTaskRunId(taskId);
+}
 
 export async function taskDir(taskId) {
   const baseDir = await getBaseDir();
-  return join(baseDir, taskId);
+  const runId = await resolveTaskRunId(taskId);
+  if (!runId) throw new Error("task not found");
+  return join(baseDir, runId);
 }
 
 async function stateFilePath(taskId) {
@@ -35,16 +58,18 @@ export function makeInitialState(taskId, workFolder, baseDir, contextValues, opt
   const WORKFLOW = getWorkflow();
   const PHASE_ORDER = getPhaseOrder();
   const now = new Date().toISOString();
+  const runId = options.runId || taskId;
   const artifacts = {};
-  const vars = { taskId, ...contextValues };
+  const vars = { taskId, runId, ...contextValues };
   for (const p of WORKFLOW.phases) {
     const primaryOutput = Array.isArray(p.outputs) ? p.outputs[0] : null;
     if (primaryOutput?.filename) {
-      artifacts[p.group] = join(baseDir, taskId, interpolate(primaryOutput.filename, vars));
+      artifacts[p.group] = join(baseDir, runId, interpolate(primaryOutput.filename, vars));
     }
   }
   return {
     taskId,
+    runId,
     workFolder,
     originalWorkFolder: options.originalWorkFolder || workFolder,
     worktree: options.worktree || null,
@@ -58,18 +83,33 @@ export function makeInitialState(taskId, workFolder, baseDir, contextValues, opt
   };
 }
 
+export async function createTaskRunDir(taskId, runId) {
+  const baseDir = await getBaseDir();
+  await mkdir(join(baseDir, runId), { recursive: true });
+  return join(baseDir, runId);
+}
+
 export async function readState(taskId) {
-  return JSON.parse(await readFile(await stateFilePath(taskId), "utf-8"));
+  const baseDir = await getBaseDir();
+  const runId = await resolveTaskRunId(taskId);
+  if (!runId) throw new Error("task not found");
+  return JSON.parse(await readFile(join(baseDir, runId, "workflow-state.json"), "utf-8"));
 }
 
 export async function writeState(taskId, state) {
+  const baseDir = await getBaseDir();
+  const runId = state?.runId || await resolveTaskRunId(taskId);
+  if (!runId) throw new Error("task not found");
   state.updated = new Date().toISOString();
-  await writeFile(await stateFilePath(taskId), JSON.stringify(state, null, 2));
+  await mkdir(join(baseDir, runId), { recursive: true });
+  await writeFile(join(baseDir, runId, "workflow-state.json"), JSON.stringify(state, null, 2));
 }
 
 export async function clearTaskData(taskId) {
-  const dir = await messagesDir(taskId);
-  await rm(dir, { recursive: true, force: true });
+  const baseDir = await getBaseDir();
+  const runId = await resolveTaskRunId(taskId);
+  if (!runId) return;
+  await rm(join(baseDir, runId), { recursive: true, force: true });
 }
 
 export function updatePhaseStatus(state, phaseId, status, sessionId) {

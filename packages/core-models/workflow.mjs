@@ -1,6 +1,6 @@
 import { join } from "path";
 import { readFileSync } from "fs";
-import { readConfigSync, WORKFLOW_DIR } from "./config.mjs";
+import { readConfigSync, WORKFLOW_DIR, getWorkfoldersFile } from "./config.mjs";
 import { readManagedSkillContentSync } from "./skills.mjs";
 
 let WORKFLOW = null;
@@ -50,6 +50,21 @@ function getContextValue(contextValues, key) {
   return contextValues && Object.prototype.hasOwnProperty.call(contextValues, key) ? contextValues[key] : "";
 }
 
+function resolveTaskRunIdSync(baseDir, taskId) {
+  if (!baseDir || !taskId) return "";
+  try {
+    const folders = JSON.parse(readFileSync(getWorkfoldersFile(baseDir), "utf-8"));
+    for (const folder of folders || []) {
+      for (const task of folder.tasks || []) {
+        if (task.taskId === taskId && task.runId) {
+          return task.runId;
+        }
+      }
+    }
+  } catch {}
+  return "";
+}
+
 export function deriveContextFields(workflow = WORKFLOW) {
   const contextFields = [];
   const seen = new Set();
@@ -68,7 +83,7 @@ export function deriveContextFields(workflow = WORKFLOW) {
   return contextFields;
 }
 
-function resolveInputValue(raw, phase, input, tid, baseDir, contextValues) {
+function resolveInputValue(raw, phase, input, tid, baseDir, contextValues, runId = "") {
   if (!input?.name) return "";
   if (input.sourceType === "workflow_context") {
     return getContextValue(contextValues, input.name);
@@ -78,7 +93,8 @@ function resolveInputValue(raw, phase, input, tid, baseDir, contextValues) {
     const sourcePhase = raw.phases.find((item) => item.id === input.phaseId);
     const locator = getPhaseOutputLocator(sourcePhase, input.outputKey);
     if (!locator) return "";
-    const artifactPath = join(baseDir, tid, locator(tid, contextValues));
+    const taskRunId = runId || resolveTaskRunIdSync(baseDir, tid);
+    const artifactPath = join(baseDir, taskRunId || tid, locator(tid, { ...contextValues, runId: taskRunId }));
     try {
       return readFileSync(artifactPath, "utf-8");
     } catch {
@@ -109,10 +125,11 @@ export function loadWorkflow(path) {
     };
     if (p.prompt || p.skill || p.skillRefs?.length) {
       PHASE_SKILLS[p.id] = (taskId, baseDir, contextValues) => {
-        const vars = { taskId, baseDir, taskDir: join(baseDir, taskId) };
+        const runId = resolveTaskRunIdSync(baseDir, taskId);
+        const vars = { taskId, baseDir, taskDir: join(baseDir, runId || taskId), runId };
         for (const input of p.inputs || []) {
           if (!input?.name) continue;
-          vars[input.name] = resolveInputValue(raw, p, input, taskId, baseDir, contextValues);
+          vars[input.name] = resolveInputValue(raw, p, input, taskId, baseDir, contextValues, vars.runId);
         }
         const parts = [];
         for (const ref of p.skillRefs || []) {

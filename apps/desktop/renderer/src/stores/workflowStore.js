@@ -166,17 +166,17 @@ export const useWorkflowStore = create((set, get) => ({
     } catch {}
   },
 
-  async connectWorkflow(taskId, workFolder, contextValues, images) {
+  async connectWorkflow(taskId, workFolder, contextValues, images, runId) {
     const detach = attachWorkflowEvents(set, get, taskId);
     try {
-      await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images });
+      await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images, runId });
     } catch {
       detach();
       applyDisconnectedState(set, get);
     }
   },
 
-  startWorkflow(id, folder, contextValues, images) {
+  startWorkflow(id, folder, contextValues, images, runId) {
     const selectedFolder = folder || useConfigStore.getState().selectedFolder;
     if (!id || !selectedFolder) return;
 
@@ -201,7 +201,7 @@ export const useWorkflowStore = create((set, get) => ({
     });
     prevStatusRef = {};
 
-    get().connectWorkflow(id, selectedFolder, contextValues, images);
+    get().connectWorkflow(id, selectedFolder, contextValues, images, runId);
   },
 
   async approve() {

@@ -106,8 +106,8 @@ async function loadTaskState(taskId) {
   return fetchJson(`${localApiBase}/tasks/${taskId}/state`);
 }
 
-async function saveTaskUploads(taskId, images) {
-  if (!taskId || !Array.isArray(images) || images.length === 0) return [];
+async function saveTaskUploads(runId, images) {
+  if (!runId || !Array.isArray(images) || images.length === 0) return [];
   const form = new FormData();
   let count = 0;
   for (const image of images) {
@@ -122,7 +122,7 @@ async function saveTaskUploads(taskId, images) {
     count += 1;
   }
   if (count === 0) return [];
-  const response = await fetch(`${localApiBase}/tasks/${taskId}/upload`, {
+  const response = await fetch(`${localApiBase}/tasks/${runId}/upload`, {
     method: "POST",
     body: form,
   });
@@ -133,7 +133,7 @@ async function saveTaskUploads(taskId, images) {
   return Array.isArray(data.paths) ? data.paths : [];
 }
 
-async function normalizeImagePayload(taskId, images) {
+async function normalizeImagePayload(runId, images) {
   if (!Array.isArray(images) || images.length === 0) return [];
   const paths = [];
   const uploads = [];
@@ -147,10 +147,10 @@ async function normalizeImagePayload(taskId, images) {
     }
   }
   if (uploads.length === 0) return paths;
-  return [...paths, ...(await saveTaskUploads(taskId, uploads))];
+  return [...paths, ...(await saveTaskUploads(runId, uploads))];
 }
 
-function buildTaskSnapshot(taskId, data, fallbackWorkFolder = "") {
+function buildTaskSnapshot(taskId, data, fallbackWorkFolder = "", runId = "") {
   const state = data?.state || null;
   const workFolder =
     state?.originalWorkFolder ||
@@ -162,6 +162,7 @@ function buildTaskSnapshot(taskId, data, fallbackWorkFolder = "") {
     key: `${deviceId}:${taskId}`,
     deviceId,
     taskId,
+    runId: state?.runId || runId || "",
     workFolder,
     state,
     messages: data?.messages || {},
@@ -170,9 +171,9 @@ function buildTaskSnapshot(taskId, data, fallbackWorkFolder = "") {
   };
 }
 
-async function getTaskSnapshot(taskId, fallbackWorkFolder = "") {
+async function getTaskSnapshot(taskId, fallbackWorkFolder = "", runId = "") {
   const data = await loadTaskState(taskId);
-  return buildTaskSnapshot(taskId, data, fallbackWorkFolder);
+  return buildTaskSnapshot(taskId, data, fallbackWorkFolder, runId);
 }
 
 async function listTaskSnapshots() {
@@ -182,8 +183,8 @@ async function listTaskSnapshots() {
   for (const folder of folders) {
     for (const task of folder.tasks || []) {
       try {
-        const snapshot = await getTaskSnapshot(task.taskId, folder.path);
-        knownTasks.set(task.taskId, { workFolder: snapshot.workFolder });
+        const snapshot = await getTaskSnapshot(task.taskId, folder.path, task.runId || "");
+        knownTasks.set(task.taskId, { workFolder: snapshot.workFolder, runId: snapshot.runId });
         tasks.push(snapshot);
       } catch (error) {
         log(`failed to load task ${task.taskId}: ${error.message}`);
@@ -198,7 +199,7 @@ async function pushTaskSnapshot(taskId) {
   if (!backendSocket || backendSocket.readyState !== WebSocket.OPEN) return;
   try {
     const task = await getTaskSnapshot(taskId);
-    knownTasks.set(taskId, { workFolder: task.workFolder });
+    knownTasks.set(taskId, { workFolder: task.workFolder, runId: task.runId });
     sendJson(backendSocket, {
       type: "task.snapshot",
       taskId,
@@ -214,7 +215,7 @@ async function bootstrapTasks() {
   const folders = await listWorkFolders().catch(() => []);
   for (const folder of folders) {
     for (const task of folder.tasks || []) {
-      knownTasks.set(task.taskId, { workFolder: folder.path });
+      knownTasks.set(task.taskId, { workFolder: folder.path, runId: task.runId || "" });
       await pushTaskSnapshot(task.taskId);
     }
   }
@@ -235,6 +236,7 @@ function attachLocalTask(taskId, workFolder, options = {}) {
       workFolder,
       contextValues: options.contextValues || {},
       images: options.images || [],
+      runId: options.runId || "",
     });
   });
 
@@ -307,13 +309,15 @@ async function handleCommand(message) {
     }
     try {
       const workflowFilename = String(payload?.workflowFilename || "").trim();
-      const imagePaths = await normalizeImagePayload(taskId, payload?.images || []);
+      const runId = String(payload?.runId || knownTasks.get(taskId)?.runId || "").trim() || `run-${Date.now()}`;
+      const imagePaths = await normalizeImagePayload(runId, payload?.images || []);
       if (workflowFilename) {
         await activateWorkflow(workflowFilename);
       }
       const socket = attachLocalTask(taskId, workFolder, {
         contextValues: payload?.contextValues || {},
         images: imagePaths,
+        runId,
       });
       if (socket.readyState === WebSocket.OPEN) {
         sendResult("ok");

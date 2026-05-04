@@ -2,7 +2,7 @@ import { mkdir } from "fs/promises";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
 import { getPhaseOrder, getRejectTargets, isAutoPhase, nextPhase } from "../../../packages/core-models/workflow.mjs";
 import {
-  taskDir,
+  createTaskRunDir,
   readState,
   writeState,
   makeInitialState,
@@ -23,6 +23,7 @@ import { getWorkflow, interpolate } from "../../../packages/core-models/workflow
 import { prepareWorktree, removeWorktree } from "../../../packages/core-lib/worktree.mjs";
 import { readFile, writeFile } from "fs/promises";
 import { join } from "path";
+import { nanoid } from "nanoid";
 
 function createEmitter(sender) {
   return (event) => sender(event);
@@ -55,7 +56,7 @@ async function applyCheckpointPublishRules(taskId, phaseId, state) {
       if (!sourceOutput?.filename) continue;
       try {
         content = await readFile(
-          join(await taskDir(taskId), interpolate(sourceOutput.filename, { taskId, ...contextValues })),
+          join(await createTaskRunDir(taskId, state.runId), interpolate(sourceOutput.filename, { taskId, runId: state.runId, ...contextValues })),
           "utf-8"
         );
       } catch {
@@ -65,13 +66,13 @@ async function applyCheckpointPublishRules(taskId, phaseId, state) {
 
     if (!content) continue;
     await writeFile(
-      join(await taskDir(taskId), interpolate(targetOutput.filename, { taskId, ...contextValues })),
+      join(await createTaskRunDir(taskId, state.runId), interpolate(targetOutput.filename, { taskId, runId: state.runId, ...contextValues })),
       content
     );
   }
 }
 
-export async function startWorkflowSession(taskId, workFolder, contextValues, images, sender) {
+export async function startWorkflowSession(taskId, workFolder, contextValues, images, runId, sender) {
   if (!taskId || !workFolder) throw new Error("taskId and workFolder required");
 
   let existingState = null;
@@ -89,6 +90,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
       send: createEmitter(sender),
       abortController: null,
       phaseSessionIds,
+      runId: existingState.runId || "",
     });
     sender({ type: "state", state: existingState });
 
@@ -112,9 +114,9 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   }
 
   if (existingState) await clearTaskData(taskId);
+  const finalRunId = runId || nanoid();
   const phaseOrder = getPhaseOrder();
-  const dir = await taskDir(taskId);
-  await mkdir(dir, { recursive: true });
+  const dir = await createTaskRunDir(taskId, finalRunId);
 
   const workflow = getWorkflow();
   const preparedWorktree = await prepareWorktree({
@@ -126,6 +128,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   const baseDir = await getBaseDir();
   const state = makeInitialState(taskId, runtimeWorkFolder, baseDir, contextValues, {
     originalWorkFolder: workFolder,
+    runId: finalRunId,
     worktree: preparedWorktree.enabled
       ? {
           enabled: true,
@@ -147,8 +150,9 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
     abortController: null,
     phaseSessionIds: {},
     startImages: images || [],
+    runId: finalRunId,
   });
-  await upsertTask(workFolder, taskId, "in_progress");
+  await upsertTask(workFolder, taskId, "in_progress", finalRunId);
   sender({ type: "state", state });
   runPhase(taskId, phaseOrder[0]);
 }
@@ -175,7 +179,7 @@ export async function approveWorkflow(taskId, sender) {
     state.overallStatus = "completed";
     state.currentPhase = "completed";
     await finalizeWorktreeIfNeeded(state);
-    upsertTask(state.originalWorkFolder || wf.workFolder, taskId, "completed").catch(() => {});
+    upsertTask(state.originalWorkFolder || wf.workFolder, taskId, "completed", state.runId || wf.runId || "").catch(() => {});
   }
   await writeState(taskId, state);
   sender({ type: "state", state });

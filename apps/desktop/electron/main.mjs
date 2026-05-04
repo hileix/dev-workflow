@@ -100,6 +100,7 @@ function registerIpcHandlers() {
       payload.workFolder,
       payload.contextValues,
       payload.images,
+      payload.runId,
       (message) => event.sender.send("workflow:event", message),
     )
   );

@@ -108,6 +108,7 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
 
   const firstKey = displayContextFields[0]?.key;
   const allFilled = displayContextFields.every((field) => (contextValues[field.key] || "").trim());
+  const runId = `run-${Date.now()}`;
 
   function addImageFiles(files) {
     const newImages = [];
@@ -157,11 +158,11 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
           name: img.file.name,
           data: Array.from(new Uint8Array(await img.file.arrayBuffer())),
         })));
-        const data = await desktopApi.saveTaskUploads(id, payload);
+        const data = await desktopApi.saveTaskUploads(runId, payload);
         uploadedPaths = data.paths || [];
       }
 
-      onStart(id, selectedFolder, contextValues, uploadedPaths.length > 0 ? uploadedPaths : undefined);
+      onStart(id, selectedFolder, contextValues, uploadedPaths.length > 0 ? uploadedPaths : undefined, runId);
     } finally {
       setSubmitting(false);
     }

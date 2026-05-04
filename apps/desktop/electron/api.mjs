@@ -19,7 +19,7 @@ import {
   loadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
-import { readState } from "../../../packages/core-models/state.mjs";
+import { readState, getTaskRunId } from "../../../packages/core-models/state.mjs";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
 import { getPhaseContent, readArtifact } from "../../../packages/core-lib/claude.mjs";
 
@@ -235,10 +235,13 @@ export async function listWorkFolders() {
     if (!folder.tasks) continue;
     for (const task of folder.tasks) {
       try {
-        const stateFile = join(baseDir, task.taskId, "workflow-state.json");
+        const runId = task.runId || await getTaskRunId(task.taskId);
+        if (!runId) throw new Error("task not found");
+        const stateFile = join(baseDir, runId, "workflow-state.json");
         const state = JSON.parse(await readFile(stateFile, "utf-8"));
         task.status = state.overallStatus || task.status;
         task.phases = state.phases || [];
+        task.runId = state.runId || runId;
       } catch {
         task.phases = [];
       }
@@ -294,7 +297,9 @@ export async function saveTaskUploads(taskId, filePaths) {
   if (!Array.isArray(filePaths)) return { paths: [] };
 
   const baseDir = await getBaseDir();
-  const uploadDir = join(baseDir, taskId, "uploads");
+  const runId = await getTaskRunId(taskId);
+  if (!runId) throw new Error("task not found");
+  const uploadDir = join(baseDir, runId, "uploads");
   await mkdir(uploadDir, { recursive: true });
 
   const savedPaths = [];

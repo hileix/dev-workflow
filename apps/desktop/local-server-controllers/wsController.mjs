@@ -2,7 +2,7 @@ import { WebSocketServer } from "ws";
 import { mkdir } from "fs/promises";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
 import { getPhaseOrder, getRejectTargets, isAutoPhase, nextPhase } from "../../../packages/core-models/workflow.mjs";
-import { taskDir, readState, writeState, makeInitialState, updatePhaseStatus, appendToPhaseFile, clearTaskData } from "../../../packages/core-models/state.mjs";
+import { createTaskRunDir, readState, writeState, makeInitialState, updatePhaseStatus, appendToPhaseFile, clearTaskData } from "../../../packages/core-models/state.mjs";
 import { upsertTask } from "../../../packages/core-models/workfolders.mjs";
 import { activeWorkflows, wsSend, runPhase, readArtifact, getPhaseContent, continuePhaseConversation } from "../../../packages/core-lib/claude.mjs";
 
@@ -15,7 +15,7 @@ export function setupWebSocket(server) {
       try { msg = JSON.parse(raw); } catch { return; }
 
       if (msg.type === "start") {
-        const { taskId, workFolder, contextValues, images } = msg;
+        const { taskId, workFolder, contextValues, images, runId } = msg;
         if (!taskId || !workFolder) return wsSend(ws, { type: "error", message: "taskId and workFolder required" });
 
         let existingState = null;
@@ -54,11 +54,11 @@ export function setupWebSocket(server) {
         } else {
           if (existingState) await clearTaskData(taskId);
           const PHASE_ORDER = getPhaseOrder();
-          const dir = await taskDir(taskId);
-          await mkdir(dir, { recursive: true });
+          const finalRunId = runId || `run-${Date.now()}`;
+          const dir = await createTaskRunDir(taskId, finalRunId);
 
           const baseDir = await getBaseDir();
-          const state = makeInitialState(taskId, workFolder, baseDir, contextValues);
+          const state = makeInitialState(taskId, workFolder, baseDir, contextValues, { runId: finalRunId });
           updatePhaseStatus(state, PHASE_ORDER[0], "in_progress");
           await writeState(taskId, state);
 
@@ -69,8 +69,9 @@ export function setupWebSocket(server) {
             abortController: null,
             phaseSessionIds: {},
             startImages: images || [],
+            runId: finalRunId,
           });
-          await upsertTask(workFolder, taskId, "in_progress");
+          await upsertTask(workFolder, taskId, "in_progress", finalRunId);
           wsSend(ws, { type: "state", state });
           runPhase(taskId, PHASE_ORDER[0]);
         }

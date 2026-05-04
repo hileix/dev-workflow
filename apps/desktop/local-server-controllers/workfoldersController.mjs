@@ -5,13 +5,15 @@ import { spawn } from "child_process";
 import multer from "multer";
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
-import { readState } from "../../../packages/core-models/state.mjs";
+import { readState, getTaskRunId } from "../../../packages/core-models/state.mjs";
 import { getPhaseContent, readArtifact } from "../../../packages/core-lib/claude.mjs";
 
 const upload = multer({ storage: multer.diskStorage({
   async destination(req, _file, cb) {
     const baseDir = await getBaseDir();
-    const dir = join(baseDir, req.params.taskId, "uploads");
+    const runId = String(req.params.runId || "").trim();
+    if (!runId) return cb(new Error("runId required"));
+    const dir = join(baseDir, runId, "uploads");
     await mkdir(dir, { recursive: true });
     cb(null, dir);
   },
@@ -29,10 +31,13 @@ router.get("/workfolders", async (req, res) => {
     if (!folder.tasks) continue;
     for (const task of folder.tasks) {
       try {
-        const stateFile = join(baseDir, task.taskId, "workflow-state.json");
+        const runId = task.runId || await getTaskRunId(task.taskId);
+        if (!runId) throw new Error("task not found");
+        const stateFile = join(baseDir, runId, "workflow-state.json");
         const state = JSON.parse(await readFile(stateFile, "utf-8"));
         task.status = state.overallStatus || task.status;
         task.phases = state.phases || [];
+        task.runId = state.runId || runId;
       } catch {
         task.phases = [];
       }
@@ -106,7 +111,7 @@ router.post("/pick-folder", (req, res) => {
   });
 });
 
-router.post("/tasks/:taskId/upload", upload.array("images", 10), (req, res) => {
+router.post("/tasks/:runId/upload", upload.array("images", 10), (req, res) => {
   const paths = (req.files || []).map((f) => f.path);
   res.json({ paths });
 });
