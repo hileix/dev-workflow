@@ -1,15 +1,17 @@
 import { useState, useEffect } from "react";
-import { ChevronDown, PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
+import { PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
 import { BackButton } from "./components/back-button";
 import { useI18n } from "./components/i18n-provider";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
+import { Select } from "./components/ui/select";
 import { Badge } from "./components/ui/badge";
 import WorkflowFlowchart from "./components/WorkflowFlowchart";
 import { WindowChrome } from "./components/window-chrome";
 import { cn } from "./lib/utils";
 import { getAppApi } from "./lib/api-client";
 import { useConfigStore } from "./stores/configStore";
+import { useWorkflowStore } from "./stores/workflowStore";
 
 const desktopApi = getAppApi();
 
@@ -40,8 +42,10 @@ const EMPTY_PUBLISH_RULE = {
   filename: "",
 };
 
+const CHECKPOINT_ACTIONS = ["approve", "reject"];
+
 const DEFAULT_CHECKPOINT = {
-  actions: ["approve", "request_revision"],
+  actions: [...CHECKPOINT_ACTIONS],
   rejectTargets: [],
   publish: [],
 };
@@ -94,12 +98,21 @@ function normalizeCustomWorktreeFiles(customFiles) {
 }
 
 function normalizeCheckpoint(checkpoint) {
+  const actions = Array.isArray(checkpoint?.actions)
+    ? checkpoint.actions
+        .map((action) => (action === "approve" ? "approve" : "reject"))
+        .filter((action, index, array) => CHECKPOINT_ACTIONS.includes(action) && array.indexOf(action) === index)
+    : [];
+
   return {
-    actions: Array.isArray(checkpoint?.actions) && checkpoint.actions.length > 0
-      ? checkpoint.actions
-      : [...DEFAULT_CHECKPOINT.actions],
+    actions: actions.length > 0 ? actions : [...DEFAULT_CHECKPOINT.actions],
     rejectTargets: Array.isArray(checkpoint?.rejectTargets) ? checkpoint.rejectTargets : [],
-    publish: Array.isArray(checkpoint?.publish) ? checkpoint.publish : [],
+    publish: Array.isArray(checkpoint?.publish)
+      ? checkpoint.publish.map((rule) => ({
+        ...rule,
+        action: CHECKPOINT_ACTIONS.includes(rule?.action) ? rule.action : "approve",
+      }))
+      : [],
   };
 }
 
@@ -151,9 +164,62 @@ function extractTemplateVariables(text) {
   return Array.from(String(text || "").matchAll(/\{\{(\w+)\}\}/g)).map((match) => match[1]);
 }
 
+function getPhaseSaveError(phase, t) {
+  const name = phase.label || phase.id || t("editor.unnamed");
+  if (!phase.id) return t("editor.phaseIdRequired", { name });
+  if (!phase.label) return t("editor.phaseLabelRequired", { name });
+  if (!phase.type) return t("editor.phaseTypeRequired", { name });
+  if (!phase.group) return t("editor.phaseGroupRequired", { name });
+
+  for (const input of phase.inputs || []) {
+    if (!input.name) return t("editor.phaseInputNameRequired", { name });
+    if (!input.sourceType) return t("editor.phaseInputSourceRequired", { name });
+    if (input.sourceType === "workflow_context" && !input.contextLabel) {
+      return t("editor.phaseInputContextLabelRequired", { name });
+    }
+    if (input.sourceType === "phase_output") {
+      if (!input.phaseId) return t("editor.phaseInputPhaseRequired", { name });
+      if (!input.outputKey) return t("editor.phaseInputOutputRequired", { name });
+    }
+  }
+
+  for (const output of phase.outputs || []) {
+    if (!output.key) return t("editor.phaseOutputKeyRequired", { name });
+    if (!output.filename) return t("editor.phaseOutputFilenameRequired", { name });
+  }
+
+  if (phase.type === "checkpoint") {
+    const checkpoint = normalizeCheckpoint(phase.checkpoint);
+    for (const rule of checkpoint.publish || []) {
+      if (!rule.action) return t("editor.phasePublishActionRequired", { name });
+      if (!rule.sourceName) return t("editor.phasePublishSourceRequired", { name });
+      if (!rule.asOutputKey) return t("editor.phasePublishOutputRequired", { name });
+      if (!rule.filename) return t("editor.phasePublishFilenameRequired", { name });
+    }
+  }
+
+  return null;
+}
+
+function splitSkillContent(skill) {
+  const content = String(skill?.content || "");
+  const match = content.match(/^---\n[\s\S]*?\n---\n?/);
+  return match ? content.slice(match[0].length).trim() : content.trim();
+}
+
+function composeSkillContent(skillRefs, skills) {
+  const skillMap = new Map((skills || []).map((skill) => [skill.id, skill.content || ""]));
+  return (skillRefs || [])
+    .map((ref) => skillMap.get(ref) || "")
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
 export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const { t } = useI18n();
   const [name, setName] = useState("");
+  const [currentFilename, setCurrentFilename] = useState(filename || null);
   const [phases, setPhases] = useState([]);
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [selectedWorktreeFiles, setSelectedWorktreeFiles] = useState([...COMMON_WORKTREE_FILES]);
@@ -167,12 +233,21 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const [confirmRemoveIdx, setConfirmRemoveIdx] = useState(null);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [showSkillGenerate, setShowSkillGenerate] = useState(false);
+  const [showSkillPicker, setShowSkillPicker] = useState(false);
+  const [skillPreviewId, setSkillPreviewId] = useState("");
   const [skillDescription, setSkillDescription] = useState("");
   const [generatingSkill, setGeneratingSkill] = useState(false);
   const [flowchartCollapsed, setFlowchartCollapsed] = useState(true);
-  const isNew = !filename;
   const skills = useConfigStore((s) => s.skills);
   const loadSkills = useConfigStore((s) => s.loadSkills);
+  const loadWorkflowConfig = useConfigStore((s) => s.loadWorkflowConfig);
+  const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
+  const showToast = useWorkflowStore((s) => s.showToast);
+  const isNew = !currentFilename;
+
+  useEffect(() => {
+    setCurrentFilename(filename || null);
+  }, [filename]);
 
   useEffect(() => {
     loadSkills();
@@ -265,6 +340,16 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
       ? current.filter((item) => item !== ref)
       : [...current, ref];
     updatePhase(selectedIdx, "skillRefs", updated);
+    setPhases((prev) => normalizeFirstPhaseInputs(prev.map((phase, idx) => (
+      idx === selectedIdx ? { ...phase, skill: composeSkillContent(updated, skills) } : phase
+    ))));
+    setDirty(true);
+  }
+
+  function openSkillPicker() {
+    const selectedRefs = selected?.skillRefs || [];
+    setSkillPreviewId(selectedRefs[0] || skills[0]?.id || "");
+    setShowSkillPicker(true);
   }
 
   function toggleWorktreeFile(file) {
@@ -436,43 +521,12 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
     setSkillDescription("");
   }
 
-  async function handleSave() {
+  async function handleSave(shouldClose = false) {
     if (!name.trim()) { setError(t("editor.workflowNameRequired")); return; }
     if (phases.length === 0) { setError(t("editor.phaseRequired")); return; }
     for (const p of phases) {
-      if (!p.id || !p.label || !p.type || !p.group) {
-        setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
-        return;
-      }
-      for (const input of p.inputs || []) {
-        if (!input.name || !input.sourceType) {
-          setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
-          return;
-        }
-        if (input.sourceType === "workflow_context" && !input.contextLabel) {
-          setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
-          return;
-        }
-        if (input.sourceType === "phase_output" && (!input.phaseId || !input.outputKey)) {
-          setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
-          return;
-        }
-      }
-      for (const output of p.outputs || []) {
-        if (!output.key || !output.filename) {
-          setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
-          return;
-        }
-      }
-      if (p.type === "checkpoint") {
-        const checkpoint = normalizeCheckpoint(p.checkpoint);
-        for (const rule of checkpoint.publish || []) {
-          if (!rule.action || !rule.sourceName || !rule.asOutputKey || !rule.filename) {
-            setError(t("editor.phaseMissingFields", { name: p.label || p.id || t("editor.unnamed") }));
-            return;
-          }
-        }
-      }
+      const phaseError = getPhaseSaveError(p, t);
+      if (phaseError) { setError(phaseError); return; }
       if (p.type === "auto") {
         const allowedVariables = new Set(["taskId", "baseDir", "taskDir", ...(p.inputs || []).map((input) => input.name).filter(Boolean)]);
         const referencedVariables = extractTemplateVariables([p.skill, p.prompt].filter(Boolean).join("\n\n"));
@@ -502,13 +556,21 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
       },
     };
     try {
+      let savedFilename = currentFilename;
       if (isNew) {
-        await desktopApi.createWorkflow(workflow);
+        const created = await desktopApi.createWorkflow(workflow);
+        savedFilename = created.filename;
+        setCurrentFilename(created.filename);
       } else {
-        await desktopApi.updateWorkflow(filename, workflow);
+        await desktopApi.updateWorkflow(currentFilename, workflow);
       }
       setDirty(false);
-      onSaved();
+      showToast(t("settings.workflowSaved"));
+      loadWorkflowConfig();
+      loadWorkflows();
+      if (shouldClose) {
+        onSaved(savedFilename);
+      }
     } catch (err) {
       setError(err.message || t("editor.saveWorkflowFailed"));
     } finally {
@@ -519,6 +581,10 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const selected = selectedIdx !== null ? phases[selectedIdx] : null;
   const autoPhaseIds = phases.filter((p) => p.type === "auto").map((p) => p.id);
   const displayedWorktreeFiles = [...COMMON_WORKTREE_FILES, ...customWorktreeFiles];
+  const selectedSkillRefs = selected?.skillRefs || [];
+  const previewSkill = skills.find((skill) => skill.id === skillPreviewId) || skills[0] || null;
+  const previewSkillBody = splitSkillContent(previewSkill);
+  const selectedSkillText = selected ? selected.skill : "";
 
   return (
     <div className="flex flex-col h-full">
@@ -533,9 +599,14 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
         />
         <div className="flex-1" />
         {error && <span className="text-destructive text-xs">{error}</span>}
-        <Button className="no-drag" size="sm" onClick={handleSave} disabled={saving || !dirty}>
-          {saving ? t("editor.saving") : t("editor.save")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" className="no-drag" size="sm" variant="outline" onClick={() => handleSave(true)} disabled={saving || !dirty}>
+            {saving ? t("editor.saving") : t("editor.saveAndExit")}
+          </Button>
+          <Button type="button" className="no-drag" size="sm" onClick={() => handleSave(false)} disabled={saving || !dirty}>
+            {saving ? t("editor.saving") : t("editor.save")}
+          </Button>
+        </div>
       </div>
 
       <div className="relative flex min-h-0 flex-1">
@@ -835,14 +906,14 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                             placeholder={t("editor.inputNamePlaceholder")}
                           />
                           {!isFirstPhase && (
-                            <select
+                            <Select
                               value={sourceType}
                               onChange={(e) => updateSelectedPhaseInput(inputIdx, "sourceType", e.target.value)}
-                              className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                              className="h-10 rounded-lg bg-secondary"
                             >
                               <option value="workflow_context">{t("editor.sourceWorkflowContext")}</option>
                               <option value="phase_output">{t("editor.sourcePhaseOutput")}</option>
-                            </select>
+                            </Select>
                           )}
                         </div>
                         <button
@@ -878,10 +949,10 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                         </div>
                       ) : (
                         <div className="grid grid-cols-[1fr_1fr_auto] gap-3">
-                          <select
+                          <Select
                             value={input.phaseId || ""}
                             onChange={(e) => updateSelectedPhaseInput(inputIdx, "phaseId", e.target.value)}
-                            className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                            className="h-9 rounded-md bg-secondary"
                           >
                             <option value="">{t("editor.selectPhaseSource")}</option>
                             {phases
@@ -891,11 +962,11 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                                   {phase.label || phase.id}
                                 </option>
                               ))}
-                          </select>
-                          <select
+                          </Select>
+                          <Select
                             value={input.outputKey || ""}
                             onChange={(e) => updateSelectedPhaseInput(inputIdx, "outputKey", e.target.value)}
-                            className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                            className="h-9 rounded-md bg-secondary"
                           >
                             <option value="">{t("editor.selectOutputSource")}</option>
                             {(phases.find((phase) => phase.id === input.phaseId)?.outputs || []).map((output) => (
@@ -903,7 +974,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                                 {output.key || output.filename}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                           <label className="flex items-center gap-2 rounded-lg border border-border px-3 text-xs text-muted-foreground">
                             <input
                               type="checkbox"
@@ -924,51 +995,20 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
 
               {selected.type === "auto" && (
                 <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-semibold text-muted-foreground">{t("editor.skill")}</label>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowSkillGenerate(true)}
-                      disabled={generatingSkill}
-                    >
-                      {generatingSkill ? t("editor.generating") : t("editor.generateWithAi")}
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <div>
+                      <label className="text-xs font-semibold text-muted-foreground">{t("editor.skill")}</label>
+                      <span className="mt-0.5 block text-[10px] text-muted-foreground">{t("editor.skillPickerHint")}</span>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={openSkillPicker}>
+                      {t("editor.browseSkills")}
                     </Button>
                   </div>
-                  <div className="mb-2 rounded-lg border border-border bg-secondary/30 p-2">
-                    {skills.length === 0 ? (
-                      <span className="text-xs text-muted-foreground">
-                        {t("editor.noManagedSkills")}
-                      </span>
-                    ) : (
-                      <div className="flex flex-wrap gap-2">
-                        {skills.map((skill) => {
-                          const isSelected = (selected.skillRefs || []).includes(skill.id);
-                          return (
-                            <button
-                              key={skill.id}
-                              type="button"
-                              className={cn(
-                                "px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer",
-                                isSelected
-                                  ? "border-ring bg-secondary text-foreground"
-                                  : "border-border text-muted-foreground hover:bg-accent"
-                              )}
-                              onClick={() => toggleSkillRef(skill.id)}
-                              title={skill.description || skill.name}
-                            >
-                              {skill.name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
                   <textarea
-                    value={selected.skill || ""}
+                    value={selectedSkillText}
                     onChange={(e) => updatePhase(selectedIdx, "skill", e.target.value)}
                     placeholder={t("editor.skillPlaceholder")}
-                    className="flex w-full rounded-lg border border-input bg-secondary px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring min-h-[80px] resize-y font-mono"
+                    className="flex w-full rounded-lg border border-input bg-secondary px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring min-h-[340px] resize-y font-mono"
                     rows={3}
                   />
                   <span className="text-[10px] text-muted-foreground mt-0.5 block">
@@ -984,7 +1024,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                     value={selected.prompt || ""}
                     onChange={(e) => updatePhase(selectedIdx, "prompt", e.target.value)}
                     placeholder={t("editor.promptPlaceholder")}
-                    className="flex w-full rounded-lg border border-input bg-secondary px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring min-h-[120px] resize-y font-mono"
+                    className="flex w-full rounded-lg border border-input bg-secondary px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring min-h-[340px] resize-y font-mono"
                     rows={5}
                   />
                   <span className="text-[10px] text-muted-foreground mt-0.5 block">
@@ -1003,7 +1043,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                   <div>
                     <label className="mb-2 block text-xs font-semibold text-muted-foreground">{t("editor.availableActions")}</label>
                     <div className="flex flex-wrap gap-2">
-                      {["approve", "edit_and_approve", "request_revision", "stop"].map((action) => {
+                      {CHECKPOINT_ACTIONS.map((action) => {
                         const isSelected = (selected.checkpoint?.actions || []).includes(action);
                         return (
                           <button
@@ -1065,19 +1105,19 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                         <div key={ruleIdx} className="rounded-xl border border-border bg-background/75 p-3">
                           <div className="mb-3 flex items-start gap-2">
                             <div className="grid flex-1 grid-cols-2 gap-3">
-                              <select
+                              <Select
                                 value={rule.action || "approve"}
                                 onChange={(e) => updateSelectedPublishRule(ruleIdx, "action", e.target.value)}
-                                className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                                className="h-10 rounded-lg bg-secondary"
                               >
-                                {["approve", "edit_and_approve", "request_revision", "stop"].map((action) => (
+                                {CHECKPOINT_ACTIONS.map((action) => (
                                   <option key={action} value={action}>{t(`editor.action.${action}`)}</option>
                                 ))}
-                              </select>
-                              <select
+                              </Select>
+                              <Select
                                 value={rule.sourceName || ""}
                                 onChange={(e) => updateSelectedPublishRule(ruleIdx, "sourceName", e.target.value)}
-                                className="h-10 rounded-lg border border-input bg-secondary px-3 text-sm text-foreground outline-none focus:border-ring"
+                                className="h-10 rounded-lg bg-secondary"
                               >
                                 <option value="">{t("editor.selectInputSource")}</option>
                                 {selected.inputs.map((input) => (
@@ -1085,7 +1125,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                                     {input.name || t("editor.unnamed")}
                                   </option>
                                 ))}
-                              </select>
+                              </Select>
                             </div>
                             <button
                               className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded shrink-0"
@@ -1129,27 +1169,24 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                     </div>
                   ) : selected.outputs.map((output, outputIdx) => (
                     <div key={outputIdx} className="rounded-xl border border-border bg-background/75 p-3">
-                      <div className="mb-3 flex items-start gap-2">
-                        <div className="grid flex-1 grid-cols-3 gap-3">
-                          <Input
-                            value={output.key || ""}
-                            onChange={(e) => updateSelectedPhaseOutput(outputIdx, "key", e.target.value)}
-                            placeholder={t("editor.outputKeyPlaceholder")}
-                          />
-                          <div className="relative">
-                            <select
-                              value={output.kind || "document"}
-                              onChange={(e) => updateSelectedPhaseOutput(outputIdx, "kind", e.target.value)}
-                              className="h-9 w-full appearance-none rounded-md border border-input bg-secondary px-3 pr-9 text-sm text-foreground outline-none focus:border-ring"
-                            >
-                              <option value="document">{t("editor.outputKindDocument")}</option>
-                            </select>
-                            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                          </div>
-                          <Input
-                            value={output.filename || ""}
-                            onChange={(e) => updateSelectedPhaseOutput(outputIdx, "filename", e.target.value)}
-                            placeholder={t("editor.outputFilenamePlaceholder")}
+                          <div className="mb-3 flex items-start gap-2">
+                            <div className="grid flex-1 grid-cols-3 gap-3">
+                              <Input
+                                value={output.key || ""}
+                                onChange={(e) => updateSelectedPhaseOutput(outputIdx, "key", e.target.value)}
+                                placeholder={t("editor.outputKeyPlaceholder")}
+                              />
+                              <Select
+                                value={output.kind || "document"}
+                                onChange={(e) => updateSelectedPhaseOutput(outputIdx, "kind", e.target.value)}
+                                className="h-9 rounded-md bg-secondary"
+                              >
+                                <option value="document">{t("editor.outputKindDocument")}</option>
+                              </Select>
+                              <Input
+                                value={output.filename || ""}
+                                onChange={(e) => updateSelectedPhaseOutput(outputIdx, "filename", e.target.value)}
+                                placeholder={t("editor.outputFilenamePlaceholder")}
                           />
                         </div>
                         <button
@@ -1254,6 +1291,114 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
               <Button size="sm" onClick={generateSkill} disabled={generatingSkill}>
                 {generatingSkill ? t("editor.generating") : t("editor.generate")}
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSkillPicker && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
+          onClick={() => setShowSkillPicker(false)}
+        >
+          <div
+            className="flex h-[42rem] w-full max-w-5xl overflow-hidden rounded-2xl border border-border bg-card shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex w-80 shrink-0 flex-col border-r border-border bg-secondary/30">
+              <div className="border-b border-border px-4 py-4">
+                <h3 className="text-sm font-semibold text-foreground">{t("editor.skillPickerTitle")}</h3>
+                <p className="mt-1 text-xs text-muted-foreground">{t("editor.skillPickerDescription")}</p>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                {skills.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
+                    {t("editor.noManagedSkills")}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {skills.map((skill) => {
+                      const isPreviewing = previewSkill?.id === skill.id;
+                      const isSelected = selectedSkillRefs.includes(skill.id);
+                      return (
+                        <button
+                          key={skill.id}
+                          type="button"
+                          className={cn(
+                            "w-full rounded-xl border px-3 py-3 text-left transition-colors",
+                            isPreviewing
+                              ? "border-ring bg-background"
+                              : "border-border bg-card hover:bg-accent"
+                          )}
+                          onClick={() => setSkillPreviewId(skill.id)}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-foreground">{skill.name}</div>
+                              {skill.description && (
+                                <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{skill.description}</div>
+                              )}
+                            </div>
+                            {isSelected && (
+                              <Badge variant="info" className="shrink-0 text-[10px]">
+                                {t("editor.selectedSkill")}
+                              </Badge>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+                <div className="min-w-0">
+                  <h3 className="truncate text-sm font-semibold text-foreground">
+                    {previewSkill?.name || t("editor.skillPreviewEmpty")}
+                  </h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {previewSkill?.description || t("editor.skillPreviewHint")}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {previewSkill && !selectedSkillRefs.includes(previewSkill.id) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        toggleSkillRef(previewSkill.id);
+                        setShowSkillPicker(false);
+                      }}
+                    >
+                      {t("editor.addSkill")}
+                    </Button>
+                  )}
+                  <Button variant="outline" size="sm" onClick={() => setShowSkillPicker(false)}>
+                    {t("common.close")}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                {previewSkill ? (
+                  previewSkillBody ? (
+                    <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-secondary/25 p-4 font-mono text-xs leading-6 text-foreground">
+                      {previewSkillBody}
+                    </pre>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
+                      {t("editor.skillBodyEmpty")}
+                    </div>
+                  )
+                ) : (
+                  <div className="rounded-xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
+                    {t("editor.skillPreviewEmpty")}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

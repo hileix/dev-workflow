@@ -96,7 +96,10 @@ export const useConfigStore = create((set, get) => ({
     try {
       const data = await desktopApi.saveSkill(skill);
       set({ skills: data.skills || [] });
-    } catch {}
+      return data;
+    } catch (error) {
+      throw error;
+    }
   },
 
   async deleteSkill(slug) {

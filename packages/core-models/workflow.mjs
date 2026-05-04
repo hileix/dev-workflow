@@ -132,11 +132,14 @@ export function loadWorkflow(path) {
           vars[input.name] = resolveInputValue(raw, p, input, taskId, baseDir, contextValues, vars.runId);
         }
         const parts = [];
-        for (const ref of p.skillRefs || []) {
-          const managedSkill = readManagedSkillContentSync(ref);
-          if (managedSkill) parts.push(interpolate(managedSkill, vars));
+        if (p.skill) {
+          parts.push(interpolate(p.skill, vars));
+        } else {
+          for (const ref of p.skillRefs || []) {
+            const managedSkill = readManagedSkillContentSync(ref);
+            if (managedSkill) parts.push(interpolate(managedSkill, vars));
+          }
         }
-        if (p.skill) parts.push(interpolate(p.skill, vars));
         if (p.prompt) parts.push(interpolate(p.prompt, vars));
         return parts.join("\n\n");
       };

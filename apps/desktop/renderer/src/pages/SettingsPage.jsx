@@ -9,7 +9,6 @@ import { Button } from "../components/ui/button";
 import { WindowChrome } from "../components/window-chrome";
 import { cn } from "../lib/utils";
 import { useConfigStore } from "../stores/configStore";
-import { useWorkflowStore } from "../stores/workflowStore";
 
 export default function SettingsPage() {
   const { t } = useI18n();
@@ -35,9 +34,7 @@ export default function SettingsPage() {
   const deleteSkill = useConfigStore((s) => s.deleteSkill);
   const importSkills = useConfigStore((s) => s.importSkills);
   const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
-  const loadWorkflowConfig = useConfigStore((s) => s.loadWorkflowConfig);
   const loadWorkFolders = useConfigStore((s) => s.loadWorkFolders);
-  const showToast = useWorkflowStore((s) => s.showToast);
   const mobileAccessEnabled = workflowConfig?.mobileAccessEnabled === true;
   const tabs = [
     { key: "workflows", label: t("settings.tab.workflows") },
@@ -51,9 +48,6 @@ export default function SettingsPage() {
         filename={editingWorkflow}
         onClose={() => { setShowEditor(false); setEditingWorkflow(null); loadWorkflows(); }}
         onSaved={() => {
-          showToast(t("settings.workflowSaved"));
-          loadWorkflowConfig();
-          loadWorkflows();
           setShowEditor(false);
           setEditingWorkflow(null);
         }}

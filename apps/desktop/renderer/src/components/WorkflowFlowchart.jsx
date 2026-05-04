@@ -339,7 +339,7 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
                     fontWeight="700"
                     textAnchor="start"
                   >
-                    {t("editor.action.request_revision")}
+                    {t("editor.action.reject")}
                   </text>
                 </g>
               );
