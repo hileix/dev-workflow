@@ -79,23 +79,6 @@ export default function SettingsPage() {
               <ThemeToggle />
             </div>
           </div>
-          <div className="mb-6 inline-flex items-center gap-1 rounded-xl border border-border bg-secondary/85 p-1 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
-            {tabs.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                className={cn(
-                  "min-w-28 rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors",
-                  activeTab === tab.key
-                    ? "bg-card text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-                onClick={() => setActiveTab(tab.key)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
           <div className="mb-6 rounded-2xl border border-border bg-card/78 p-4 shadow-[0_1px_0_rgba(255,255,255,0.7)_inset]">
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
@@ -140,98 +123,123 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {activeTab === "workflows" && (
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[15px] font-semibold text-foreground">{t("settings.workflows")}</h3>
-              <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(null); setShowEditor(true); }}>{t("settings.newWorkflow")}</Button>
-            </div>
-            {workflows.length === 0 ? (
-              <div className="text-muted-foreground text-sm p-6 text-center border border-dashed border-border rounded-xl bg-card/50">
-                {t("settings.noWorkflows")}
-              </div>
-            ) : (
-              <ul className="list-none divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
-                {workflows.map((wf) => (
-                  <li
-                    key={wf.filename}
-                    className="flex items-center justify-between px-4 py-3.5 transition-colors hover:bg-accent/70"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="text-sm font-semibold text-foreground">{wf.name}</span>
-                      <span className="text-xs text-muted-foreground">{t("settings.workflowPhases", { count: wf.phaseCount })}</span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(wf.filename); setShowEditor(true); }}>
-                        {t("settings.edit")}
-                      </Button>
-                      <button
-                        className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded"
-                        onClick={() => {
-                          setConfirmRemoveWorkflow(wf);
-                          setConfirmRemoveWorkflowStep(1);
-                        }}
-                        aria-label={`Remove ${wf.name}`}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          )}
-
-          {activeTab === "skills" && (
-          <SkillManager
-            skills={skills}
-            onSave={saveSkill}
-            onDelete={deleteSkill}
-            onImport={importSkills}
-          />
-          )}
-
-          {activeTab === "folders" && (
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[15px] font-semibold text-foreground">{t("settings.workFolders")}</h3>
-              <Button variant="outline" size="sm" onClick={addFolder}>{t("settings.addFolder")}</Button>
-            </div>
-
-            {workFolders.length === 0 ? (
-              <div className="text-muted-foreground text-sm p-6 text-center border border-dashed border-border rounded-xl bg-card/50">
-                {t("settings.noFolders")}
-              </div>
-            ) : (
-              <ul className="list-none divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
-                {workFolders.map((f) => (
-                  <li
-                    key={f.path}
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+            <div className="lg:w-56 lg:shrink-0">
+              <div className="flex flex-col gap-2 rounded-2xl border border-border bg-secondary/75 p-2 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
                     className={cn(
-                      "flex items-center justify-between px-4 py-3.5 cursor-pointer transition-colors",
-                      "hover:bg-accent/70",
-                      selectedFolder === f.path && "bg-accent/75"
+                      "w-full rounded-xl px-4 py-2.5 text-left text-sm font-semibold transition-colors",
+                      activeTab === tab.key
+                        ? "bg-card text-foreground shadow-sm"
+                        : "text-muted-foreground hover:bg-background/55 hover:text-foreground"
                     )}
-                    onClick={() => setSelectedFolder(f.path)}
+                    onClick={() => setActiveTab(tab.key)}
                   >
-                    <div className="flex flex-col gap-1 min-w-0">
-                      <span className="text-sm font-semibold text-foreground">{f.name}</span>
-                      <span className="text-xs text-muted-foreground truncate">{f.path}</span>
-                    </div>
-                    <button
-                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1 rounded"
-                      onClick={(e) => { e.stopPropagation(); setConfirmRemoveFolder(f); }}
-                      aria-label={`Remove ${f.name}`}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </li>
+                    {tab.label}
+                  </button>
                 ))}
-              </ul>
-            )}
+              </div>
+            </div>
+
+            <div className="min-w-0 flex-1">
+
+              {activeTab === "workflows" && (
+              <div>
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="text-[15px] font-semibold text-foreground">{t("settings.workflows")}</h3>
+                  <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(null); setShowEditor(true); }}>{t("settings.newWorkflow")}</Button>
+                </div>
+                {workflows.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border bg-card/50 p-6 text-center text-sm text-muted-foreground">
+                    {t("settings.noWorkflows")}
+                  </div>
+                ) : (
+                  <ul className="list-none divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
+                    {workflows.map((wf) => (
+                      <li
+                        key={wf.filename}
+                        className="flex items-center justify-between px-4 py-3.5 transition-colors hover:bg-accent/70"
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="text-sm font-semibold text-foreground">{wf.name}</span>
+                          <span className="text-xs text-muted-foreground">{t("settings.workflowPhases", { count: wf.phaseCount })}</span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(wf.filename); setShowEditor(true); }}>
+                            {t("settings.edit")}
+                          </Button>
+                          <button
+                            className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => {
+                              setConfirmRemoveWorkflow(wf);
+                              setConfirmRemoveWorkflowStep(1);
+                            }}
+                            aria-label={`Remove ${wf.name}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              )}
+
+              {activeTab === "skills" && (
+              <SkillManager
+                skills={skills}
+                onSave={saveSkill}
+                onDelete={deleteSkill}
+                onImport={importSkills}
+              />
+              )}
+
+              {activeTab === "folders" && (
+              <div>
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="text-[15px] font-semibold text-foreground">{t("settings.workFolders")}</h3>
+                  <Button variant="outline" size="sm" onClick={addFolder}>{t("settings.addFolder")}</Button>
+                </div>
+
+                {workFolders.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border bg-card/50 p-6 text-center text-sm text-muted-foreground">
+                    {t("settings.noFolders")}
+                  </div>
+                ) : (
+                  <ul className="list-none divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
+                    {workFolders.map((f) => (
+                      <li
+                        key={f.path}
+                        className={cn(
+                          "flex cursor-pointer items-center justify-between px-4 py-3.5 transition-colors",
+                          "hover:bg-accent/70",
+                          selectedFolder === f.path && "bg-accent/75"
+                        )}
+                        onClick={() => setSelectedFolder(f.path)}
+                      >
+                        <div className="flex min-w-0 flex-col gap-1">
+                          <span className="text-sm font-semibold text-foreground">{f.name}</span>
+                          <span className="truncate text-xs text-muted-foreground">{f.path}</span>
+                        </div>
+                        <button
+                          className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          onClick={(e) => { e.stopPropagation(); setConfirmRemoveFolder(f); }}
+                          aria-label={`Remove ${f.name}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              )}
+            </div>
           </div>
-          )}
         </div>
       </div>
 
