@@ -7,7 +7,7 @@ export const useConfigStore = create((set, get) => ({
   workflowConfig: null,
   workflows: [],
   skills: [],
-  activeWorkflowFile: "default.json",
+  activeWorkflowFile: "",
   workFolders: [],
   selectedFolder: "",
 
@@ -48,7 +48,7 @@ export const useConfigStore = create((set, get) => ({
       const data = await desktopApi.listWorkflows();
       set({
         workflows: data.workflows || [],
-        activeWorkflowFile: data.activeWorkflow || "default.json",
+        activeWorkflowFile: data.activeWorkflow || "",
       });
     } catch {}
   },

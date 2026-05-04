@@ -305,6 +305,7 @@ export default function HomePage() {
   });
 
   const groups = workflowConfig?.groups || [];
+  const canStartWorkflow = workflows.length > 0;
 
   function handleStartWorkflow(id, folderPath, contextValues, images) {
     startWorkflow(id, folderPath, contextValues, images);
@@ -339,8 +340,15 @@ export default function HomePage() {
           <div className="flex flex-wrap gap-3 items-stretch">
             <button
               type="button"
-              className="inline-flex min-h-[196px] w-52 flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card/55 text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.55)_inset] transition-colors hover:border-ring hover:bg-accent/70 hover:text-foreground"
-              onClick={() => setShowStartModal(true)}
+              className={`inline-flex min-h-[196px] w-52 flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card/55 text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.55)_inset] transition-colors ${
+                canStartWorkflow
+                  ? "hover:border-ring hover:bg-accent/70 hover:text-foreground"
+                  : "cursor-not-allowed opacity-50"
+              }`}
+              onClick={() => {
+                if (canStartWorkflow) setShowStartModal(true);
+              }}
+              disabled={!canStartWorkflow}
             >
               <span className="mb-1 text-2xl leading-none">+</span>
               <span className="text-sm font-medium">{t("home.start")}</span>

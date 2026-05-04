@@ -74,6 +74,9 @@ async function applyCheckpointPublishRules(taskId, phaseId, state) {
 
 export async function startWorkflowSession(taskId, workFolder, contextValues, images, runId, sender) {
   if (!taskId || !workFolder) throw new Error("taskId and workFolder required");
+  if (!getWorkflow() || getPhaseOrder().length === 0) {
+    throw new Error("no workflow configured");
+  }
 
   let existingState = null;
   try {

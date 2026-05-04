@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
+import { Workflow, X, Trash2 } from "lucide-react";
 import { BackButton } from "./components/back-button";
 import { useI18n } from "./components/i18n-provider";
 import { Button } from "./components/ui/button";
@@ -237,7 +237,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const [skillPreviewId, setSkillPreviewId] = useState("");
   const [skillDescription, setSkillDescription] = useState("");
   const [generatingSkill, setGeneratingSkill] = useState(false);
-  const [flowchartCollapsed, setFlowchartCollapsed] = useState(true);
+  const [showFlowchartModal, setShowFlowchartModal] = useState(false);
   const skills = useConfigStore((s) => s.skills);
   const loadSkills = useConfigStore((s) => s.loadSkills);
   const loadWorkflowConfig = useConfigStore((s) => s.loadWorkflowConfig);
@@ -770,7 +770,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
         {/* Phase edit form (middle) */}
         <div className="flex-1 overflow-y-auto bg-background/55 px-6 py-6">
           {selected ? (
-            <div className="max-w-2xl space-y-5">
+            <div className="mx-auto w-full max-w-4xl space-y-5">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground block mb-1.5">{t("editor.labelRequired")}</label>
@@ -1209,52 +1209,54 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
           )}
         </div>
 
-        {/* Workflow preview (right) */}
-        {flowchartCollapsed ? (
-          <div className="absolute right-3 top-3 z-10">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 w-8 px-0"
-              onClick={() => setFlowchartCollapsed(false)}
-              aria-label={t("editor.expandPreview")}
-              title={t("editor.expandPreview")}
-            >
-              <PanelRightOpen className="h-4 w-4" />
-            </Button>
-          </div>
-        ) : (
-          <div className="shrink-0 w-[34rem] border-l border-border bg-secondary/30 transition-all duration-200">
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-xs font-semibold text-muted-foreground">{t("editor.workflowPreview")}</h2>
-                  <span className="text-[10px] text-muted-foreground">{t("editor.workflowPreviewHint")}</span>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 w-8 px-0"
-                  onClick={() => setFlowchartCollapsed(true)}
-                  aria-label={t("editor.collapsePreview")}
-                  title={t("editor.collapsePreview")}
-                >
-                  <PanelRightClose className="h-4 w-4" />
-                </Button>
+        <div className="absolute right-3 top-3 z-10">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-10 w-10 px-0"
+            onClick={() => setShowFlowchartModal(true)}
+            aria-label={t("editor.openWorkflowDiagram")}
+            title={t("editor.openWorkflowDiagram")}
+          >
+            <Workflow className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {showFlowchartModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onClick={() => setShowFlowchartModal(false)}>
+          <div
+            className="flex h-[min(86vh,820px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+              <div>
+                <h3 className="text-base font-semibold text-foreground">{t("editor.workflowPreview")}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">{t("editor.workflowPreviewHint")}</p>
               </div>
-              <div className="min-h-0 flex-1 p-4">
-                <WorkflowFlowchart
-                  phases={phases}
-                  selectedIdx={selectedIdx}
-                  onSelectPhase={setSelectedIdx}
-                />
-              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 w-9 px-0"
+                onClick={() => setShowFlowchartModal(false)}
+                aria-label={t("editor.closeWorkflowDiagram")}
+                title={t("editor.closeWorkflowDiagram")}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 p-5">
+              <WorkflowFlowchart
+                phases={phases}
+                selectedIdx={selectedIdx}
+                onSelectPhase={setSelectedIdx}
+              />
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {showBackConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowBackConfirm(false)}>

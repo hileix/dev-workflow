@@ -65,6 +65,23 @@ async function createWindow() {
     },
   });
 
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    const key = String(input.key || "");
+    const isReloadShortcut =
+      input.type === "keyDown" &&
+      (
+        key === "F5" ||
+        (
+          key.toLowerCase() === "r" &&
+          (input.meta || input.control)
+        )
+      );
+
+    if (isReloadShortcut) {
+      event.preventDefault();
+    }
+  });
+
   if (isDev) {
     await waitForRenderer(rendererDevServerUrl);
     await mainWindow.loadURL(rendererDevServerUrl);

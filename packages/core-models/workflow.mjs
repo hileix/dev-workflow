@@ -1,6 +1,6 @@
 import { join } from "path";
-import { readFileSync } from "fs";
-import { readConfigSync, WORKFLOW_DIR, getWorkfoldersFile } from "./config.mjs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from "fs";
+import { readConfigSync, LEGACY_WORKFLOW_DIR, getWorkflowDir, getWorkfoldersFile } from "./config.mjs";
 import { readManagedSkillContentSync } from "./skills.mjs";
 
 let WORKFLOW = null;
@@ -9,7 +9,7 @@ let PHASE_SKILLS = {};
 let REJECT_TARGETS = {};
 let PHASE_ARTIFACT_FILES = {};
 let PHASE_META = {};
-let ACTIVE_WORKFLOW_FILE = "default.json";
+let ACTIVE_WORKFLOW_FILE = "";
 
 function normalizeWorktreeConfig(worktree) {
   const files = Array.isArray(worktree?.files)
@@ -29,6 +29,38 @@ function normalizeWorktreeConfig(worktree) {
 
 export function interpolate(template, vars) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? "");
+}
+
+function clearWorkflowState() {
+  WORKFLOW = null;
+  PHASE_ORDER = [];
+  PHASE_SKILLS = {};
+  REJECT_TARGETS = {};
+  PHASE_ARTIFACT_FILES = {};
+  PHASE_META = {};
+}
+
+function listWorkflowFilesSync(dir) {
+  try {
+    return readdirSync(dir).filter((file) => file.endsWith(".json")).sort();
+  } catch {
+    return [];
+  }
+}
+
+function migrateLegacyWorkflowsSync() {
+  const workflowDir = getWorkflowDir();
+  mkdirSync(workflowDir, { recursive: true });
+
+  const legacyFiles = listWorkflowFilesSync(LEGACY_WORKFLOW_DIR);
+  for (const file of legacyFiles) {
+    const sourcePath = join(LEGACY_WORKFLOW_DIR, file);
+    const targetPath = join(workflowDir, file);
+    if (existsSync(targetPath)) continue;
+    try {
+      renameSync(sourcePath, targetPath);
+    } catch {}
+  }
 }
 
 function getPrimaryOutput(phase) {
@@ -164,6 +196,10 @@ export function getPhaseMeta() { return PHASE_META; }
 export function getPhaseBackend(phaseId) { return PHASE_META[phaseId]?.aiBackend || "claude"; }
 export function getActiveWorkflowFile() { return ACTIVE_WORKFLOW_FILE; }
 export function setActiveWorkflowFile(f) { ACTIVE_WORKFLOW_FILE = f; }
+export function unloadWorkflow() {
+  ACTIVE_WORKFLOW_FILE = "";
+  clearWorkflowState();
+}
 
 export function isAutoPhase(phaseId) {
   const meta = PHASE_META[phaseId];
@@ -183,8 +219,18 @@ try {
 } catch {}
 
 try {
-  loadWorkflow(join(WORKFLOW_DIR, ACTIVE_WORKFLOW_FILE));
+  migrateLegacyWorkflowsSync();
+  const workflowDir = getWorkflowDir();
+  const files = listWorkflowFilesSync(workflowDir);
+  if (!files.includes(ACTIVE_WORKFLOW_FILE)) {
+    ACTIVE_WORKFLOW_FILE = files[0] || "";
+  }
+  if (ACTIVE_WORKFLOW_FILE) {
+    loadWorkflow(join(workflowDir, ACTIVE_WORKFLOW_FILE));
+  } else {
+    clearWorkflowState();
+  }
 } catch (err) {
-  console.error(`ERROR: Could not load workflow config from workflows/${ACTIVE_WORKFLOW_FILE}: ${err.message}`);
-  process.exit(1);
+  clearWorkflowState();
+  console.error(`ERROR: Could not load workflow config from ${ACTIVE_WORKFLOW_FILE || "no active workflow"}: ${err.message}`);
 }

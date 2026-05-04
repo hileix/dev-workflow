@@ -5,8 +5,8 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import {
   readConfig,
   saveConfig,
-  WORKFLOW_DIR,
   getBaseDir,
+  getWorkflowDir,
   readMobileAccessEnabled,
   saveMobileAccessEnabled,
 } from "../../../packages/core-models/config.mjs";
@@ -17,11 +17,33 @@ import {
   deriveContextFields,
   getPhaseOrder,
   loadWorkflow,
+  unloadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
 import { readState, getTaskRunId } from "../../../packages/core-models/state.mjs";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
 import { getPhaseContent, readArtifact } from "../../../packages/core-lib/claude.mjs";
+
+function buildEmptyWorkflowConfig(mobileAccessEnabled) {
+  return {
+    name: "",
+    activeWorkflow: getActiveWorkflowFile(),
+    phaseOrder: [],
+    groups: [],
+    phaseLabels: {},
+    phaseTypes: {},
+    rejectTargets: {},
+    contextFields: [],
+    worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false },
+    mobileAccessEnabled,
+  };
+}
+
+async function ensureWorkflowDir() {
+  const workflowDir = getWorkflowDir();
+  await mkdir(workflowDir, { recursive: true });
+  return workflowDir;
+}
 
 export async function pickFolder(browserWindow) {
   const result = await dialog.showOpenDialog(browserWindow, {
@@ -35,8 +57,12 @@ export async function pickFolder(browserWindow) {
 
 export async function getWorkflowConfig() {
   const workflow = getWorkflow();
-  const phaseOrder = getPhaseOrder();
   const mobileAccessEnabled = await readMobileAccessEnabled();
+  if (!workflow) {
+    return buildEmptyWorkflowConfig(mobileAccessEnabled);
+  }
+
+  const phaseOrder = getPhaseOrder();
   const groups = [];
   const seenGroups = new Set();
   const phaseLabels = {};
@@ -74,13 +100,14 @@ export async function setMobileAccessEnabled(enabled) {
 }
 
 export async function listWorkflows() {
+  const workflowDir = await ensureWorkflowDir();
   try {
-    const files = await readdir(WORKFLOW_DIR);
+    const files = await readdir(workflowDir);
     const workflows = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
       try {
-        const raw = JSON.parse(await readFile(join(WORKFLOW_DIR, file), "utf-8"));
+        const raw = JSON.parse(await readFile(join(workflowDir, file), "utf-8"));
         workflows.push({
           filename: file,
           name: raw.name || file,
@@ -98,17 +125,25 @@ export async function listWorkflows() {
 
 export async function getWorkflowByFilename(filename) {
   if (!filename.endsWith(".json")) throw new Error("invalid filename");
-  const raw = await readFile(join(WORKFLOW_DIR, filename), "utf-8");
+  const raw = await readFile(join(await ensureWorkflowDir(), filename), "utf-8");
   return JSON.parse(raw);
 }
 
 export async function createWorkflow(workflow) {
   if (!workflow.name || !workflow.phases) throw new Error("name and phases required");
   const filename = workflow.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".json";
-  const filepath = join(WORKFLOW_DIR, filename);
+  const workflowDir = await ensureWorkflowDir();
+  const filepath = join(workflowDir, filename);
   const existing = await stat(filepath).catch(() => null);
   if (existing) throw new Error("workflow with this name already exists");
   await writeFile(filepath, JSON.stringify(workflow, null, 2));
+  if (!getWorkflow()) {
+    loadWorkflow(filepath);
+    setActiveWorkflowFile(filename);
+    const config = await readConfig();
+    config.activeWorkflow = filename;
+    await saveConfig(config);
+  }
   return { filename, name: workflow.name };
 }
 
@@ -192,27 +227,33 @@ export async function importSkills(browserWindow) {
 export async function updateWorkflow(filename, workflow) {
   if (!filename.endsWith(".json")) throw new Error("invalid filename");
   if (!workflow.name || !workflow.phases) throw new Error("name and phases required");
-  await writeFile(join(WORKFLOW_DIR, filename), JSON.stringify(workflow, null, 2));
+  const workflowDir = await ensureWorkflowDir();
+  await writeFile(join(workflowDir, filename), JSON.stringify(workflow, null, 2));
   if (filename === getActiveWorkflowFile()) {
-    loadWorkflow(join(WORKFLOW_DIR, filename));
+    loadWorkflow(join(workflowDir, filename));
   }
   return { filename, name: workflow.name };
 }
 
 export async function removeWorkflow(filename) {
   if (!filename.endsWith(".json")) throw new Error("invalid filename");
-  const files = (await readdir(WORKFLOW_DIR)).filter((file) => file.endsWith(".json"));
+  const workflowDir = await ensureWorkflowDir();
+  const files = (await readdir(workflowDir)).filter((file) => file.endsWith(".json"));
   if (!files.includes(filename)) throw new Error("workflow not found");
-  if (files.length <= 1) throw new Error("at least one workflow must remain");
 
-  await unlink(join(WORKFLOW_DIR, filename));
+  await unlink(join(workflowDir, filename));
   if (getActiveWorkflowFile() === filename) {
     const remaining = files.filter((file) => file !== filename).sort();
-    const nextWorkflow = remaining.includes("default.json") ? "default.json" : remaining[0];
-    setActiveWorkflowFile(nextWorkflow);
-    loadWorkflow(join(WORKFLOW_DIR, nextWorkflow));
     const config = await readConfig();
-    config.activeWorkflow = nextWorkflow;
+    if (remaining.length > 0) {
+      const nextWorkflow = remaining[0];
+      setActiveWorkflowFile(nextWorkflow);
+      loadWorkflow(join(workflowDir, nextWorkflow));
+      config.activeWorkflow = nextWorkflow;
+    } else {
+      unloadWorkflow();
+      delete config.activeWorkflow;
+    }
     await saveConfig(config);
   }
   return { ok: true };
@@ -220,7 +261,8 @@ export async function removeWorkflow(filename) {
 
 export async function activateWorkflow(filename) {
   if (!filename.endsWith(".json")) throw new Error("invalid filename");
-  loadWorkflow(join(WORKFLOW_DIR, filename));
+  const workflowDir = await ensureWorkflowDir();
+  loadWorkflow(join(workflowDir, filename));
   setActiveWorkflowFile(filename);
   const config = await readConfig();
   config.activeWorkflow = filename;

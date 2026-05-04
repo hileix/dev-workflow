@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import WorkflowEditor from "../WorkflowEditor";
 import { BackButton } from "../components/back-button";
@@ -33,7 +33,9 @@ export default function SettingsPage() {
   const saveSkill = useConfigStore((s) => s.saveSkill);
   const deleteSkill = useConfigStore((s) => s.deleteSkill);
   const importSkills = useConfigStore((s) => s.importSkills);
+  const loadWorkflowConfig = useConfigStore((s) => s.loadWorkflowConfig);
   const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
+  const loadSkills = useConfigStore((s) => s.loadSkills);
   const loadWorkFolders = useConfigStore((s) => s.loadWorkFolders);
   const mobileAccessEnabled = workflowConfig?.mobileAccessEnabled === true;
   const tabs = [
@@ -41,6 +43,13 @@ export default function SettingsPage() {
     { key: "skills", label: t("settings.tab.skills") },
     { key: "folders", label: t("settings.tab.folders") },
   ];
+
+  useEffect(() => {
+    loadWorkflowConfig();
+    loadWorkflows();
+    loadSkills();
+    loadWorkFolders();
+  }, []);
 
   if (showEditor) {
     return (
