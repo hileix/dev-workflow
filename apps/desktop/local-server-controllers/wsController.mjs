@@ -2,7 +2,7 @@ import { WebSocketServer } from "ws";
 import { mkdir } from "fs/promises";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
 import { getPhaseOrder, getRejectTargets, isAutoPhase, nextPhase } from "../../../packages/core-models/workflow.mjs";
-import { taskDir, readState, writeState, makeInitialState, updatePhaseStatus, appendToPhaseFile, clearTaskData } from "../../../packages/core-models/state.mjs";
+import { createTaskRunDir, readState, writeState, makeInitialState, updatePhaseStatus, appendToPhaseFile, clearTaskData } from "../../../packages/core-models/state.mjs";
 import { upsertTask } from "../../../packages/core-models/workfolders.mjs";
 import { activeWorkflows, wsSend, runPhase, readArtifact, getPhaseContent, continuePhaseConversation } from "../../../packages/core-lib/claude.mjs";
 
@@ -15,18 +15,18 @@ export function setupWebSocket(server) {
       try { msg = JSON.parse(raw); } catch { return; }
 
       if (msg.type === "start") {
-        const { ticketId, workFolder, promptValues, images } = msg;
-        if (!ticketId || !workFolder) return wsSend(ws, { type: "error", message: "ticketId and workFolder required" });
+        const { taskId, workFolder, contextValues, images, runId } = msg;
+        if (!taskId || !workFolder) return wsSend(ws, { type: "error", message: "taskId and workFolder required" });
 
         let existingState = null;
-        try { existingState = await readState(ticketId); } catch {}
+        try { existingState = await readState(taskId); } catch {}
 
         if (existingState && existingState.overallStatus !== "completed") {
           const phaseSessionIds = {};
           for (const p of existingState.phases) {
             if (p.sessionId) phaseSessionIds[p.id] = p.sessionId;
           }
-          activeWorkflows.set(ticketId, {
+          activeWorkflows.set(taskId, {
             workFolder: existingState.workFolder,
             send: (payload) => wsSend(ws, payload),
             ws,
@@ -36,10 +36,10 @@ export function setupWebSocket(server) {
           wsSend(ws, { type: "state", state: existingState });
 
           for (const p of existingState.phases) {
-            const content = await getPhaseContent(ticketId, p.id);
+            const content = await getPhaseContent(taskId, p.id);
             if (content) wsSend(ws, { type: "phase_content", phase: p.id, content });
             if (p.status !== "pending") {
-              const artifact = await readArtifact(ticketId, p.id);
+              const artifact = await readArtifact(taskId, p.id);
               if (artifact) wsSend(ws, { type: "phase_artifact", phase: p.id, content: artifact });
             }
           }
@@ -48,40 +48,41 @@ export function setupWebSocket(server) {
           if (cur && isAutoPhase(cur)) {
             const curPhase = existingState.phases.find((p) => p.id === cur);
             if (curPhase && curPhase.status === "in_progress") {
-              runPhase(ticketId, cur, phaseSessionIds[cur] || null);
+              runPhase(taskId, cur, phaseSessionIds[cur] || null);
             }
           }
         } else {
-          if (existingState) await clearTaskData(ticketId);
+          if (existingState) await clearTaskData(taskId);
           const PHASE_ORDER = getPhaseOrder();
-          const dir = await taskDir(ticketId);
-          await mkdir(dir, { recursive: true });
+          const finalRunId = runId || `run-${Date.now()}`;
+          const dir = await createTaskRunDir(taskId, finalRunId);
 
           const baseDir = await getBaseDir();
-          const state = makeInitialState(ticketId, workFolder, baseDir, promptValues);
+          const state = makeInitialState(taskId, workFolder, baseDir, contextValues, { runId: finalRunId });
           updatePhaseStatus(state, PHASE_ORDER[0], "in_progress");
-          await writeState(ticketId, state);
+          await writeState(taskId, state);
 
-          activeWorkflows.set(ticketId, {
+          activeWorkflows.set(taskId, {
             workFolder,
             send: (payload) => wsSend(ws, payload),
             ws,
             abortController: null,
             phaseSessionIds: {},
             startImages: images || [],
+            runId: finalRunId,
           });
-          await upsertTask(workFolder, ticketId, "in_progress");
+          await upsertTask(workFolder, taskId, "in_progress", finalRunId);
           wsSend(ws, { type: "state", state });
-          runPhase(ticketId, PHASE_ORDER[0]);
+          runPhase(taskId, PHASE_ORDER[0]);
         }
 
       } else if (msg.type === "approve") {
-        const { ticketId } = msg;
-        const wf = activeWorkflows.get(ticketId);
+        const { taskId } = msg;
+        const wf = activeWorkflows.get(taskId);
         if (!wf) return wsSend(ws, { type: "error", message: "workflow not found" });
 
         try {
-          const state = await readState(ticketId);
+          const state = await readState(taskId);
           const cur = state.currentPhase;
           updatePhaseStatus(state, cur, "completed");
           const next = nextPhase(cur);
@@ -97,27 +98,27 @@ export function setupWebSocket(server) {
           } else {
             state.overallStatus = "completed";
             state.currentPhase = "completed";
-            upsertTask(wf.workFolder, ticketId, "completed").catch(() => {});
+            upsertTask(wf.workFolder, taskId, "completed").catch(() => {});
           }
-          await writeState(ticketId, state);
+          await writeState(taskId, state);
           wsSend(ws, { type: "state", state });
 
           if (next && isAutoPhase(next)) {
-            runPhase(ticketId, next);
+            runPhase(taskId, next);
           }
         } catch (err) {
           wsSend(ws, { type: "error", message: err.message });
         }
 
       } else if (msg.type === "reject") {
-        const { ticketId, rejectTo } = msg;
-        const wf = activeWorkflows.get(ticketId);
+        const { taskId, rejectTo } = msg;
+        const wf = activeWorkflows.get(taskId);
         if (!wf) return wsSend(ws, { type: "error", message: "workflow not found" });
 
         try {
           const PHASE_ORDER = getPhaseOrder();
           const REJECT_TARGETS = getRejectTargets();
-          const state = await readState(ticketId);
+          const state = await readState(taskId);
           const cur = state.currentPhase;
           const allowed = REJECT_TARGETS[cur];
           if (!allowed || !allowed.includes(rejectTo)) {
@@ -131,37 +132,37 @@ export function setupWebSocket(server) {
           }
           state.currentPhase = rejectTo;
           state.overallStatus = "awaiting_input";
-          await writeState(ticketId, state);
+          await writeState(taskId, state);
           wsSend(ws, { type: "state", state });
 
-          const content = await getPhaseContent(ticketId, rejectTo);
+          const content = await getPhaseContent(taskId, rejectTo);
           if (content) wsSend(ws, { type: "phase_content", phase: rejectTo, content });
         } catch (err) {
           wsSend(ws, { type: "error", message: err.message });
         }
 
       } else if (msg.type === "message") {
-        const { ticketId, text, images } = msg;
-        const wf = activeWorkflows.get(ticketId);
+        const { taskId, text, images } = msg;
+        const wf = activeWorkflows.get(taskId);
         if (!wf) return wsSend(ws, { type: "error", message: "workflow not found" });
 
         try {
-          const state = await readState(ticketId);
+          const state = await readState(taskId);
           const phase = state.currentPhase;
 
           const userBlock = `\n\n---\n\n**You:** ${text}\n\n`;
-          await appendToPhaseFile(ticketId, phase, userBlock);
+          await appendToPhaseFile(taskId, phase, userBlock);
           wsSend(ws, { type: "user_message", phase, text });
 
           updatePhaseStatus(state, phase, "in_progress");
           state.overallStatus = "in_progress";
-          await writeState(ticketId, state);
+          await writeState(taskId, state);
           wsSend(ws, { type: "state", state });
-          await continuePhaseConversation(ticketId, phase, text, images || []);
-          const latestState = await readState(ticketId);
+          await continuePhaseConversation(taskId, phase, text, images || []);
+          const latestState = await readState(taskId);
           updatePhaseStatus(latestState, phase, "awaiting_input");
           latestState.overallStatus = "awaiting_input";
-          await writeState(ticketId, latestState);
+          await writeState(taskId, latestState);
           wsSend(ws, { type: "phase_done", phase });
           wsSend(ws, { type: "state", state: latestState });
         } catch (err) {
@@ -169,10 +170,10 @@ export function setupWebSocket(server) {
         }
 
       } else if (msg.type === "get_content") {
-        const { ticketId, phase } = msg;
-        const wf = activeWorkflows.get(ticketId);
+        const { taskId, phase } = msg;
+        const wf = activeWorkflows.get(taskId);
         if (!wf) return;
-        const content = await getPhaseContent(ticketId, phase);
+        const content = await getPhaseContent(taskId, phase);
         wsSend(ws, { type: "phase_content", phase, content });
       }
     });

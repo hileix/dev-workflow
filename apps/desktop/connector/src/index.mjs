@@ -102,12 +102,12 @@ async function buildDeviceMeta() {
   };
 }
 
-async function loadTaskState(ticketId) {
-  return fetchJson(`${localApiBase}/tasks/${ticketId}/state`);
+async function loadTaskState(taskId) {
+  return fetchJson(`${localApiBase}/tasks/${taskId}/state`);
 }
 
-async function saveTaskUploads(ticketId, images) {
-  if (!ticketId || !Array.isArray(images) || images.length === 0) return [];
+async function saveTaskUploads(runId, images) {
+  if (!runId || !Array.isArray(images) || images.length === 0) return [];
   const form = new FormData();
   let count = 0;
   for (const image of images) {
@@ -122,7 +122,7 @@ async function saveTaskUploads(ticketId, images) {
     count += 1;
   }
   if (count === 0) return [];
-  const response = await fetch(`${localApiBase}/tasks/${ticketId}/upload`, {
+  const response = await fetch(`${localApiBase}/tasks/${runId}/upload`, {
     method: "POST",
     body: form,
   });
@@ -133,7 +133,7 @@ async function saveTaskUploads(ticketId, images) {
   return Array.isArray(data.paths) ? data.paths : [];
 }
 
-async function normalizeImagePayload(ticketId, images) {
+async function normalizeImagePayload(runId, images) {
   if (!Array.isArray(images) || images.length === 0) return [];
   const paths = [];
   const uploads = [];
@@ -147,21 +147,22 @@ async function normalizeImagePayload(ticketId, images) {
     }
   }
   if (uploads.length === 0) return paths;
-  return [...paths, ...(await saveTaskUploads(ticketId, uploads))];
+  return [...paths, ...(await saveTaskUploads(runId, uploads))];
 }
 
-function buildTaskSnapshot(ticketId, data, fallbackWorkFolder = "") {
+function buildTaskSnapshot(taskId, data, fallbackWorkFolder = "", runId = "") {
   const state = data?.state || null;
   const workFolder =
     state?.originalWorkFolder ||
     state?.workFolder ||
     fallbackWorkFolder ||
-    knownTasks.get(ticketId)?.workFolder ||
+    knownTasks.get(taskId)?.workFolder ||
     "";
   return {
-    key: `${deviceId}:${ticketId}`,
+    key: `${deviceId}:${taskId}`,
     deviceId,
-    ticketId,
+    taskId,
+    runId: state?.runId || runId || "",
     workFolder,
     state,
     messages: data?.messages || {},
@@ -170,9 +171,9 @@ function buildTaskSnapshot(ticketId, data, fallbackWorkFolder = "") {
   };
 }
 
-async function getTaskSnapshot(ticketId, fallbackWorkFolder = "") {
-  const data = await loadTaskState(ticketId);
-  return buildTaskSnapshot(ticketId, data, fallbackWorkFolder);
+async function getTaskSnapshot(taskId, fallbackWorkFolder = "", runId = "") {
+  const data = await loadTaskState(taskId);
+  return buildTaskSnapshot(taskId, data, fallbackWorkFolder, runId);
 }
 
 async function listTaskSnapshots() {
@@ -182,30 +183,30 @@ async function listTaskSnapshots() {
   for (const folder of folders) {
     for (const task of folder.tasks || []) {
       try {
-        const snapshot = await getTaskSnapshot(task.ticketId, folder.path);
-        knownTasks.set(task.ticketId, { workFolder: snapshot.workFolder });
+        const snapshot = await getTaskSnapshot(task.taskId, folder.path, task.runId || "");
+        knownTasks.set(task.taskId, { workFolder: snapshot.workFolder, runId: snapshot.runId });
         tasks.push(snapshot);
       } catch (error) {
-        log(`failed to load task ${task.ticketId}: ${error.message}`);
+        log(`failed to load task ${task.taskId}: ${error.message}`);
       }
     }
   }
   return tasks.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
 }
 
-async function pushTaskSnapshot(ticketId) {
+async function pushTaskSnapshot(taskId) {
   if (!(await isMobileAccessEnabled())) return;
   if (!backendSocket || backendSocket.readyState !== WebSocket.OPEN) return;
   try {
-    const task = await getTaskSnapshot(ticketId);
-    knownTasks.set(ticketId, { workFolder: task.workFolder });
+    const task = await getTaskSnapshot(taskId);
+    knownTasks.set(taskId, { workFolder: task.workFolder, runId: task.runId });
     sendJson(backendSocket, {
       type: "task.snapshot",
-      ticketId,
+      taskId,
       task,
     });
   } catch (error) {
-    log(`failed to push snapshot for ${ticketId}: ${error.message}`);
+    log(`failed to push snapshot for ${taskId}: ${error.message}`);
   }
 }
 
@@ -214,27 +215,28 @@ async function bootstrapTasks() {
   const folders = await listWorkFolders().catch(() => []);
   for (const folder of folders) {
     for (const task of folder.tasks || []) {
-      knownTasks.set(task.ticketId, { workFolder: folder.path });
-      await pushTaskSnapshot(task.ticketId);
+      knownTasks.set(task.taskId, { workFolder: folder.path, runId: task.runId || "" });
+      await pushTaskSnapshot(task.taskId);
     }
   }
 }
 
-function attachLocalTask(ticketId, workFolder, options = {}) {
-  const existing = localTaskSockets.get(ticketId);
+function attachLocalTask(taskId, workFolder, options = {}) {
+  const existing = localTaskSockets.get(taskId);
   if (existing && existing.readyState === WebSocket.OPEN) return existing;
 
   const socket = new WebSocket(localWsUrl);
-  localTaskSockets.set(ticketId, socket);
-  knownTasks.set(ticketId, { workFolder });
+  localTaskSockets.set(taskId, socket);
+  knownTasks.set(taskId, { workFolder });
 
   socket.on("open", () => {
     sendJson(socket, {
       type: "start",
-      ticketId,
+      taskId,
       workFolder,
-      promptValues: options.promptValues || {},
+      contextValues: options.contextValues || {},
       images: options.images || [],
+      runId: options.runId || "",
     });
   });
 
@@ -247,7 +249,7 @@ function attachLocalTask(ticketId, workFolder, options = {}) {
     }
 
     if (message.type === "state" && message.state) {
-      knownTasks.set(ticketId, {
+      knownTasks.set(taskId, {
         workFolder: message.state.originalWorkFolder || message.state.workFolder || workFolder,
       });
     }
@@ -256,7 +258,7 @@ function attachLocalTask(ticketId, workFolder, options = {}) {
 
     sendJson(backendSocket, {
       type: "task.event",
-      ticketId,
+      taskId,
       event: message,
     });
 
@@ -266,24 +268,24 @@ function attachLocalTask(ticketId, workFolder, options = {}) {
       message.type === "phase_artifact" ||
       message.type === "user_message"
     ) {
-      await pushTaskSnapshot(ticketId);
+      await pushTaskSnapshot(taskId);
     }
   });
 
   socket.on("close", () => {
-    localTaskSockets.delete(ticketId);
+    localTaskSockets.delete(taskId);
   });
 
   socket.on("error", (error) => {
-    log(`local ws error for ${ticketId}: ${error.message}`);
+    log(`local ws error for ${taskId}: ${error.message}`);
   });
 
   return socket;
 }
 
 async function handleCommand(message) {
-  const { commandId, ticketId, command, payload } = message;
-  const taskInfo = knownTasks.get(ticketId);
+  const { commandId, taskId, command, payload } = message;
+  const taskInfo = knownTasks.get(taskId);
   const workFolder = payload?.workFolder || taskInfo?.workFolder || defaultWorkFolder;
 
   const sendResult = (status, error = "") => {
@@ -301,19 +303,21 @@ async function handleCommand(message) {
   }
 
   if (command === "start_workflow") {
-    if (!ticketId || !workFolder) {
-      sendResult("error", "ticketId and workFolder are required");
+    if (!taskId || !workFolder) {
+      sendResult("error", "taskId and workFolder are required");
       return;
     }
     try {
       const workflowFilename = String(payload?.workflowFilename || "").trim();
-      const imagePaths = await normalizeImagePayload(ticketId, payload?.images || []);
+      const runId = String(payload?.runId || knownTasks.get(taskId)?.runId || "").trim() || `run-${Date.now()}`;
+      const imagePaths = await normalizeImagePayload(runId, payload?.images || []);
       if (workflowFilename) {
         await activateWorkflow(workflowFilename);
       }
-      const socket = attachLocalTask(ticketId, workFolder, {
-        promptValues: payload?.promptValues || {},
+      const socket = attachLocalTask(taskId, workFolder, {
+        contextValues: payload?.contextValues || {},
         images: imagePaths,
+        runId,
       });
       if (socket.readyState === WebSocket.OPEN) {
         sendResult("ok");
@@ -331,22 +335,22 @@ async function handleCommand(message) {
   }
 
   if (command === "delete_task") {
-    if (!ticketId) {
-      sendResult("error", "ticketId is required");
+    if (!taskId) {
+      sendResult("error", "taskId is required");
       return;
     }
     try {
-      await fetchJson(`${localApiBase}/tasks/${ticketId}`, {
+      await fetchJson(`${localApiBase}/tasks/${taskId}`, {
         method: "DELETE",
       });
-      knownTasks.delete(ticketId);
-      const existingSocket = localTaskSockets.get(ticketId);
+      knownTasks.delete(taskId);
+      const existingSocket = localTaskSockets.get(taskId);
       if (existingSocket && existingSocket.readyState <= WebSocket.OPEN) {
         existingSocket.close();
       }
       sendJson(backendSocket, {
         type: "task.removed",
-        ticketId,
+        taskId,
       });
       sendResult("ok");
     } catch (error) {
@@ -360,24 +364,24 @@ async function handleCommand(message) {
     return;
   }
 
-  const socket = attachLocalTask(ticketId, workFolder);
+  const socket = attachLocalTask(taskId, workFolder);
 
   const onOpen = async () => {
     try {
       if (command === "approve") {
-        sendJson(socket, { type: "approve", ticketId });
+        sendJson(socket, { type: "approve", taskId });
       } else if (command === "reject") {
-        sendJson(socket, { type: "reject", ticketId, rejectTo: payload?.rejectTo });
+        sendJson(socket, { type: "reject", taskId, rejectTo: payload?.rejectTo });
       } else if (command === "message") {
-        const imagePaths = await normalizeImagePayload(ticketId, payload?.images || []);
+        const imagePaths = await normalizeImagePayload(taskId, payload?.images || []);
         sendJson(socket, {
           type: "message",
-          ticketId,
+          taskId,
           text: payload?.text || "",
           images: imagePaths,
         });
       } else if (command === "sync_task") {
-        pushTaskSnapshot(ticketId).then(() => sendResult("ok")).catch((error) => sendResult("error", error.message));
+        pushTaskSnapshot(taskId).then(() => sendResult("ok")).catch((error) => sendResult("error", error.message));
         return;
       } else {
         sendResult("error", "unsupported command");
@@ -427,17 +431,17 @@ async function handleQuery(message) {
         reply(true, { task: null });
         return;
       }
-      const ticketId = String(payload?.ticketId || "").trim();
-      if (!ticketId) {
-        reply(false, {}, "ticketId is required");
+      const taskId = String(payload?.taskId || "").trim();
+      if (!taskId) {
+        reply(false, {}, "taskId is required");
         return;
       }
-      const taskInfo = knownTasks.get(ticketId);
+      const taskInfo = knownTasks.get(taskId);
       try {
-        const task = await getTaskSnapshot(ticketId, taskInfo?.workFolder || "");
+        const task = await getTaskSnapshot(taskId, taskInfo?.workFolder || "");
         reply(true, { task });
       } catch (error) {
-        if (error.message === "ticket not found") {
+        if (error.message === "task not found") {
           reply(true, { task: null });
           return;
         }

@@ -56,13 +56,30 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 640,
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 16 },
+    trafficLightPosition: { x: 18, y: 8 },
     backgroundColor: "#f5f5f7",
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    const key = String(input.key || "");
+    const isReloadShortcut =
+      input.type === "keyDown" &&
+      (
+        key === "F5" ||
+        (
+          key.toLowerCase() === "r" &&
+          (input.meta || input.control)
+        )
+      );
+
+    if (isReloadShortcut) {
+      event.preventDefault();
+    }
   });
 
   if (isDev) {
@@ -91,29 +108,30 @@ function registerIpcHandlers() {
   ipcMain.handle("app:list-workfolders", () => listWorkFolders());
   ipcMain.handle("app:add-workfolder", (_event, path) => addWorkFolder(path));
   ipcMain.handle("app:remove-workfolder", (_event, path) => removeWorkFolder(path));
-  ipcMain.handle("app:get-task-state", (_event, ticketId) => getTaskState(ticketId));
-  ipcMain.handle("app:remove-task", (_event, ticketId) => removeTask(ticketId));
-  ipcMain.handle("app:save-task-uploads", (_event, ticketId, filePaths) => saveTaskUploads(ticketId, filePaths));
+  ipcMain.handle("app:get-task-state", (_event, taskId) => getTaskState(taskId));
+  ipcMain.handle("app:remove-task", (_event, taskId) => removeTask(taskId));
+  ipcMain.handle("app:save-task-uploads", (_event, taskId, filePaths) => saveTaskUploads(taskId, filePaths));
   ipcMain.handle("app:start-workflow", (event, payload) =>
     startWorkflowSession(
-      payload.ticketId,
+      payload.taskId,
       payload.workFolder,
-      payload.promptValues,
+      payload.contextValues,
       payload.images,
+      payload.runId,
       (message) => event.sender.send("workflow:event", message),
     )
   );
-  ipcMain.handle("app:approve-workflow", (event, ticketId) =>
-    approveWorkflow(ticketId, (message) => event.sender.send("workflow:event", message))
+  ipcMain.handle("app:approve-workflow", (event, taskId) =>
+    approveWorkflow(taskId, (message) => event.sender.send("workflow:event", message))
   );
-  ipcMain.handle("app:reject-workflow", (event, ticketId, rejectTo) =>
-    rejectWorkflow(ticketId, rejectTo, (message) => event.sender.send("workflow:event", message))
+  ipcMain.handle("app:reject-workflow", (event, taskId, rejectTo) =>
+    rejectWorkflow(taskId, rejectTo, (message) => event.sender.send("workflow:event", message))
   );
-  ipcMain.handle("app:send-workflow-message", (event, ticketId, text, images) =>
-    sendWorkflowMessage(ticketId, text, images, (message) => event.sender.send("workflow:event", message))
+  ipcMain.handle("app:send-workflow-message", (event, taskId, text, images) =>
+    sendWorkflowMessage(taskId, text, images, (message) => event.sender.send("workflow:event", message))
   );
-  ipcMain.on("workflow:detach", (_event, ticketId) => {
-    detachWorkflowSender(ticketId);
+  ipcMain.on("workflow:detach", (_event, taskId) => {
+    detachWorkflowSender(taskId);
   });
 }
 

@@ -437,7 +437,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
 
     try {
       await _dio.post(
-        "${_baseUrlController.text.trim()}/api/tasks/${task["deviceId"]}/${task["ticketId"]}/commands",
+        "${_baseUrlController.text.trim()}/api/tasks/${task["deviceId"]}/${task["taskId"]}/commands",
         data: {
           "type": command,
           "payload": payload ?? const {},
@@ -474,7 +474,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
         return CupertinoAlertDialog(
           title: Text(strings.deleteTask),
           content: Text(
-            strings.deleteTaskConfirm(task["ticketId"]?.toString() ?? "-"),
+            strings.deleteTaskConfirm(task["taskId"]?.toString() ?? "-"),
           ),
           actions: [
             CupertinoDialogAction(
@@ -527,21 +527,23 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
 
   Future<void> _startWorkflow({
     required String deviceId,
-    required String ticketId,
+    required String taskId,
+    required String runId,
     required String workFolder,
     required String workflowFilename,
-    required Map<String, String> promptValues,
+    required Map<String, String> contextValues,
     required List<Map<String, dynamic>> images,
   }) async {
     try {
       await _dio.post(
-        "${_baseUrlController.text.trim()}/api/tasks/$deviceId/$ticketId/commands",
+        "${_baseUrlController.text.trim()}/api/tasks/$deviceId/$taskId/commands",
         data: {
           "type": "start_workflow",
           "payload": {
+            "runId": runId,
             "workFolder": workFolder,
             "workflowFilename": workflowFilename,
-            "promptValues": promptValues,
+            "contextValues": contextValues,
             "images": images,
           },
         },
@@ -603,10 +605,11 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
     try {
       await _startWorkflow(
         deviceId: onlineDevices.first["deviceId"]?.toString() ?? "",
-        ticketId: result.ticketId,
+        taskId: result.taskId,
+        runId: result.runId,
         workFolder: result.workFolder,
         workflowFilename: result.workflowFilename,
-        promptValues: result.promptValues,
+        contextValues: result.contextValues,
         images: result.images.map((image) => image.toPayload()).toList(),
       );
     } finally {
@@ -786,7 +789,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              selectedTask["ticketId"]?.toString() ?? "-",
+                              selectedTask["taskId"]?.toString() ?? "-",
                               style: const TextStyle(
                                 fontSize: 28,
                                 fontWeight: FontWeight.w700,
@@ -1042,7 +1045,7 @@ class _TaskCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      task["ticketId"]?.toString() ?? "-",
+                      task["taskId"]?.toString() ?? "-",
                       style: const TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w600,
@@ -1160,17 +1163,19 @@ class _SelectedImageStrip extends StatelessWidget {
 
 class _StartWorkflowResult {
   const _StartWorkflowResult({
-    required this.ticketId,
+    required this.taskId,
+    required this.runId,
     required this.workFolder,
     required this.workflowFilename,
-    required this.promptValues,
+    required this.contextValues,
     required this.images,
   });
 
-  final String ticketId;
+  final String taskId;
+  final String runId;
   final String workFolder;
   final String workflowFilename;
-  final Map<String, String> promptValues;
+  final Map<String, String> contextValues;
   final List<_SelectedImage> images;
 }
 
@@ -1317,28 +1322,20 @@ class _StartWorkflowSheetState extends State<_StartWorkflowSheet> {
     );
   }
 
-  List<Map<String, dynamic>> get _displayPrompts {
+  List<Map<String, dynamic>> get _displayContextFields {
     final selected = widget.workflows.cast<Map<String, dynamic>?>().firstWhere(
           (workflow) => workflow?["filename"]?.toString() == _selectedWorkflow,
           orElse: () => widget.workflows.first,
         );
-    final prompts = ((selected?["prompts"] as List?) ?? const [])
+    return ((selected?["contextFields"] as List?) ?? const [])
         .whereType<Map>()
         .map((entry) => Map<String, dynamic>.from(entry))
         .toList();
-    if (prompts.isNotEmpty) return prompts;
-    return [
-      {
-        "key": "ticketId",
-        "label": strings.instanceId,
-        "placeholder": strings.enterIdentifier,
-      },
-    ];
   }
 
   void _syncPromptControllers() {
-    final nextKeys = _displayPrompts
-        .map((prompt) => prompt["key"]?.toString() ?? "")
+    final nextKeys = _displayContextFields
+        .map((field) => field["key"]?.toString() ?? "")
         .where((key) => key.isNotEmpty)
         .toSet();
 
@@ -1355,24 +1352,29 @@ class _StartWorkflowSheetState extends State<_StartWorkflowSheet> {
   }
 
   void _submit() {
-    final promptValues = <String, String>{};
-    for (final prompt in _displayPrompts) {
-      final key = prompt["key"]?.toString() ?? "";
-      promptValues[key] = _controllers[key]?.text.trim() ?? "";
+    final contextValues = <String, String>{};
+    for (final field in _displayContextFields) {
+      final key = field["key"]?.toString() ?? "";
+      contextValues[key] = _controllers[key]?.text.trim() ?? "";
     }
-    if (promptValues.values.any((value) => value.isEmpty)) return;
+    if (contextValues.values.any((value) => value.isEmpty)) return;
 
-    final firstKey = _displayPrompts.first["key"]?.toString() ?? "ticketId";
-    final ticketId = promptValues["ticketId"]?.trim().isNotEmpty == true
-        ? promptValues["ticketId"]!.trim()
-        : promptValues[firstKey]!.trim();
+    final firstKey = _displayContextFields.isNotEmpty
+        ? _displayContextFields.first["key"]?.toString() ?? ""
+        : "";
+    final taskId = firstKey.isNotEmpty &&
+            (contextValues[firstKey]?.trim().isNotEmpty ?? false)
+        ? contextValues[firstKey]!.trim()
+        : "task-${DateTime.now().millisecondsSinceEpoch}";
+    final runId = "run-${DateTime.now().millisecondsSinceEpoch}";
 
     Navigator.of(context).pop(
       _StartWorkflowResult(
-        ticketId: ticketId,
+        taskId: taskId,
+        runId: runId,
         workFolder: _selectedFolder,
         workflowFilename: _selectedWorkflow,
-        promptValues: promptValues,
+        contextValues: contextValues,
         images: _images,
       ),
     );
@@ -1463,11 +1465,11 @@ class _StartWorkflowSheetState extends State<_StartWorkflowSheet> {
                       onTap: _pickFolder,
                     ),
                     const SizedBox(height: 12),
-                    ..._displayPrompts.map((prompt) {
-                      final key = prompt["key"]?.toString() ?? "";
-                      final label = prompt["label"]?.toString() ?? key;
+                    ..._displayContextFields.map((field) {
+                      final key = field["key"]?.toString() ?? "";
+                      final label = field["label"]?.toString() ?? key;
                       final placeholder =
-                          prompt["placeholder"]?.toString() ?? "";
+                          field["placeholder"]?.toString() ?? "";
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Column(

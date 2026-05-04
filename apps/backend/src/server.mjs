@@ -44,12 +44,12 @@ function publicDevice(connection) {
 function publicTask(task, fallback = {}) {
   if (!task) return null;
   const deviceId = String(task.deviceId || fallback.deviceId || "").trim();
-  const ticketId = String(task.ticketId || fallback.ticketId || "").trim();
-  if (!deviceId || !ticketId) return null;
+  const taskId = String(task.taskId || fallback.taskId || "").trim();
+  if (!deviceId || !taskId) return null;
   return {
-    key: task.key || `${deviceId}:${ticketId}`,
+    key: task.key || `${deviceId}:${taskId}`,
     deviceId,
-    ticketId,
+    taskId,
     workFolder: task.workFolder || "",
     state: task.state || null,
     messages: task.messages || {},
@@ -157,9 +157,9 @@ async function listTasksForDevice(deviceId) {
     .filter(Boolean);
 }
 
-async function getTaskForDevice(deviceId, ticketId) {
-  const data = await createDesktopRequest(deviceId, "get_task", { ticketId });
-  return publicTask(data.task, { deviceId, ticketId });
+async function getTaskForDevice(deviceId, taskId) {
+  const data = await createDesktopRequest(deviceId, "get_task", { taskId });
+  return publicTask(data.task, { deviceId, taskId });
 }
 
 async function listAllTasks() {
@@ -183,11 +183,11 @@ async function broadcastDeviceTasks(deviceId) {
   }
 }
 
-function createPendingCommand(deviceId, ticketId, type, payload = {}) {
+function createPendingCommand(deviceId, taskId, type, payload = {}) {
   const command = {
     id: nanoid(),
     deviceId,
-    ticketId,
+    taskId,
     type,
     payload,
     status: "pending",
@@ -220,16 +220,16 @@ function resolvePendingCommand(commandId, status, error = "") {
   return pending.command;
 }
 
-function sendCommandToDesktop(deviceId, ticketId, type, payload = {}) {
+function sendCommandToDesktop(deviceId, taskId, type, payload = {}) {
   const connection = desktopConnections.get(deviceId);
   if (!connection || connection.socket.readyState !== 1 || !isDeviceExposed(connection)) {
     throw new Error("device is offline");
   }
-  const command = createPendingCommand(deviceId, ticketId, type, payload);
+  const command = createPendingCommand(deviceId, taskId, type, payload);
   sendJson(connection.socket, {
     type: "command.request",
     commandId: command.id,
-    ticketId,
+    taskId,
     command: type,
     payload,
   });
@@ -251,10 +251,10 @@ fastify.get("/api/tasks", async () => ({
   tasks: await listAllTasks(),
 }));
 
-fastify.get("/api/tasks/:deviceId/:ticketId", async (request, reply) => {
-  const { deviceId, ticketId } = request.params;
+fastify.get("/api/tasks/:deviceId/:taskId", async (request, reply) => {
+  const { deviceId, taskId } = request.params;
   try {
-    const task = await getTaskForDevice(deviceId, ticketId);
+    const task = await getTaskForDevice(deviceId, taskId);
     if (!task) return reply.code(404).send({ error: "task not found" });
     return { task };
   } catch (error) {
@@ -266,14 +266,14 @@ fastify.get("/api/tasks/:deviceId/:ticketId", async (request, reply) => {
   }
 });
 
-fastify.post("/api/tasks/:deviceId/:ticketId/commands", async (request, reply) => {
-  const { deviceId, ticketId } = request.params;
+fastify.post("/api/tasks/:deviceId/:taskId/commands", async (request, reply) => {
+  const { deviceId, taskId } = request.params;
   const { type, payload } = request.body || {};
   if (!ALLOWED_COMMANDS.has(type)) {
     return reply.code(400).send({ error: "unsupported command" });
   }
   try {
-    const command = sendCommandToDesktop(deviceId, ticketId, type, payload || {});
+    const command = sendCommandToDesktop(deviceId, taskId, type, payload || {});
     return { command };
   } catch (error) {
     const message = error instanceof Error ? error.message : "request failed";
@@ -342,7 +342,7 @@ fastify.get("/ws/desktop", { websocket: true }, (socket) => {
     if (message.type === "task.snapshot") {
       const task = publicTask(message.task, {
         deviceId,
-        ticketId: message.ticketId,
+        taskId: message.taskId,
       });
       if (task) {
         broadcastMobile({ type: "task.snapshot", task });
@@ -354,14 +354,14 @@ fastify.get("/ws/desktop", { websocket: true }, (socket) => {
       if (message.task) {
         const task = publicTask(message.task, {
           deviceId,
-          ticketId: message.ticketId,
+          taskId: message.taskId,
         });
         if (task) {
           broadcastMobile({
             type: "task.event",
             taskId: task.key,
             deviceId,
-            ticketId: task.ticketId,
+            taskId: task.taskId,
             event: message.event,
             task,
           });
@@ -373,9 +373,9 @@ fastify.get("/ws/desktop", { websocket: true }, (socket) => {
     if (message.type === "task.removed") {
       broadcastMobile({
         type: "tasks.remove_task",
-        taskKey: `${deviceId}:${message.ticketId}`,
+        taskKey: `${deviceId}:${message.taskId}`,
         deviceId,
-        ticketId: message.ticketId,
+        taskId: message.taskId,
       });
       return;
     }
@@ -447,7 +447,7 @@ fastify.get("/ws/mobile", { websocket: true }, (socket) => {
     }
 
     if (message.type === "command.create") {
-      const { deviceId: targetDeviceId, ticketId, command, payload } = message;
+      const { deviceId: targetDeviceId, taskId, command, payload } = message;
       if (!ALLOWED_COMMANDS.has(command)) {
         sendJson(socket, { type: "command.error", error: "unsupported command" });
         return;
@@ -455,7 +455,7 @@ fastify.get("/ws/mobile", { websocket: true }, (socket) => {
       try {
         const created = sendCommandToDesktop(
           String(targetDeviceId || "").trim(),
-          String(ticketId || "").trim(),
+          String(taskId || "").trim(),
           command,
           payload || {}
         );

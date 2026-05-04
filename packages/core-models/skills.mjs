@@ -1,9 +1,7 @@
 import { basename, join } from "path";
-import { cp, mkdir, readdir, readFile, rm, rename, stat, writeFile } from "fs/promises";
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "fs/promises";
 import { existsSync, readFileSync } from "fs";
 import { getSkillsDir } from "./config.mjs";
-
-const LEGACY_FORMATS = ["codex", "claude"];
 
 function slugify(name) {
   return String(name || "")
@@ -13,30 +11,41 @@ function slugify(name) {
     .replace(/^-|-$/g, "");
 }
 
+function normalizeContent(content) {
+  return String(content || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n");
+}
+
+function skillDir(slug) {
+  const cleanSlug = slugify(slug);
+  if (!cleanSlug) throw new Error("skill name is required");
+  return join(getSkillsDir(), cleanSlug);
+}
+
 function skillFile(slug) {
-  const cleanSlug = slugify(slug);
-  if (!cleanSlug) throw new Error("skill name is required");
-  return join(getSkillsDir(), cleanSlug, "SKILL.md");
+  return join(skillDir(slug), "SKILL.md");
 }
 
-function legacySkillFile(format, slug) {
-  const cleanSlug = slugify(slug);
-  if (!cleanSlug) throw new Error("skill name is required");
-  return join(getSkillsDir(), format, cleanSlug, "SKILL.md");
-}
-
-function parseFrontmatter(content) {
-  const match = String(content || "").match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!match) return { name: "", description: "", body: String(content || "") };
+function parseSkillContent(content) {
+  const normalized = normalizeContent(content);
+  const match = normalized.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) {
+    return {
+      name: "",
+      description: "",
+      body: normalized.trim(),
+      content: normalized,
+    };
+  }
 
   const meta = match[1];
-  const name = meta.match(/^name:\s*["']?(.+?)["']?\s*$/m)?.[1] || "";
-  const description = meta.match(/^description:\s*["']?([\s\S]*?)["']?\s*$/m)?.[1] || "";
-
+  const body = normalized.slice(match[0].length).trim();
   return {
-    name,
-    description,
-    body: String(content || "").slice(match[0].length),
+    name: meta.match(/^name:\s*["']?(.+?)["']?\s*$/m)?.[1]?.trim() || "",
+    description: meta.match(/^description:\s*["']?(.+?)["']?\s*$/m)?.[1]?.trim() || "",
+    body,
+    content: normalized,
   };
 }
 
@@ -45,6 +54,8 @@ function buildSkillContent({ name, description, body }) {
   const skillDescription = String(description || "").trim();
   const skillBody = String(body || "").trim();
 
+  if (!skillName) throw new Error("skill name is required");
+
   return [
     "---",
     `name: ${JSON.stringify(skillName)}`,
@@ -52,7 +63,26 @@ function buildSkillContent({ name, description, body }) {
     "---",
     "",
     skillBody,
-  ].join("\n").trimEnd() + "\n";
+    "",
+  ].join("\n");
+}
+
+async function readSkill(slug) {
+  const content = await readFile(skillFile(slug), "utf-8");
+  const parsed = parseSkillContent(content);
+
+  return {
+    id: slug,
+    slug,
+    name: parsed.name || slug,
+    description: parsed.description || "",
+    body: parsed.body || "",
+    content: buildSkillContent({
+      name: parsed.name || slug,
+      description: parsed.description || "",
+      body: parsed.body || "",
+    }),
+  };
 }
 
 async function sourceSkillDir(sourcePath) {
@@ -69,67 +99,31 @@ async function sourceSkillDir(sourcePath) {
 }
 
 async function copySkillDir(sourceDir) {
-  const sourceSkillFile = join(sourceDir, "SKILL.md");
-  const sourceStat = await stat(sourceSkillFile).catch(() => null);
+  const sourceFile = join(sourceDir, "SKILL.md");
+  const sourceStat = await stat(sourceFile).catch(() => null);
   if (!sourceStat?.isFile()) throw new Error("skill folder must contain SKILL.md");
 
-  const content = await readFile(sourceSkillFile, "utf-8");
-  const meta = parseFrontmatter(content);
-  const baseSlug = slugify(meta.name || basename(sourceDir));
+  const parsed = parseSkillContent(await readFile(sourceFile, "utf-8"));
+  const baseSlug = slugify(parsed.name || basename(sourceDir));
   if (!baseSlug) throw new Error("skill name is required");
 
   let slug = baseSlug;
   let suffix = 2;
-  while (existsSync(join(getSkillsDir(), slug))) {
+  while (existsSync(skillDir(slug))) {
     slug = `${baseSlug}-${suffix}`;
     suffix += 1;
   }
 
-  const targetDir = join(getSkillsDir(), slug);
   await mkdir(getSkillsDir(), { recursive: true });
-  await cp(sourceDir, targetDir, { recursive: true });
+  await cp(sourceDir, skillDir(slug), { recursive: true });
   return readSkill(slug);
-}
-
-async function readSkillFromFile(slug, file) {
-  const content = await readFile(file, "utf-8");
-  const meta = parseFrontmatter(content);
-
-  return {
-    id: slug,
-    slug,
-    name: meta.name || slug,
-    description: meta.description || "",
-    content,
-  };
-}
-
-function readSkillFromFileSync(slug, file) {
-  const content = readFileSync(file, "utf-8");
-  const meta = parseFrontmatter(content);
-
-  return {
-    id: slug,
-    slug,
-    name: meta.name || slug,
-    description: meta.description || "",
-    content,
-  };
-}
-
-async function readSkill(slug) {
-  return readSkillFromFile(slug, skillFile(slug));
-}
-
-function readSkillSync(slug) {
-  return readSkillFromFileSync(slug, skillFile(slug));
 }
 
 export async function listManagedSkills() {
   const root = getSkillsDir();
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   const skills = [];
 
-  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     try {
@@ -137,78 +131,65 @@ export async function listManagedSkills() {
     } catch {}
   }
 
-  const seen = new Set(skills.map((skill) => skill.slug));
-  for (const format of LEGACY_FORMATS) {
-    const formatDir = join(root, format);
-    const legacyEntries = await readdir(formatDir, { withFileTypes: true }).catch(() => []);
-    for (const entry of legacyEntries) {
-      if (!entry.isDirectory() || seen.has(entry.name)) continue;
-      try {
-        skills.push(await readSkillFromFile(entry.name, legacySkillFile(format, entry.name)));
-        seen.add(entry.name);
-      } catch {}
-    }
-  }
-
   return skills.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function readManagedSkillContentSync(ref) {
-  const normalizedRef = String(ref || "");
-  const slug = slugify(normalizedRef.includes(":") ? normalizedRef.split(":").pop() : normalizedRef);
+  const slug = slugify(ref);
   if (!slug) return "";
   try {
-    return readSkillSync(slug).content;
+    const content = readFileSync(skillFile(slug), "utf-8");
+    const parsed = parseSkillContent(content);
+    return buildSkillContent({
+      name: parsed.name || slug,
+      description: parsed.description || "",
+      body: parsed.body || "",
+    });
   } catch {
-    for (const format of LEGACY_FORMATS) {
-      try {
-        return readSkillFromFileSync(slug, legacySkillFile(format, slug)).content;
-      } catch {}
-    }
+    return "";
   }
-  return "";
 }
 
 export async function saveManagedSkill(input) {
   const name = String(input?.name || "").trim();
-  if (!name) throw new Error("skill name is required");
-
+  const description = String(input?.description || "").trim();
+  const body = String(input?.body || "").trim();
+  const oldSlug = slugify(input?.originalSlug || name);
   const slug = slugify(name);
-  const content = buildSkillContent({
-    name,
-    description: input?.description || "",
-    body: input?.body || "",
-  });
 
-  const oldSlug = input?.originalSlug;
-  if (oldSlug && slugify(oldSlug) !== slug) {
-    const oldDir = join(getSkillsDir(), slugify(oldSlug));
-    const newDir = join(getSkillsDir(), slug);
-    const oldStat = await stat(oldDir).catch(() => null);
-    if (oldStat?.isDirectory()) await rename(oldDir, newDir).catch(async () => {
-      await rm(oldDir, { recursive: true, force: true });
-    });
+  if (!name) throw new Error("skill name is required");
+  if (!slug) throw new Error("skill name is required");
+
+  const content = buildSkillContent({ name, description, body });
+  const targetDir = skillDir(slug);
+  const targetFile = skillFile(slug);
+  const oldDir = oldSlug ? skillDir(oldSlug) : "";
+
+  await mkdir(getSkillsDir(), { recursive: true });
+
+  if (oldDir && oldDir !== targetDir && existsSync(oldDir)) {
+    if (existsSync(targetDir)) {
+      throw new Error("skill with this name already exists");
+    }
+    await rm(oldDir, { recursive: true, force: true });
   }
 
-  const file = skillFile(slug);
-  await mkdir(join(getSkillsDir(), slug), { recursive: true });
-  await writeFile(file, content);
+  await mkdir(targetDir, { recursive: true });
+  await writeFile(targetFile, content);
   return readSkill(slug);
 }
 
 export async function deleteManagedSkill(slug) {
   const cleanSlug = slugify(slug);
   if (!cleanSlug) throw new Error("skill name is required");
-  const dir = join(getSkillsDir(), cleanSlug);
-  if (!existsSync(dir)) return;
-  await rm(dir, { recursive: true, force: true });
+  await rm(skillDir(cleanSlug), { recursive: true, force: true });
 }
 
 export async function importManagedSkills(sourcePath) {
   const sourceDir = await sourceSkillDir(sourcePath);
-  const sourceStat = await stat(join(sourceDir, "SKILL.md")).catch(() => null);
+  const directSkill = await stat(join(sourceDir, "SKILL.md")).catch(() => null);
 
-  if (sourceStat?.isFile()) {
+  if (directSkill?.isFile()) {
     return [await copySkillDir(sourceDir)];
   }
 

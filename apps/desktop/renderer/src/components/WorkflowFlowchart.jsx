@@ -12,6 +12,20 @@ function titleCase(value) {
   return String(value || "").replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function outputText(phase) {
+  const outputs = Array.isArray(phase?.outputs) ? phase.outputs : [];
+  if (phase?.type === "checkpoint") {
+    const publish = Array.isArray(phase?.checkpoint?.publish) ? phase.checkpoint.publish : [];
+    return publish.map((rule) => rule.asOutputKey || rule.filename).filter(Boolean).join(", ");
+  }
+  return outputs.map((output) => output.key || output.filename).filter(Boolean).join(", ");
+}
+
+function inputText(phase) {
+  const inputs = Array.isArray(phase?.inputs) ? phase.inputs : [];
+  return inputs.map((input) => input.name || input.outputKey).filter(Boolean).join(", ");
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -24,8 +38,8 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
   const nodeH = 74;
   const agentX = 416;
   const agentW = 178;
-  const docX = 708;
-  const docW = 118;
+  const docX = 690;
+  const docW = 150;
   const stepY = 136;
   const startY = 42;
   const height = Math.max(520, startY + phases.length * stepY + 40);
@@ -287,10 +301,10 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
                   <text
                     x={nodeX + nodeW / 2 + 10}
                     y={(fromY + toY) / 2}
-                  fill="var(--fg)"
-                  fontSize="13"
-                  fontWeight="600"
-                >
+                    fill="var(--fg)"
+                    fontSize="13"
+                    fontWeight="600"
+                  >
                     {t("flowchart.approve")}
                   </text>
                 )}
@@ -300,7 +314,7 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
 
           {phases.flatMap((phase, idx) => {
             if (phase.type !== "checkpoint") return [];
-            return (phase.rejectTargets || []).map((targetId, targetIdx) => {
+            return (phase.checkpoint?.rejectTargets || []).map((targetId, targetIdx) => {
               const targetPhaseIdx = phases.findIndex((item) => item.id === targetId);
               if (targetPhaseIdx < 0) return null;
               const laneX = nodeX - 34 - targetIdx * 22;
@@ -325,7 +339,7 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
                     fontWeight="700"
                     textAnchor="start"
                   >
-                    {t("flowchart.reject")}
+                    {t("editor.action.reject")}
                   </text>
                 </g>
               );
@@ -338,7 +352,8 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
             const isAuto = phase.type === "auto";
             const label = phase.label || phase.id || t("editor.unnamed");
             const backend = phase.aiBackend === "codex" ? t("flowchart.codexInstance") : t("flowchart.claudeInstance");
-            const artifact = phase.artifact || "artifact.md";
+            const inputSummary = inputText(phase) || "none";
+            const outputSummary = outputText(phase) || "none";
             return (
               <g key={phase.id || idx}>
                 <g
@@ -382,18 +397,41 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
                   </text>
                 </g>
 
-                {isAuto && (
+                <>
+                  <path
+                    d={`M ${nodeX + nodeW} ${centerY(idx)} H ${agentX - 12}`}
+                    fill="none"
+                    stroke="var(--muted-fg)"
+                    strokeWidth="1.8"
+                    markerEnd="url(#workflow-arrow)"
+                  />
+                  <text
+                    x={(nodeX + nodeW + agentX) / 2}
+                    y={centerY(idx) - 11}
+                    fill="var(--fg)"
+                    fontSize="12"
+                    fontWeight="700"
+                    textAnchor="middle"
+                  >
+                    {t("flowchart.consumes")}
+                  </text>
+                  <text
+                    x={(nodeX + nodeW + agentX) / 2}
+                    y={centerY(idx) + 11}
+                    fill="var(--muted-fg)"
+                    fontSize="11"
+                    fontWeight="600"
+                    textAnchor="middle"
+                  >
+                    {shortText(inputSummary, 24)}
+                  </text>
+                </>
+
+                {isAuto ? (
                   <>
-                    <path
-                      d={`M ${nodeX + nodeW} ${centerY(idx)} H ${agentX - 12}`}
-                      fill="none"
-                      stroke="var(--muted-fg)"
-                      strokeWidth="1.8"
-                      markerEnd="url(#workflow-arrow)"
-                    />
                     <text
                       x={(nodeX + nodeW + agentX) / 2}
-                      y={centerY(idx) - 9}
+                      y={centerY(idx) - 31}
                       fill="var(--fg)"
                       fontSize="13"
                       fontWeight="700"
@@ -431,47 +469,81 @@ export default function WorkflowFlowchart({ phases, selectedIdx, onSelectPhase }
                     >
                       {t("flowchart.generatedStep")}
                     </text>
-                    <path
-                      d={`M ${agentX + agentW} ${centerY(idx)} H ${docX - 12}`}
-                      fill="none"
-                      stroke="var(--muted-fg)"
-                      strokeWidth="1.8"
-                      markerEnd="url(#workflow-arrow)"
-                    />
-                    <path
-                      d={`M ${docX} ${y - 10} H ${docX + docW - 34} L ${docX + docW} ${y + 16} V ${y + nodeH + 18} H ${docX} Z`}
+                  </>
+                ) : (
+                  <>
+                    <rect
+                      x={agentX}
+                      y={y}
+                      width={agentW}
+                      height={nodeH}
+                      rx="5"
                       fill="var(--card)"
                       stroke="var(--fg)"
                       strokeWidth="1.4"
                     />
-                    <path
-                      d={`M ${docX + docW - 34} ${y - 10} V ${y + 16} H ${docX + docW}`}
-                      fill="none"
-                      stroke="var(--fg)"
-                      strokeWidth="1.4"
-                    />
                     <text
-                      x={docX + docW / 2}
-                      y={y + 27}
+                      x={agentX + agentW / 2}
+                      y={y + 28}
                       fill="var(--fg)"
                       fontSize="14"
                       fontWeight="700"
                       textAnchor="middle"
                     >
-                      {t("flowchart.addUpdate")}
+                      {t("flowchart.publishes")}
                     </text>
                     <text
-                      x={docX + docW / 2}
-                      y={y + 48}
-                      fill="var(--fg)"
-                      fontSize="14"
-                      fontWeight="700"
+                      x={agentX + agentW / 2}
+                      y={y + 49}
+                      fill="var(--muted-fg)"
+                      fontSize="11"
+                      fontWeight="600"
                       textAnchor="middle"
                     >
-                      {shortText(artifact, 15)}
+                      {shortText(outputSummary, 22)}
                     </text>
                   </>
                 )}
+
+                <path
+                  d={`M ${agentX + agentW} ${centerY(idx)} H ${docX - 12}`}
+                  fill="none"
+                  stroke="var(--muted-fg)"
+                  strokeWidth="1.8"
+                  markerEnd="url(#workflow-arrow)"
+                />
+                <path
+                  d={`M ${docX} ${y - 10} H ${docX + docW - 34} L ${docX + docW} ${y + 16} V ${y + nodeH + 18} H ${docX} Z`}
+                  fill="var(--card)"
+                  stroke="var(--fg)"
+                  strokeWidth="1.4"
+                />
+                <path
+                  d={`M ${docX + docW - 34} ${y - 10} V ${y + 16} H ${docX + docW}`}
+                  fill="none"
+                  stroke="var(--fg)"
+                  strokeWidth="1.4"
+                />
+                <text
+                  x={docX + docW / 2}
+                  y={y + 25}
+                  fill="var(--fg)"
+                  fontSize="12"
+                  fontWeight="700"
+                  textAnchor="middle"
+                >
+                  {t("flowchart.produces")}
+                </text>
+                <text
+                  x={docX + docW / 2}
+                  y={y + 47}
+                  fill="var(--fg)"
+                  fontSize="13"
+                  fontWeight="700"
+                  textAnchor="middle"
+                >
+                  {shortText(outputSummary, 20)}
+                </text>
               </g>
             );
           })}

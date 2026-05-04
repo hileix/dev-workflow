@@ -74,9 +74,9 @@ async function branchExists(repoRoot, branchName) {
   }
 }
 
-async function findAvailableWorktree(repoRoot, ticketId) {
+async function findAvailableWorktree(repoRoot, taskId) {
   const repoName = sanitizeNamePart(basename(repoRoot), "repo");
-  const ticketSlug = sanitizeNamePart(ticketId, "task");
+  const ticketSlug = sanitizeNamePart(taskId, "task");
   const parentDir = dirname(repoRoot);
 
   for (let index = 0; index < 50; index++) {
@@ -91,7 +91,7 @@ async function findAvailableWorktree(repoRoot, ticketId) {
     return { worktreePath, branchName };
   }
 
-  throw new Error(`could not find an available worktree name for ${ticketId}`);
+  throw new Error(`could not find an available worktree name for ${taskId}`);
 }
 
 export function normalizeWorktreeConfig(worktree) {
@@ -102,7 +102,7 @@ export function normalizeWorktreeConfig(worktree) {
   return { enabled, files, customFiles, removeOnComplete };
 }
 
-export async function prepareWorktree({ repoRoot, ticketId, worktree }) {
+export async function prepareWorktree({ repoRoot, taskId, worktree }) {
   const worktreeConfig = normalizeWorktreeConfig(worktree);
   if (!worktreeConfig.enabled) {
     return {
@@ -124,7 +124,7 @@ export async function prepareWorktree({ repoRoot, ticketId, worktree }) {
 
   const sourceRoot = repoStatus;
   const selectedSubdir = relative(sourceRoot, resolve(repoRoot));
-  const { worktreePath, branchName } = await findAvailableWorktree(sourceRoot, ticketId);
+  const { worktreePath, branchName } = await findAvailableWorktree(sourceRoot, taskId);
   await mkdir(dirname(worktreePath), { recursive: true });
   await execGit(["worktree", "add", "-b", branchName, worktreePath, "HEAD"], sourceRoot);
 

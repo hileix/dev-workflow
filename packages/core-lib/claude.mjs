@@ -1,9 +1,9 @@
 import { extname, join } from "path";
-import { readFile } from "fs/promises";
+import { readFile, writeFile } from "fs/promises";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Codex } from "@openai/codex-sdk";
 import { getBaseDir } from "../core-models/config.mjs";
-import { getPhaseSkills, getPhaseArtifactFiles, getPhaseBackend, isAutoPhase, nextPhase } from "../core-models/workflow.mjs";
+import { getPhaseSkills, getPhaseArtifactFiles, getPhaseBackend, getWorkflow, interpolate, isAutoPhase, nextPhase } from "../core-models/workflow.mjs";
 import { readState, writeState, updatePhaseStatus, appendToPhaseFile, readPhaseMessages, taskDir } from "../core-models/state.mjs";
 import { upsertTask } from "../core-models/workfolders.mjs";
 import { removeWorktree } from "./worktree.mjs";
@@ -245,34 +245,81 @@ async function streamAgentTurn({ backend, prompt, workFolder, sessionId, imagePa
   return streamClaudeTurn({ prompt, workFolder, sessionId, imagePaths, abortController, onText, onTool, onSession });
 }
 
-async function appendToolLog(ticketId, phase, log) {
+async function appendToolLog(taskId, phase, log) {
   const message = `\n\n*${log}*\n\n`;
-  await appendToPhaseFile(ticketId, phase, message);
+  await appendToPhaseFile(taskId, phase, message);
 }
 
-export async function readArtifact(ticketId, phase) {
+function getOutputByKey(phase, outputKey) {
+  return (phase?.outputs || []).find((output) => output.key === outputKey) || null;
+}
+
+async function readArtifactFile(taskId, filename, contextValues = {}) {
+  if (!filename) return "";
+  const resolved = interpolate(filename, { taskId, ...contextValues });
+  try {
+    return await readFile(join(await taskDir(taskId), resolved), "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+async function writeArtifactFile(taskId, filename, content, contextValues = {}) {
+  if (!filename) return;
+  const resolved = interpolate(filename, { taskId, ...contextValues });
+  await writeFile(join(await taskDir(taskId), resolved), content);
+}
+
+async function publishCheckpointArtifacts(taskId, phaseId, state) {
+  const workflow = getWorkflow();
+  const phase = workflow?.phases?.find((item) => item.id === phaseId);
+  const publishRules = phase?.checkpoint?.publish || [];
+  const contextValues = state?.contextValues || {};
+  if (publishRules.length === 0) return;
+
+  for (const rule of publishRules) {
+    const sourceInput = (phase.inputs || []).find((input) => input.name === rule.sourceName);
+    const targetOutput = getOutputByKey(phase, rule.asOutputKey);
+    if (!sourceInput || !targetOutput?.filename) continue;
+
+    let content = "";
+    if (sourceInput.sourceType === "workflow_context") {
+      content = contextValues[sourceInput.name] || "";
+    } else if (sourceInput.sourceType === "phase_output") {
+      const sourcePhase = workflow.phases.find((item) => item.id === sourceInput.phaseId);
+      const sourceOutput = getOutputByKey(sourcePhase, sourceInput.outputKey);
+      content = await readArtifactFile(taskId, sourceOutput?.filename, contextValues);
+    }
+
+    if (!content) continue;
+    await writeArtifactFile(taskId, targetOutput.filename, content, contextValues);
+  }
+}
+
+export async function readArtifact(taskId, phase) {
   const PHASE_ARTIFACT_FILES = getPhaseArtifactFiles();
   const fn = PHASE_ARTIFACT_FILES[phase];
   if (fn) {
-    try { return await readFile(join(await taskDir(ticketId), fn(ticketId)), "utf-8"); } catch {}
+    const state = await readState(taskId).catch(() => null);
+    try { return await readFile(join(await taskDir(taskId), fn(taskId, state?.contextValues || {})), "utf-8"); } catch {}
   }
   return "";
 }
 
-export async function getPhaseContent(ticketId, phase) {
-  const messages = await readPhaseMessages(ticketId, phase);
+export async function getPhaseContent(taskId, phase) {
+  const messages = await readPhaseMessages(taskId, phase);
   if (!isAutoPhase(phase)) {
-    const artifact = await readArtifact(ticketId, phase);
+    const artifact = await readArtifact(taskId, phase);
     if (artifact) return messages ? artifact + "\n\n---\n\n" + messages : artifact;
   }
   if (messages) return messages;
-  const artifact = await readArtifact(ticketId, phase);
+  const artifact = await readArtifact(taskId, phase);
   if (artifact) return artifact;
   return "";
 }
 
-async function runPromptForPhase({ ticketId, phase, prompt, sessionId = null, imagePaths = [] }) {
-  const wf = activeWorkflows.get(ticketId);
+async function runPromptForPhase({ taskId, phase, prompt, sessionId = null, imagePaths = [] }) {
+  const wf = activeWorkflows.get(taskId);
   if (!wf) return;
 
   const backend = normalizeAiBackend(getPhaseBackend(phase));
@@ -289,19 +336,19 @@ async function runPromptForPhase({ ticketId, phase, prompt, sessionId = null, im
       abortController,
       onText: async (text) => {
         sendWorkflowEvent(wf.send, { type: "text_delta", phase, text });
-        await appendToPhaseFile(ticketId, phase, text);
+        await appendToPhaseFile(taskId, phase, text);
       },
       onTool: async (log) => {
         sendWorkflowEvent(wf.send, { type: "tool_use", phase, name: backend, log });
-        await appendToolLog(ticketId, phase, log);
+        await appendToolLog(taskId, phase, log);
       },
       onSession: (nextSessionId) => {
         if (!nextSessionId) return;
         wf.phaseSessionIds[phase] = nextSessionId;
-        readState(ticketId).then((state) => {
+        readState(taskId).then((state) => {
           const current = state.phases.find((item) => item.id === phase);
           updatePhaseStatus(state, phase, current?.status || "in_progress", nextSessionId);
-          writeState(ticketId, state);
+          writeState(taskId, state);
         }).catch(() => {});
       },
     });
@@ -312,38 +359,41 @@ async function runPromptForPhase({ ticketId, phase, prompt, sessionId = null, im
   }
 }
 
-export async function runPhase(ticketId, phase, sessionId) {
-  const wf = activeWorkflows.get(ticketId);
+export async function runPhase(taskId, phase, sessionId) {
+  const wf = activeWorkflows.get(taskId);
   if (!wf) return;
   const { workFolder, send } = wf;
 
   try {
     const baseDir = await getBaseDir();
-    const state = await readState(ticketId);
-    const promptValues = state.promptValues || {};
+    const state = await readState(taskId);
+    const contextValues = state.contextValues || {};
     const PHASE_SKILLS = getPhaseSkills();
     const skillFn = PHASE_SKILLS[phase];
-    const prompt = skillFn ? skillFn(ticketId, baseDir, promptValues) : "";
+    const prompt = skillFn ? skillFn(taskId, baseDir, contextValues) : "";
     const imagePaths = wf.startImages && wf.startImages.length > 0 ? [...wf.startImages] : [];
     wf.startImages = [];
 
     await runPromptForPhase({
-      ticketId,
+      taskId,
       phase,
       prompt,
       sessionId: sessionId || null,
       imagePaths,
     });
 
-    const latestState = await readState(ticketId);
+    const latestState = await readState(taskId);
     updatePhaseStatus(latestState, phase, "completed");
+    if (!isAutoPhase(phase)) {
+      await publishCheckpointArtifacts(taskId, phase, latestState);
+    }
     const next = nextPhase(phase);
     if (next) {
       latestState.currentPhase = next;
       if (!isAutoPhase(next)) {
         updatePhaseStatus(latestState, next, "awaiting_input");
         latestState.overallStatus = "awaiting_input";
-        upsertTask(latestState.originalWorkFolder || workFolder, ticketId, "awaiting_input").catch(() => {});
+        upsertTask(latestState.originalWorkFolder || workFolder, taskId, "awaiting_input").catch(() => {});
       } else {
         updatePhaseStatus(latestState, next, "in_progress");
       }
@@ -353,25 +403,25 @@ export async function runPhase(ticketId, phase, sessionId) {
       if (latestState.worktree?.enabled && latestState.worktree.removeOnComplete) {
         await removeWorktree(latestState.worktree).catch(() => {});
       }
-      upsertTask(latestState.originalWorkFolder || workFolder, ticketId, "completed").catch(() => {});
+      upsertTask(latestState.originalWorkFolder || workFolder, taskId, "completed").catch(() => {});
     }
-    await writeState(ticketId, latestState);
+    await writeState(taskId, latestState);
     sendWorkflowEvent(send, { type: "state", state: latestState });
 
-    let artifact = await readArtifact(ticketId, phase);
+    let artifact = await readArtifact(taskId, phase);
     if (!artifact) {
-      const messages = await readPhaseMessages(ticketId, phase);
+      const messages = await readPhaseMessages(taskId, phase);
       if (messages) artifact = messages;
     }
     if (artifact) sendWorkflowEvent(send, { type: "phase_artifact", phase, content: artifact });
 
     if (next && !isAutoPhase(next)) {
-      const content = await getPhaseContent(ticketId, next);
+      const content = await getPhaseContent(taskId, next);
       if (content) sendWorkflowEvent(send, { type: "phase_content", phase: next, content });
     }
 
     if (next && isAutoPhase(next)) {
-      runPhase(ticketId, next);
+      runPhase(taskId, next);
     }
   } catch (err) {
     if (err?.name === "AbortError") return;
@@ -379,11 +429,11 @@ export async function runPhase(ticketId, phase, sessionId) {
   }
 }
 
-export async function continuePhaseConversation(ticketId, phase, prompt, imagePaths = []) {
-  const wf = activeWorkflows.get(ticketId);
+export async function continuePhaseConversation(taskId, phase, prompt, imagePaths = []) {
+  const wf = activeWorkflows.get(taskId);
   if (!wf) return;
   await runPromptForPhase({
-    ticketId,
+    taskId,
     phase,
     prompt,
     sessionId: wf.phaseSessionIds[phase] || null,

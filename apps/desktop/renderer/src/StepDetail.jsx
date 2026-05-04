@@ -21,6 +21,7 @@ export default function StepDetail({ phase, content, artifact, isStreaming, isRu
   const wasStreamingRef = useRef(false);
   const fileInputRef = useRef(null);
   const activeTicket = useWorkflowStore((s) => s.activeTicket);
+  const workflowState = useWorkflowStore((s) => s.workflowState);
 
   useEffect(() => {
     if ((isStreaming || isRunning) && aiResponseRef.current) {
@@ -101,12 +102,13 @@ export default function StepDetail({ phase, content, artifact, isStreaming, isRu
 
     try {
       let uploadedPaths = [];
-      if (images.length > 0 && activeTicket) {
+      const runId = workflowState?.runId || "";
+      if (images.length > 0 && activeTicket && runId) {
         const payload = await Promise.all(images.map(async (img) => ({
           name: img.file.name,
           data: Array.from(new Uint8Array(await img.file.arrayBuffer())),
         })));
-        const data = await desktopApi.saveTaskUploads(activeTicket, payload);
+        const data = await desktopApi.saveTaskUploads(runId, payload);
         uploadedPaths = data.paths || [];
       }
 

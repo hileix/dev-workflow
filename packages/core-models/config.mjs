@@ -8,8 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..", "..");
 let runtimeBaseDir = "";
 let runtimeStorageDir = "";
-
-export const WORKFLOW_DIR = join(PROJECT_ROOT, "workflows");
+export const LEGACY_WORKFLOW_DIR = join(PROJECT_ROOT, "workflows");
 
 function getDefaultDesktopUserDataDir() {
   switch (process.platform) {
@@ -98,6 +97,10 @@ export async function getBaseDir() {
 
 export function getSkillsDir() {
   return join(getStorageDir(), "skills");
+}
+
+export function getWorkflowDir() {
+  return join(getStorageDir(), "workflows");
 }
 
 export function getWorkfoldersFile(baseDir) {
