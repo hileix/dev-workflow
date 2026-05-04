@@ -56,7 +56,7 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 640,
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 16 },
+    trafficLightPosition: { x: 18, y: 8 },
     backgroundColor: "#f5f5f7",
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
