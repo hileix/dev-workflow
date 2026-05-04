@@ -3,6 +3,7 @@ import { useConfigStore } from "./configStore";
 import { getAppApi } from "../lib/api-client";
 
 const desktopApi = getAppApi();
+const MAX_DEBUG_EVENTS = 200;
 
 function playNotificationSound() {
   try {
@@ -30,6 +31,40 @@ function findGroupForPhase(phaseId, groups) {
 let prevStatusRef = {};
 let unsubscribeWorkflowEvents = null;
 
+function createDebugEvent(payload, source = "workflow") {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    at: new Date().toISOString(),
+    source,
+    payload,
+  };
+}
+
+function appendDebugEvent(set, payload, source = "workflow") {
+  const event = createDebugEvent(payload, source);
+  set((state) => {
+    const debugEvents = [...state.debugEvents, event];
+    const nextState = {
+      debugEvents: debugEvents.slice(-MAX_DEBUG_EVENTS),
+      lastEventAt: event.at,
+      connectionState: source === "workflow" ? "connected" : state.connectionState,
+    };
+
+    if (payload?.type === "error" || payload?.type === "phase_failed") {
+      nextState.lastError = {
+        at: event.at,
+        phase: payload.phase || null,
+        message: payload.message || "Unknown error",
+        payload,
+      };
+      nextState.isStreaming = false;
+      nextState.streamingPhase = null;
+    }
+
+    return nextState;
+  });
+}
+
 function applyDisconnectedState(set, get) {
   const state = get().workflowState;
   if (state) {
@@ -40,9 +75,9 @@ function applyDisconnectedState(set, get) {
         phase.status === "in_progress" ? { ...phase, status: "awaiting_input" } : phase
       ),
     };
-    set({ workflowState: updated, isStreaming: false, streamingPhase: null });
+    set({ workflowState: updated, isStreaming: false, streamingPhase: null, connectionState: "disconnected" });
   } else {
-    set({ isStreaming: false, streamingPhase: null });
+    set({ isStreaming: false, streamingPhase: null, connectionState: "disconnected" });
   }
 }
 
@@ -50,6 +85,7 @@ function attachWorkflowEvents(set, get, taskId) {
   if (unsubscribeWorkflowEvents) unsubscribeWorkflowEvents();
   unsubscribeWorkflowEvents = desktopApi.onWorkflowEvent((msg) => {
     if (!msg) return;
+    appendDebugEvent(set, msg);
 
     if (msg.type === "phase_artifact") {
       set((state) => ({ phaseArtifacts: { ...state.phaseArtifacts, [msg.phase]: msg.content } }));
@@ -112,10 +148,22 @@ function attachWorkflowEvents(set, get, taskId) {
           [msg.phase]: (state.phaseMessages[msg.phase] || "") + `\n\n*${msg.log || msg.name}*\n\n`,
         },
       }));
+    } else if (msg.type === "session_attached" && msg.phase && msg.sessionId) {
+      set((state) => ({
+        workflowState: state.workflowState
+          ? {
+              ...state.workflowState,
+              phases: state.workflowState.phases.map((phase) =>
+                phase.id === msg.phase ? { ...phase, sessionId: msg.sessionId } : phase
+              ),
+            }
+          : state.workflowState,
+      }));
     }
   });
 
   return () => {
+    appendDebugEvent(set, { type: "client_detach", taskId }, "client");
     if (taskId) desktopApi.detachWorkflow(taskId);
     if (unsubscribeWorkflowEvents) {
       unsubscribeWorkflowEvents();
@@ -133,6 +181,10 @@ export const useWorkflowStore = create((set, get) => ({
   phaseArtifacts: {},
   isStreaming: false,
   streamingPhase: null,
+  connectionState: "disconnected",
+  debugEvents: [],
+  lastEventAt: null,
+  lastError: null,
   toast: null,
 
   setSelectedGroup(group) {
@@ -158,6 +210,10 @@ export const useWorkflowStore = create((set, get) => ({
         selectedGroup: group,
         isStreaming: false,
         streamingPhase: null,
+        connectionState: state.overallStatus === "completed" ? "disconnected" : "connecting",
+        debugEvents: [],
+        lastEventAt: null,
+        lastError: null,
       });
 
       if (state.workFolder && state.overallStatus !== "completed") {
@@ -167,10 +223,13 @@ export const useWorkflowStore = create((set, get) => ({
   },
 
   async connectWorkflow(taskId, workFolder, contextValues, images, runId) {
+    appendDebugEvent(set, { type: "client_connect", taskId, workFolder }, "client");
+    set({ connectionState: "connecting" });
     const detach = attachWorkflowEvents(set, get, taskId);
     try {
       await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images, runId });
-    } catch {
+    } catch (err) {
+      appendDebugEvent(set, { type: "error", message: err?.message || "Failed to start workflow" }, "client");
       detach();
       applyDisconnectedState(set, get);
     }
@@ -198,6 +257,10 @@ export const useWorkflowStore = create((set, get) => ({
           updated: null,
         })),
       },
+      connectionState: "connecting",
+      debugEvents: [],
+      lastEventAt: null,
+      lastError: null,
     });
     prevStatusRef = {};
 
@@ -209,7 +272,9 @@ export const useWorkflowStore = create((set, get) => ({
     if (!activeTicket) return;
     try {
       await desktopApi.approveWorkflow(activeTicket);
-    } catch {}
+    } catch (err) {
+      appendDebugEvent(set, { type: "error", message: err?.message || "Approve failed" }, "client");
+    }
   },
 
   async reject(rejectTo) {
@@ -217,7 +282,9 @@ export const useWorkflowStore = create((set, get) => ({
     if (!activeTicket) return;
     try {
       await desktopApi.rejectWorkflow(activeTicket, rejectTo);
-    } catch {}
+    } catch (err) {
+      appendDebugEvent(set, { type: "error", message: err?.message || "Reject failed", rejectTo }, "client");
+    }
   },
 
   async sendMessage(text, images) {
@@ -225,7 +292,9 @@ export const useWorkflowStore = create((set, get) => ({
     if (!activeTicket) return;
     try {
       await desktopApi.sendWorkflowMessage(activeTicket, text, images);
-    } catch {}
+    } catch (err) {
+      appendDebugEvent(set, { type: "error", message: err?.message || "Send message failed" }, "client");
+    }
   },
 
   async deleteTask() {
@@ -245,8 +314,14 @@ export const useWorkflowStore = create((set, get) => ({
         phaseArtifacts: {},
         isStreaming: false,
         streamingPhase: null,
+        connectionState: "disconnected",
+        debugEvents: [],
+        lastEventAt: null,
+        lastError: null,
       });
       useConfigStore.getState().loadWorkFolders();
-    } catch {}
+    } catch (err) {
+      appendDebugEvent(set, { type: "error", message: err?.message || "Delete task failed" }, "client");
+    }
   },
 }));

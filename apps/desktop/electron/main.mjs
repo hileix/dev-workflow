@@ -1,3 +1,4 @@
+import { spawn } from "child_process";
 import { app, BrowserWindow, ipcMain } from "electron";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
@@ -37,6 +38,34 @@ let mainWindow;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rendererDevServerUrl = process.env.ELECTRON_RENDERER_URL;
 const isDev = Boolean(rendererDevServerUrl);
+
+function spawnDetached(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+async function openInCode(targetPath) {
+  if (!targetPath) throw new Error("path required");
+  try {
+    await spawnDetached("code", [targetPath]);
+    return { ok: true };
+  } catch (error) {
+    if (process.platform === "darwin") {
+      await spawnDetached("open", ["-a", "Visual Studio Code", targetPath]);
+      return { ok: true };
+    }
+    throw new Error(error?.message || "failed to open VS Code");
+  }
+}
 
 async function waitForRenderer(url, attempts = 40, delayMs = 500) {
   for (let i = 0; i < attempts; i++) {
@@ -109,6 +138,7 @@ function registerIpcHandlers() {
   ipcMain.handle("app:add-workfolder", (_event, path) => addWorkFolder(path));
   ipcMain.handle("app:remove-workfolder", (_event, path) => removeWorkFolder(path));
   ipcMain.handle("app:get-task-state", (_event, taskId) => getTaskState(taskId));
+  ipcMain.handle("app:open-in-code", (_event, targetPath) => openInCode(targetPath));
   ipcMain.handle("app:remove-task", (_event, taskId) => removeTask(taskId));
   ipcMain.handle("app:save-task-uploads", (_event, taskId, filePaths) => saveTaskUploads(taskId, filePaths));
   ipcMain.handle("app:start-workflow", (event, payload) =>

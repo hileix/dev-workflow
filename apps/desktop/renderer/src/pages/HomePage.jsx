@@ -295,13 +295,17 @@ export default function HomePage() {
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow);
 
   useEffect(() => { loadWorkFolders(); }, []);
-
-  const folder = workFolders.find((f) => f.path === selectedFolder);
-  const tasks = (folder?.tasks || []).map((t) => {
-    if (workflowState && t.taskId === workflowState.taskId && workflowState.overallStatus !== "completed") {
-      return { ...t, status: workflowState.overallStatus, phases: workflowState.phases };
+  const tasks = workFolders.flatMap((folder) =>
+    (folder.tasks || []).map((task) => ({
+      ...task,
+      workFolderPath: folder.path,
+      workFolderName: folder.name,
+    }))
+  ).map((task) => {
+    if (workflowState && task.taskId === workflowState.taskId && workflowState.overallStatus !== "completed") {
+      return { ...task, status: workflowState.overallStatus, phases: workflowState.phases };
     }
-    return t;
+    return task;
   });
 
   const groups = workflowConfig?.groups || [];

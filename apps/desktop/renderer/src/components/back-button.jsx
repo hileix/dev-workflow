@@ -9,7 +9,7 @@ export function BackButton({ to, onClick, label, className }) {
     return (
       <Link to={to} className={cn(backButtonClassName, className)}>
         <ChevronLeft className="h-3.5 w-3.5" strokeWidth={2.25} />
-        <span>{label}</span>
+        {label ? <span>{label}</span> : null}
       </Link>
     );
   }
@@ -17,7 +17,7 @@ export function BackButton({ to, onClick, label, className }) {
   return (
     <button type="button" onClick={onClick} className={cn(backButtonClassName, className)}>
       <ChevronLeft className="h-3.5 w-3.5" strokeWidth={2.25} />
-      <span>{label}</span>
+      {label ? <span>{label}</span> : null}
     </button>
   );
 }

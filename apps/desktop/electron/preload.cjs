@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   addWorkFolder: (path) => ipcRenderer.invoke("app:add-workfolder", path),
   removeWorkFolder: (path) => ipcRenderer.invoke("app:remove-workfolder", path),
   getTaskState: (taskId) => ipcRenderer.invoke("app:get-task-state", taskId),
+  openInCode: (targetPath) => ipcRenderer.invoke("app:open-in-code", targetPath),
   removeTask: (taskId) => ipcRenderer.invoke("app:remove-task", taskId),
   saveTaskUploads: (taskId, filePaths) => ipcRenderer.invoke("app:save-task-uploads", taskId, filePaths),
   startWorkflow: (payload) => ipcRenderer.invoke("app:start-workflow", payload),

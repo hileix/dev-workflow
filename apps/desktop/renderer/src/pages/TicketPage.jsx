@@ -8,8 +8,12 @@ import { ThemeToggle } from "../components/theme-toggle";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { WindowChrome } from "../components/window-chrome";
+import WorkflowDebugPanel from "../components/WorkflowDebugPanel";
+import { getAppApi } from "../lib/api-client";
 import { useWorkflowStore } from "../stores/workflowStore";
 import { useConfigStore } from "../stores/configStore";
+
+const appApi = getAppApi();
 
 function getActivePhaseForGroup(groupKey, phases, groups) {
   const group = groups.find((g) => g.key === groupKey);
@@ -29,6 +33,16 @@ function getActivePhaseForGroup(groupKey, phases, groups) {
   return group.phases[0];
 }
 
+function getWorktreeDisplayName(worktree) {
+  if (!worktree?.enabled) return "";
+  if (worktree.branchName) return worktree.branchName;
+  if (worktree.rootPath) {
+    const parts = String(worktree.rootPath).split(/[/\\]/).filter(Boolean);
+    return parts[parts.length - 1] || "";
+  }
+  return "";
+}
+
 export default function TicketPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const navigate = useNavigate();
@@ -37,6 +51,7 @@ export default function TicketPage() {
 
   const activeTicket = useWorkflowStore((s) => s.activeTicket);
   const loadTicket = useWorkflowStore((s) => s.loadTicket);
+  const showToast = useWorkflowStore((s) => s.showToast);
 
   useEffect(() => {
     if (urlTicketId && urlTicketId !== activeTicket) {
@@ -50,6 +65,9 @@ export default function TicketPage() {
   const phaseArtifacts = useWorkflowStore((s) => s.phaseArtifacts);
   const isStreaming = useWorkflowStore((s) => s.isStreaming);
   const streamingPhase = useWorkflowStore((s) => s.streamingPhase);
+  const debugEvents = useWorkflowStore((s) => s.debugEvents);
+  const lastEventAt = useWorkflowStore((s) => s.lastEventAt);
+  const lastError = useWorkflowStore((s) => s.lastError);
   const approve = useWorkflowStore((s) => s.approve);
   const reject = useWorkflowStore((s) => s.reject);
   const sendMessage = useWorkflowStore((s) => s.sendMessage);
@@ -57,6 +75,7 @@ export default function TicketPage() {
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
 
   const taskId = activeTicket || urlTicketId;
+  const worktreeDisplayName = getWorktreeDisplayName(workflowState?.worktree);
   const currentPhase = workflowState?.currentPhase;
   const phases = workflowState?.phases || [];
   const groups = workflowConfig?.groups || [];
@@ -87,26 +106,76 @@ export default function TicketPage() {
     navigate("/");
   }
 
+  async function handleCopyDebugInfo() {
+    if (!taskId) return;
+    const payload = {
+      taskId,
+      currentPhase,
+      activePhase,
+      activeStatus,
+      lastEventAt,
+      lastError,
+      workflowState,
+      debugEvents,
+    };
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      showToast(t("debug.copySuccess"));
+    } catch {
+      showToast(t("debug.copyFailed"));
+    }
+  }
+
+  async function handleOpenWorktree() {
+    const targetPath = workflowState?.worktree?.rootPath || workflowState?.workFolder;
+    if (!targetPath) return;
+    try {
+      await appApi.openInCode(targetPath);
+    } catch (error) {
+      showToast(error?.message || t("ticket.openInCodeFailed"));
+    }
+  }
+
   return (
     <>
       <WindowChrome />
       <div className="flex-1 flex min-h-0 flex-col">
-        <div className="flex items-center justify-between gap-4 border-b border-border/70 bg-background/55 px-8 py-5">
+        <div className="flex items-center justify-between gap-4 border-b border-border/70 bg-background/55 px-8 py-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="min-w-0">
-              <BackButton to="/" label={t("common.back")} className="-ml-2 mb-1" />
-              <h1 className="truncate text-[22px] font-semibold text-foreground">{taskId}</h1>
-              {selectedGroupObj?.label && (
-                <div className="text-sm text-muted-foreground">{selectedGroupObj.label}</div>
-              )}
-            </div>
+            <BackButton to="/" label={t("common.back")} className="-ml-6 shrink-0" />
+            <h1 className="truncate text-[18px] font-semibold text-foreground">{taskId}</h1>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2.5">
             {workflowState?.worktree?.enabled && (
-              <Badge variant="secondary">{t("ticket.gitWorktree")}</Badge>
+              <Badge
+                as="button"
+                type="button"
+                variant="secondary"
+                className="cursor-pointer border border-transparent hover:border-border/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                title={workflowState.worktree.rootPath || worktreeDisplayName}
+                onClick={handleOpenWorktree}
+              >
+                {worktreeDisplayName
+                  ? t("ticket.gitWorktreeNamed", { name: worktreeDisplayName })
+                  : t("ticket.gitWorktree")}
+              </Badge>
             )}
             {isStreaming && (
               <Badge variant="info" className="animate-pulse-subtle">{t("ticket.working")}</Badge>
             )}
             <ThemeToggle />
+            <WorkflowDebugPanel
+              ticketId={taskId}
+              workflowState={workflowState}
+              activePhase={activePhase}
+              activeStatus={activeStatus}
+              debugEvents={debugEvents}
+              lastEventAt={lastEventAt}
+              lastError={lastError}
+              phaseLabels={workflowConfig?.phaseLabels || {}}
+              onCopy={handleCopyDebugInfo}
+            />
           </div>
         </div>
         <div className="flex flex-1 min-h-0">

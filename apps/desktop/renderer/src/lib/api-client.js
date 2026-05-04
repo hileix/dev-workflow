@@ -76,6 +76,9 @@ function createWebApi() {
     addWorkFolder: async (path) => request("/api/workfolders", { method: "POST", body: JSON.stringify({ path }) }),
     removeWorkFolder: async (path) => request("/api/workfolders", { method: "DELETE", body: JSON.stringify({ path }) }),
     getTaskState: async (taskId) => request(`/api/tasks/${taskId}/state`),
+    openInCode: async () => {
+      throw new Error("Open in VS Code is only available in the desktop app");
+    },
     removeTask: async (taskId) => request(`/api/tasks/${taskId}`, { method: "DELETE" }),
     saveTaskUploads: async (taskId, filePaths) => {
       if (!Array.isArray(filePaths) || filePaths.length === 0) return { paths: [] };

@@ -325,6 +325,13 @@ async function runPromptForPhase({ taskId, phase, prompt, sessionId = null, imag
   const backend = normalizeAiBackend(getPhaseBackend(phase));
   const abortController = new AbortController();
   wf.abortController = abortController;
+  sendWorkflowEvent(wf.send, {
+    type: "backend_selected",
+    phase,
+    backend,
+    resumed: Boolean(sessionId),
+    imageCount: imagePaths.length,
+  });
 
   try {
     await streamAgentTurn({
@@ -345,6 +352,12 @@ async function runPromptForPhase({ taskId, phase, prompt, sessionId = null, imag
       onSession: (nextSessionId) => {
         if (!nextSessionId) return;
         wf.phaseSessionIds[phase] = nextSessionId;
+        sendWorkflowEvent(wf.send, {
+          type: "session_attached",
+          phase,
+          backend,
+          sessionId: nextSessionId,
+        });
         readState(taskId).then((state) => {
           const current = state.phases.find((item) => item.id === phase);
           updatePhaseStatus(state, phase, current?.status || "in_progress", nextSessionId);
@@ -352,6 +365,16 @@ async function runPromptForPhase({ taskId, phase, prompt, sessionId = null, imag
         }).catch(() => {});
       },
     });
+  } catch (err) {
+    if (err?.name !== "AbortError") {
+      sendWorkflowEvent(wf.send, {
+        type: "phase_failed",
+        phase,
+        backend,
+        message: err?.message || "Agent run failed",
+      });
+    }
+    throw err;
   } finally {
     if (wf.abortController === abortController) {
       wf.abortController = null;
@@ -381,6 +404,7 @@ export async function runPhase(taskId, phase, sessionId) {
       sessionId: sessionId || null,
       imagePaths,
     });
+    sendWorkflowEvent(send, { type: "phase_completed", phase });
 
     const latestState = await readState(taskId);
     updatePhaseStatus(latestState, phase, "completed");
