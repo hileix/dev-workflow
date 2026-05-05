@@ -357,7 +357,7 @@ export const useWorkflowStore = create((set, get) => ({
     }
   },
 
-  async deleteTask(taskId, runId) {
+  async deleteTask(taskId, runId, options = {}) {
     const { activeTicket, workflowState } = get();
     const targetTaskId = taskId || activeTicket;
     const targetRunId = runId || workflowState?.runId || "";
@@ -368,7 +368,7 @@ export const useWorkflowStore = create((set, get) => ({
         unsubscribeWorkflowEvents = null;
       }
       desktopApi.detachWorkflow(targetTaskId, targetRunId);
-      await desktopApi.removeTask(targetTaskId, targetRunId);
+      await desktopApi.removeTask(targetTaskId, targetRunId, options);
       set({
         activeTicket: null,
         workflowState: null,

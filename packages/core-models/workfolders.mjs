@@ -60,8 +60,9 @@ export async function upsertTask(workFolder, taskId, status, runId = "", options
   await saveWorkfolders(folders);
 }
 
-export async function deleteTask(taskId, runId = "") {
+export async function deleteTask(taskId, runId = "", options = {}) {
   const requestedRunId = assertSafeRunId(runId);
+  const shouldRemoveWorktree = Boolean(options?.removeWorktree);
   let state = null;
   try {
     state = await readState(taskId, requestedRunId);
@@ -69,7 +70,7 @@ export async function deleteTask(taskId, runId = "") {
     if (requestedRunId) throw error;
   }
 
-  if (state?.worktree?.enabled) {
+  if (shouldRemoveWorktree && state?.worktree?.enabled) {
     await removeWorktree(state.worktree, { force: true }).catch(() => {});
   }
 

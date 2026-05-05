@@ -55,6 +55,7 @@ function getCheckpointInputDocument(phaseId, workflowConfig, phaseArtifacts, pha
 
 export default function TicketPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteWorktree, setDeleteWorktree] = useState(false);
   const navigate = useNavigate();
   const { id: urlTicketId } = useParams();
   const [searchParams] = useSearchParams();
@@ -91,6 +92,7 @@ export default function TicketPage() {
 
   const taskId = urlTicketId || activeTicket;
   const worktreeDisplayName = getWorktreeDisplayName(workflowState?.worktree);
+  const hasWorktree = Boolean(workflowState?.worktree?.enabled);
   const currentPhase = workflowState?.currentPhase;
   const phases = workflowState?.phases || [];
   const activePhase = selectedPhase || currentPhase || phases[0]?.id || null;
@@ -116,7 +118,9 @@ export default function TicketPage() {
 
   async function handleDelete() {
     setShowDeleteConfirm(false);
-    const deleted = await deleteTask(taskId, workflowState?.runId || urlRunId);
+    const deleted = await deleteTask(taskId, workflowState?.runId || urlRunId, {
+      removeWorktree: hasWorktree && deleteWorktree,
+    });
     if (deleted) navigate("/");
   }
 
@@ -222,7 +226,10 @@ export default function TicketPage() {
             onSelect={setSelectedPhase}
             phaseLabels={workflowConfig?.phaseLabels || {}}
             phaseTypes={workflowConfig?.phaseTypes || {}}
-            onDelete={() => setShowDeleteConfirm(true)}
+            onDelete={() => {
+              setDeleteWorktree(false);
+              setShowDeleteConfirm(true);
+            }}
           />
           <StepDetail
             phase={activePhase}
@@ -250,9 +257,31 @@ export default function TicketPage() {
             <p className="text-sm text-muted-foreground mb-4">
               {t("ticket.deleteTaskConfirm", { name: taskId })}
             </p>
+            {hasWorktree && (
+              <label className="mb-4 flex items-start gap-3 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={deleteWorktree}
+                  onChange={(event) => setDeleteWorktree(event.target.checked)}
+                />
+                <span>
+                  <span className="block font-medium">
+                    {worktreeDisplayName
+                      ? t("ticket.deleteWorktreeNamed", { name: worktreeDisplayName })
+                      : t("ticket.deleteWorktreeWithTask")}
+                  </span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    {t("ticket.deleteWorktreeHint")}
+                  </span>
+                </span>
+              </label>
+            )}
             <div className="flex justify-end gap-3">
               <Button variant="outline" size="sm" onClick={() => setShowDeleteConfirm(false)}>{t("common.cancel")}</Button>
-              <Button variant="destructive" size="sm" onClick={handleDelete}>{t("common.delete")}</Button>
+              <Button variant="destructive" size="sm" onClick={handleDelete}>
+                {hasWorktree && deleteWorktree ? t("ticket.deleteTaskAndWorktree") : t("common.delete")}
+              </Button>
             </div>
           </div>
         </div>

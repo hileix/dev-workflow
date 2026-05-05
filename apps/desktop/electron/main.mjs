@@ -141,7 +141,7 @@ function registerIpcHandlers() {
   ipcMain.handle("app:remove-workfolder", (_event, path) => removeWorkFolder(path));
   ipcMain.handle("app:get-task-state", (_event, taskId, runId) => getTaskState(taskId, runId));
   ipcMain.handle("app:open-in-code", (_event, targetPath) => openInCode(targetPath));
-  ipcMain.handle("app:remove-task", (_event, taskId, runId) => removeTask(taskId, runId));
+  ipcMain.handle("app:remove-task", (_event, taskId, runId, options) => removeTask(taskId, runId, options));
   ipcMain.handle("app:save-task-uploads", (_event, taskId, filePaths) => saveTaskUploads(taskId, filePaths));
   ipcMain.handle("app:start-workflow", (event, payload) =>
     startWorkflowSession(

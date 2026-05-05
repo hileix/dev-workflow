@@ -83,8 +83,11 @@ function createWebApi() {
     openInCode: async () => {
       throw new Error("Open in VS Code is only available in the desktop app");
     },
-    removeTask: async (taskId, runId) => {
-      const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+    removeTask: async (taskId, runId, options = {}) => {
+      const params = new URLSearchParams();
+      if (runId) params.set("runId", runId);
+      if (options?.removeWorktree) params.set("removeWorktree", "1");
+      const query = params.toString() ? `?${params.toString()}` : "";
       return request(`/api/tasks/${encodeURIComponent(taskId)}${query}`, { method: "DELETE" });
     },
     saveTaskUploads: async (taskId, filePaths) => {

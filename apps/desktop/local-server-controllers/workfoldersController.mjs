@@ -102,11 +102,12 @@ router.get("/tasks/:taskId/state", async (req, res) => {
 router.delete("/tasks/:taskId", async (req, res) => {
   const { taskId } = req.params;
   const runId = String(req.query.runId || "");
+  const removeWorktree = req.query.removeWorktree === "1" || req.query.removeWorktree === "true";
   if (!taskId) return res.status(400).json({ error: "taskId required" });
   try {
     const safeRunId = assertSafeRunId(runId);
     stopActiveWorkflow(taskId, safeRunId);
-    await deleteTask(taskId, safeRunId);
+    await deleteTask(taskId, safeRunId, { removeWorktree });
     res.json({ ok: true });
   } catch {
     res.status(404).json({ error: "task not found" });

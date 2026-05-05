@@ -344,11 +344,11 @@ export async function getTaskState(taskId, runId = "") {
   return { state, messages, artifacts, interactions };
 }
 
-export async function removeTask(taskId, runId = "") {
+export async function removeTask(taskId, runId = "", options = {}) {
   if (!taskId) throw new Error("taskId required");
   const safeRunId = assertSafeRunId(runId);
   stopActiveWorkflow(taskId, safeRunId);
-  await deleteTask(taskId, safeRunId);
+  await deleteTask(taskId, safeRunId, { removeWorktree: Boolean(options?.removeWorktree) });
   return { ok: true };
 }
 
