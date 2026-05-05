@@ -202,7 +202,7 @@ function LoadingItem({ t }) {
   );
 }
 
-export default function StepDetail({ phase, content, artifact, interactions = [], activeBackend, isStreaming, isRunning, isAwaiting, onApprove, onSendMessage, phaseLabels }) {
+export default function StepDetail({ phase, content, artifact, interactions = [], activeBackend, isStreaming, isRunning, isAwaiting, onApprove, onReject, onSendMessage, phaseLabels, phaseTypes, rejectTargets }) {
   const { t } = useI18n();
   const [input, setInput] = useState("");
   const [images, setImages] = useState([]);
@@ -218,10 +218,13 @@ export default function StepDetail({ phase, content, artifact, interactions = []
   const workflowState = useWorkflowStore((s) => s.workflowState);
 
   const conversation = normalizeConversation(interactions);
-  const currentBackend = getBackendLabel(getCurrentBackend(activeBackend, interactions));
-  const showLoading = isWaitingForAssistant(conversation, isRunning, isStreaming);
-  const canSend = isAwaiting && !isStreaming && !isRunning;
-  const showComposer = isAwaiting || isStreaming || isRunning;
+  const isCheckpoint = phaseTypes?.[phase] === "checkpoint";
+  const currentBackend = isCheckpoint ? t("stepDetail.checkpoint") : getBackendLabel(getCurrentBackend(activeBackend, interactions));
+  const showLoading = !isCheckpoint && isWaitingForAssistant(conversation, isRunning, isStreaming);
+  const canSend = !isCheckpoint && isAwaiting && !isStreaming && !isRunning;
+  const showComposer = !isCheckpoint && (isAwaiting || isStreaming || isRunning);
+  const rejectOptions = isCheckpoint ? rejectTargets?.[phase] || [] : [];
+  const DetailIcon = isCheckpoint ? User : Bot;
 
   useEffect(() => {
     if (conversationRef.current) {
@@ -345,6 +348,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
     <div className="flex-1 flex flex-col min-w-0">
       <div className="flex items-center gap-3 border-b border-border bg-background/78 px-6 py-4">
         <h2 className="text-base font-semibold text-foreground">{phaseLabels?.[phase] || phase}</h2>
+        {isCheckpoint && <Badge variant="outline">{t("stepDetail.checkpoint")}</Badge>}
         {isStreaming && <Badge variant="info" className="animate-pulse-subtle">{t("stepDetail.streaming")}</Badge>}
         {!isStreaming && isRunning && <Badge variant="info" className="animate-pulse-subtle">{t("stepDetail.running")}</Badge>}
         {isAwaiting && <Badge variant="warning">{t("stepDetail.waitingForInput")}</Badge>}
@@ -379,13 +383,22 @@ export default function StepDetail({ phase, content, artifact, interactions = []
                 </div>
               ) : (
                 <div className="rounded-lg border border-dashed border-border bg-card/35 px-4 py-8 text-center text-sm text-muted-foreground">
-                  {isStreaming || isRunning ? t("stepDetail.receivingOutput") : t("stepDetail.noDocument")}
+                  {isStreaming || isRunning
+                    ? t("stepDetail.receivingOutput")
+                    : isCheckpoint
+                      ? t("stepDetail.noCheckpointDocument")
+                      : t("stepDetail.noDocument")}
                 </div>
               )}
             </div>
           </div>
-          {isAwaiting && (
-            <div className="flex justify-end border-t border-border bg-background px-6 py-3">
+          {isAwaiting && isCheckpoint && (
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border bg-background px-6 py-3">
+              {rejectOptions.map((target) => (
+                <Button key={target} variant="outline" onClick={() => onReject?.(target)}>
+                  {t("stepDetail.rejectTo", { phase: phaseLabels?.[target] || target })}
+                </Button>
+              ))}
               <Button variant="success" onClick={onApprove}>{t("common.approve")}</Button>
             </div>
           )}
@@ -394,7 +407,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
         <aside className="flex min-h-0 flex-col border-t border-border bg-card/45 xl:border-l xl:border-t-0">
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
             <div className="flex min-w-0 items-center gap-2">
-              <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <DetailIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="truncate text-sm font-semibold text-foreground">{currentBackend}</div>
             </div>
           </div>

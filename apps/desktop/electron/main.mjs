@@ -31,6 +31,8 @@ import {
   approveWorkflow,
   rejectWorkflow,
   sendWorkflowMessage,
+  restartWorkflowPhase,
+  pauseWorkflowPhase,
   detachWorkflowSender,
 } from "./workflow-runtime.mjs";
 
@@ -137,9 +139,9 @@ function registerIpcHandlers() {
   ipcMain.handle("app:list-workfolders", () => listWorkFolders());
   ipcMain.handle("app:add-workfolder", (_event, path) => addWorkFolder(path));
   ipcMain.handle("app:remove-workfolder", (_event, path) => removeWorkFolder(path));
-  ipcMain.handle("app:get-task-state", (_event, taskId) => getTaskState(taskId));
+  ipcMain.handle("app:get-task-state", (_event, taskId, runId) => getTaskState(taskId, runId));
   ipcMain.handle("app:open-in-code", (_event, targetPath) => openInCode(targetPath));
-  ipcMain.handle("app:remove-task", (_event, taskId) => removeTask(taskId));
+  ipcMain.handle("app:remove-task", (_event, taskId, runId) => removeTask(taskId, runId));
   ipcMain.handle("app:save-task-uploads", (_event, taskId, filePaths) => saveTaskUploads(taskId, filePaths));
   ipcMain.handle("app:start-workflow", (event, payload) =>
     startWorkflowSession(
@@ -151,17 +153,23 @@ function registerIpcHandlers() {
       (message) => event.sender.send("workflow:event", message),
     )
   );
-  ipcMain.handle("app:approve-workflow", (event, taskId) =>
-    approveWorkflow(taskId, (message) => event.sender.send("workflow:event", message))
+  ipcMain.handle("app:approve-workflow", (event, taskId, runId) =>
+    approveWorkflow(taskId, (message) => event.sender.send("workflow:event", message), runId)
   );
-  ipcMain.handle("app:reject-workflow", (event, taskId, rejectTo) =>
-    rejectWorkflow(taskId, rejectTo, (message) => event.sender.send("workflow:event", message))
+  ipcMain.handle("app:reject-workflow", (event, taskId, rejectTo, runId) =>
+    rejectWorkflow(taskId, rejectTo, (message) => event.sender.send("workflow:event", message), runId)
   );
-  ipcMain.handle("app:send-workflow-message", (event, taskId, text, images) =>
-    sendWorkflowMessage(taskId, text, images, (message) => event.sender.send("workflow:event", message))
+  ipcMain.handle("app:send-workflow-message", (event, taskId, text, images, runId) =>
+    sendWorkflowMessage(taskId, text, images, (message) => event.sender.send("workflow:event", message), runId)
   );
-  ipcMain.on("workflow:detach", (_event, taskId) => {
-    detachWorkflowSender(taskId);
+  ipcMain.handle("app:restart-workflow-phase", (event, taskId, phase, runId) =>
+    restartWorkflowPhase(taskId, phase, (message) => event.sender.send("workflow:event", message), runId)
+  );
+  ipcMain.handle("app:pause-workflow-phase", (event, taskId, phase, runId) =>
+    pauseWorkflowPhase(taskId, phase, (message) => event.sender.send("workflow:event", message), runId)
+  );
+  ipcMain.on("workflow:detach", (_event, taskId, runId) => {
+    detachWorkflowSender(taskId, runId);
   });
 }
 

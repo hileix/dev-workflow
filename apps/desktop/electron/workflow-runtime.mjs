@@ -19,6 +19,7 @@ import {
   readArtifact,
   getPhaseContent,
   continuePhaseConversation,
+  completePhaseAfterUserTurn,
 } from "../../../packages/core-lib/claude.mjs";
 import { getWorkflow, interpolate } from "../../../packages/core-models/workflow.mjs";
 import { prepareWorktree, removeWorktree } from "../../../packages/core-lib/worktree.mjs";
@@ -81,7 +82,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
 
   let existingState = null;
   try {
-    existingState = await readState(taskId);
+    existingState = await readState(taskId, runId || "");
   } catch {}
 
   if (existingState && existingState.overallStatus !== "completed") {
@@ -99,10 +100,10 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
     sender({ type: "state", state: existingState });
 
     for (const p of existingState.phases) {
-      const content = await getPhaseContent(taskId, p.id);
+      const content = await getPhaseContent(taskId, p.id, existingState.runId || "");
       if (content) sender({ type: "phase_content", phase: p.id, content });
       if (p.status !== "pending") {
-        const artifact = await readArtifact(taskId, p.id);
+        const artifact = await readArtifact(taskId, p.id, existingState.runId || "");
         if (artifact) sender({ type: "phase_artifact", phase: p.id, content: artifact });
       }
     }
@@ -117,7 +118,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
     return;
   }
 
-  if (existingState) await clearTaskData(taskId);
+  if (existingState) await clearTaskData(taskId, runId || existingState.runId || "");
   const finalRunId = runId || nanoid();
   const phaseOrder = getPhaseOrder();
   const dir = await createTaskRunDir(taskId, finalRunId);
@@ -161,12 +162,13 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   runPhase(taskId, phaseOrder[0]);
 }
 
-export async function approveWorkflow(taskId, sender) {
+export async function approveWorkflow(taskId, sender, runId = "") {
   const wf = activeWorkflows.get(taskId);
   if (!wf) throw new Error("workflow not found");
 
-  const state = await readState(taskId);
+  const state = await readState(taskId, runId || wf.runId || "");
   const cur = state.currentPhase;
+  if (isAutoPhase(cur)) throw new Error(`cannot approve auto phase ${cur}`);
   await applyCheckpointPublishRules(taskId, cur, state);
   updatePhaseStatus(state, cur, "completed");
   const next = nextPhase(cur);
@@ -183,7 +185,7 @@ export async function approveWorkflow(taskId, sender) {
     state.overallStatus = "completed";
     state.currentPhase = "completed";
     await finalizeWorktreeIfNeeded(state);
-    upsertTask(state.originalWorkFolder || wf.workFolder, taskId, "completed", state.runId || wf.runId || "").catch(() => {});
+    upsertTask(state.originalWorkFolder || wf.workFolder, taskId, "completed", state.runId || wf.runId || "", { create: false }).catch(() => {});
   }
   await writeState(taskId, state);
   sender({ type: "state", state });
@@ -193,13 +195,13 @@ export async function approveWorkflow(taskId, sender) {
   }
 }
 
-export async function rejectWorkflow(taskId, rejectTo, sender) {
+export async function rejectWorkflow(taskId, rejectTo, sender, runId = "") {
   const wf = activeWorkflows.get(taskId);
   if (!wf) throw new Error("workflow not found");
 
   const phaseOrder = getPhaseOrder();
   const rejectTargets = getRejectTargets();
-  const state = await readState(taskId);
+  const state = await readState(taskId, runId || wf.runId || "");
   const cur = state.currentPhase;
   const allowed = rejectTargets[cur];
   if (!allowed || !allowed.includes(rejectTo)) {
@@ -216,25 +218,26 @@ export async function rejectWorkflow(taskId, rejectTo, sender) {
   await writeState(taskId, state);
   sender({ type: "state", state });
 
-  const content = await getPhaseContent(taskId, rejectTo);
+  const content = await getPhaseContent(taskId, rejectTo, state.runId || runId || wf.runId || "");
   if (content) sender({ type: "phase_content", phase: rejectTo, content });
 }
 
-export async function sendWorkflowMessage(taskId, text, images, sender) {
+export async function sendWorkflowMessage(taskId, text, images, sender, runId = "") {
   const wf = activeWorkflows.get(taskId);
   if (!wf) throw new Error("workflow not found");
 
-  const state = await readState(taskId);
+  const state = await readState(taskId, runId || wf.runId || "");
   const phase = state.currentPhase;
+  const stateRunId = state.runId || runId || wf.runId || "";
 
   const userBlock = `\n\n---\n\n**You:** ${text}\n\n`;
-  await appendToPhaseFile(taskId, phase, userBlock);
+  await appendToPhaseFile(taskId, phase, userBlock, stateRunId);
   const interaction = await appendPhaseInteraction(taskId, phase, {
     role: "user",
     type: "user_message",
     text,
     imageCount: images?.length || 0,
-  });
+  }, stateRunId);
   if (interaction) sender({ type: "phase_interaction", phase, interaction });
   sender({ type: "user_message", phase, text });
 
@@ -243,23 +246,82 @@ export async function sendWorkflowMessage(taskId, text, images, sender) {
   await writeState(taskId, state);
   sender({ type: "state", state });
   wf.send = createEmitter(sender);
+  wf.runId = stateRunId;
   try {
-    await continuePhaseConversation(taskId, phase, text, images || []);
-    const latestState = await readState(taskId);
-    updatePhaseStatus(latestState, phase, "awaiting_input");
-    latestState.overallStatus = "awaiting_input";
-    await writeState(taskId, latestState);
+    await continuePhaseConversation(taskId, phase, text, images || [], { mode: "phase_revision" });
+    await completePhaseAfterUserTurn(taskId, phase, stateRunId);
     sendWorkflowEvent(wf.send, { type: "phase_done", phase });
-    sendWorkflowEvent(wf.send, { type: "state", state: latestState });
   } catch (err) {
     if (err?.name === "AbortError") return;
     sendWorkflowEvent(wf.send, { type: "error", message: err.message });
   }
 }
 
-export function detachWorkflowSender(taskId) {
+export async function restartWorkflowPhase(taskId, phase, sender, runId = "") {
+  if (!taskId || !phase) throw new Error("taskId and phase required");
+  if (!isAutoPhase(phase)) throw new Error(`cannot restart manual phase ${phase}`);
+
+  const existing = activeWorkflows.get(taskId);
+  const state = await readState(taskId, runId || existing?.runId || "");
+  if (state.currentPhase !== phase) {
+    throw new Error(`cannot restart ${phase} while current phase is ${state.currentPhase}`);
+  }
+
+  const phaseSessionIds = {};
+  for (const p of state.phases) {
+    if (p.sessionId) phaseSessionIds[p.id] = p.sessionId;
+  }
+
+  if (existing?.abortController) {
+    try { existing.abortController.abort(); } catch {}
+  }
+
+  activeWorkflows.set(taskId, {
+    ...existing,
+    workFolder: existing?.workFolder || state.workFolder,
+    send: createEmitter(sender),
+    abortController: null,
+    phaseSessionIds,
+    runId: state.runId || existing?.runId || "",
+  });
+
+  updatePhaseStatus(state, phase, "in_progress", null);
+  state.overallStatus = "in_progress";
+  await writeState(taskId, state);
+  sender({ type: "state", state });
+  sender({ type: "phase_restarted", phase });
+  runPhase(taskId, phase);
+}
+
+export async function pauseWorkflowPhase(taskId, phase, sender, runId = "") {
+  if (!taskId || !phase) throw new Error("taskId and phase required");
+
+  const wf = activeWorkflows.get(taskId);
+  const state = await readState(taskId, runId || wf?.runId || "");
+  if (state.currentPhase !== phase) {
+    throw new Error(`cannot pause ${phase} while current phase is ${state.currentPhase}`);
+  }
+
+  if (wf) {
+    wf.send = createEmitter(sender);
+    if (wf.abortController) {
+      try { wf.abortController.abort(); } catch {}
+      wf.abortController = null;
+    }
+  }
+
+  updatePhaseStatus(state, phase, "awaiting_input");
+  state.overallStatus = "awaiting_input";
+  await writeState(taskId, state);
+  upsertTask(state.originalWorkFolder || state.workFolder, taskId, "awaiting_input", state.runId || "", { create: false }).catch(() => {});
+  sender({ type: "phase_paused", phase });
+  sender({ type: "state", state });
+}
+
+export function detachWorkflowSender(taskId, runId = "") {
   const wf = activeWorkflows.get(taskId);
   if (!wf) return;
+  if (runId && wf.runId && wf.runId !== runId) return;
   wf.send = null;
   if (wf.abortController) {
     try { wf.abortController.abort(); } catch {}
@@ -270,7 +332,7 @@ export function detachWorkflowSender(taskId) {
 export async function cleanupWorkflowWorktree(taskId, options = {}) {
   let state = null;
   try {
-    state = await readState(taskId);
+    state = await readState(taskId, options.runId || "");
   } catch {
     return false;
   }

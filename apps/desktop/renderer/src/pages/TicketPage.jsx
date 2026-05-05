@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { RotateCcw, Square } from "lucide-react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import StepList from "../StepList";
 import StepDetail from "../StepDetail";
 import { BackButton } from "../components/back-button";
@@ -15,24 +16,6 @@ import { useConfigStore } from "../stores/configStore";
 
 const appApi = getAppApi();
 
-function getActivePhaseForGroup(groupKey, phases, groups) {
-  const group = groups.find((g) => g.key === groupKey);
-  if (!group) return null;
-  for (const pid of group.phases) {
-    const p = phases.find((ph) => (ph.id || ph.name) === pid);
-    if (p?.status === "awaiting_input") return pid;
-  }
-  for (const pid of group.phases) {
-    const p = phases.find((ph) => (ph.id || ph.name) === pid);
-    if (p?.status === "in_progress") return pid;
-  }
-  for (const pid of [...group.phases].reverse()) {
-    const p = phases.find((ph) => (ph.id || ph.name) === pid);
-    if (p?.status === "completed") return pid;
-  }
-  return group.phases[0];
-}
-
 function getWorktreeDisplayName(worktree) {
   if (!worktree?.enabled) return "";
   if (worktree.branchName) return worktree.branchName;
@@ -43,24 +26,53 @@ function getWorktreeDisplayName(worktree) {
   return "";
 }
 
+function getCheckpointInputDocument(phaseId, workflowConfig, phaseArtifacts, phaseMessages, contextValues) {
+  const inputs = workflowConfig?.phaseInputs?.[phaseId] || [];
+  const documents = [];
+
+  for (const input of inputs) {
+    if (!input) continue;
+    let label = input.contextLabel || input.name || input.outputKey || input.phaseId || "Input";
+    let content = "";
+
+    if (input.sourceType === "workflow_context") {
+      content = contextValues?.[input.name] || "";
+    } else if (input.sourceType === "phase_output" && input.phaseId) {
+      label = input.name || workflowConfig?.phaseLabels?.[input.phaseId] || input.phaseId;
+      content = phaseArtifacts?.[input.phaseId] || phaseMessages?.[input.phaseId] || "";
+    }
+
+    const normalizedContent = String(content || "");
+    if (normalizedContent.trim()) {
+      documents.push({ label, content: normalizedContent });
+    }
+  }
+
+  if (documents.length === 0) return "";
+  if (documents.length === 1) return documents[0].content;
+  return documents.map((item) => `## ${item.label}\n\n${item.content}`).join("\n\n---\n\n");
+}
+
 export default function TicketPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const navigate = useNavigate();
   const { id: urlTicketId } = useParams();
+  const [searchParams] = useSearchParams();
+  const urlRunId = searchParams.get("runId") || "";
   const { t } = useI18n();
 
   const activeTicket = useWorkflowStore((s) => s.activeTicket);
   const loadTicket = useWorkflowStore((s) => s.loadTicket);
   const showToast = useWorkflowStore((s) => s.showToast);
+  const workflowState = useWorkflowStore((s) => s.workflowState);
 
   useEffect(() => {
-    if (urlTicketId && urlTicketId !== activeTicket) {
-      loadTicket(urlTicketId);
+    if (urlTicketId && (urlTicketId !== activeTicket || workflowState?.taskId !== urlTicketId || (urlRunId && workflowState?.runId !== urlRunId))) {
+      loadTicket(urlTicketId, urlRunId);
     }
-  }, [urlTicketId]);
-  const workflowState = useWorkflowStore((s) => s.workflowState);
-  const selectedGroup = useWorkflowStore((s) => s.selectedGroup);
-  const setSelectedGroup = useWorkflowStore((s) => s.setSelectedGroup);
+  }, [urlTicketId, urlRunId, activeTicket, workflowState?.taskId, workflowState?.runId]);
+  const selectedPhase = useWorkflowStore((s) => s.selectedPhase);
+  const setSelectedPhase = useWorkflowStore((s) => s.setSelectedPhase);
   const phaseMessages = useWorkflowStore((s) => s.phaseMessages);
   const phaseArtifacts = useWorkflowStore((s) => s.phaseArtifacts);
   const phaseInteractions = useWorkflowStore((s) => s.phaseInteractions);
@@ -72,45 +84,40 @@ export default function TicketPage() {
   const approve = useWorkflowStore((s) => s.approve);
   const reject = useWorkflowStore((s) => s.reject);
   const sendMessage = useWorkflowStore((s) => s.sendMessage);
+  const restartPhase = useWorkflowStore((s) => s.restartPhase);
+  const pausePhase = useWorkflowStore((s) => s.pausePhase);
   const deleteTask = useWorkflowStore((s) => s.deleteTask);
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
 
-  const taskId = activeTicket || urlTicketId;
+  const taskId = urlTicketId || activeTicket;
   const worktreeDisplayName = getWorktreeDisplayName(workflowState?.worktree);
   const currentPhase = workflowState?.currentPhase;
   const phases = workflowState?.phases || [];
-  const groups = workflowConfig?.groups || [];
-  const activePhase = getActivePhaseForGroup(selectedGroup, phases, groups);
+  const activePhase = selectedPhase || currentPhase || phases[0]?.id || null;
   const activeStatus = phases.find((p) => (p.id || p.name) === activePhase)?.status;
   const isPhaseStreaming = isStreaming && activePhase === streamingPhase;
   const isPhaseRunning = activeStatus === "in_progress";
   const isPhaseAwaiting = activeStatus === "awaiting_input";
+  const isAutoPhase = workflowConfig?.phaseTypes?.[activePhase] === "auto";
+  const canPausePhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && isPhaseRunning && !lastError);
+  const canRestartPhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && !isStreaming && (lastError || isPhaseAwaiting));
 
-  const selectedGroupObj = groups.find((g) => g.key === selectedGroup);
-  const allGroupContent = selectedGroupObj
-    ? selectedGroupObj.phases
-        .map((pid) => phaseMessages[pid])
-        .filter(Boolean)
-        .join("\n\n---\n\n")
+  const isCheckpointPhase = workflowConfig?.phaseTypes?.[activePhase] === "checkpoint";
+  const activePhaseContent = activePhase ? phaseMessages[activePhase] || "" : "";
+  const activePhaseInputDocument = activePhase
+    ? getCheckpointInputDocument(activePhase, workflowConfig, phaseArtifacts, phaseMessages, workflowState?.contextValues)
     : "";
-
-  const groupArtifact = selectedGroupObj
-    ? selectedGroupObj.phases
-        .map((pid) => phaseArtifacts[pid])
-        .filter(Boolean)
-        .join("\n\n---\n\n")
+  const activePhaseArtifact = activePhase
+    ? isCheckpointPhase
+      ? activePhaseInputDocument || phaseArtifacts[activePhase] || ""
+      : phaseArtifacts[activePhase] || ""
     : "";
-
-  const groupInteractions = selectedGroupObj
-    ? selectedGroupObj.phases.flatMap((pid) =>
-        (phaseInteractions[pid] || []).map((interaction) => ({ ...interaction, phase: pid }))
-      )
-    : [];
+  const activePhaseInteractions = activePhase ? phaseInteractions[activePhase] || [] : [];
 
   async function handleDelete() {
     setShowDeleteConfirm(false);
-    await deleteTask();
-    navigate("/");
+    const deleted = await deleteTask(taskId, workflowState?.runId || urlRunId);
+    if (deleted) navigate("/");
   }
 
   async function handleCopyDebugInfo() {
@@ -144,6 +151,16 @@ export default function TicketPage() {
     }
   }
 
+  function handleRestartPhase() {
+    if (!canRestartPhase) return;
+    restartPhase(activePhase);
+  }
+
+  function handlePausePhase() {
+    if (!canPausePhase) return;
+    pausePhase(activePhase);
+  }
+
   return (
     <>
       <WindowChrome />
@@ -171,6 +188,18 @@ export default function TicketPage() {
             {isStreaming && (
               <Badge variant="info" className="animate-pulse-subtle">{t("ticket.working")}</Badge>
             )}
+            {canPausePhase && (
+              <Button type="button" variant="outline" size="sm" onClick={handlePausePhase}>
+                <Square className="h-3.5 w-3.5" />
+                {t("ticket.pausePhase")}
+              </Button>
+            )}
+            {canRestartPhase && (
+              <Button type="button" variant="outline" size="sm" onClick={handleRestartPhase}>
+                <RotateCcw className="h-3.5 w-3.5" />
+                {t("ticket.restartPhase")}
+              </Button>
+            )}
             <ThemeToggle />
             <WorkflowDebugPanel
               ticketId={taskId}
@@ -189,17 +218,17 @@ export default function TicketPage() {
           <StepList
             phases={phases.map((p) => ({ name: p.id || p.name, status: p.status, updated: p.updated }))}
             currentPhase={currentPhase}
-            selectedGroup={selectedGroup}
-            onSelect={setSelectedGroup}
-            groups={groups}
+            selectedPhase={activePhase}
+            onSelect={setSelectedPhase}
             phaseLabels={workflowConfig?.phaseLabels || {}}
+            phaseTypes={workflowConfig?.phaseTypes || {}}
             onDelete={() => setShowDeleteConfirm(true)}
           />
           <StepDetail
             phase={activePhase}
-            content={allGroupContent}
-            artifact={groupArtifact}
-            interactions={groupInteractions}
+            content={activePhaseContent}
+            artifact={activePhaseArtifact}
+            interactions={activePhaseInteractions}
             activeBackend={workflowConfig?.phaseBackends?.[activePhase]}
             isStreaming={isPhaseStreaming}
             isRunning={isPhaseRunning}

@@ -228,7 +228,7 @@ function attachLocalTask(taskId, workFolder, options = {}) {
 
   const socket = new WebSocket(localWsUrl);
   localTaskSockets.set(taskId, socket);
-  knownTasks.set(taskId, { workFolder });
+  knownTasks.set(taskId, { workFolder, runId: options.runId || "" });
 
   socket.on("open", () => {
     sendJson(socket, {
@@ -252,6 +252,7 @@ function attachLocalTask(taskId, workFolder, options = {}) {
     if (message.type === "state" && message.state) {
       knownTasks.set(taskId, {
         workFolder: message.state.originalWorkFolder || message.state.workFolder || workFolder,
+        runId: message.state.runId || options.runId || "",
       });
     }
 
@@ -288,6 +289,7 @@ async function handleCommand(message) {
   const { commandId, taskId, command, payload } = message;
   const taskInfo = knownTasks.get(taskId);
   const workFolder = payload?.workFolder || taskInfo?.workFolder || defaultWorkFolder;
+  const runId = String(payload?.runId || taskInfo?.runId || "").trim();
 
   const sendResult = (status, error = "") => {
     sendJson(backendSocket, {
@@ -341,7 +343,8 @@ async function handleCommand(message) {
       return;
     }
     try {
-      await fetchJson(`${localApiBase}/tasks/${taskId}`, {
+      const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+      await fetchJson(`${localApiBase}/tasks/${encodeURIComponent(taskId)}${query}`, {
         method: "DELETE",
       });
       knownTasks.delete(taskId);
@@ -365,21 +368,22 @@ async function handleCommand(message) {
     return;
   }
 
-  const socket = attachLocalTask(taskId, workFolder);
+  const socket = attachLocalTask(taskId, workFolder, { runId });
 
   const onOpen = async () => {
     try {
       if (command === "approve") {
-        sendJson(socket, { type: "approve", taskId });
+        sendJson(socket, { type: "approve", taskId, runId });
       } else if (command === "reject") {
-        sendJson(socket, { type: "reject", taskId, rejectTo: payload?.rejectTo });
+        sendJson(socket, { type: "reject", taskId, rejectTo: payload?.rejectTo, runId });
       } else if (command === "message") {
-        const imagePaths = await normalizeImagePayload(taskId, payload?.images || []);
+        const imagePaths = await normalizeImagePayload(runId, payload?.images || []);
         sendJson(socket, {
           type: "message",
           taskId,
           text: payload?.text || "",
           images: imagePaths,
+          runId,
         });
       } else if (command === "sync_task") {
         pushTaskSnapshot(taskId).then(() => sendResult("ok")).catch((error) => sendResult("error", error.message));

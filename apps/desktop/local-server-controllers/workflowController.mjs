@@ -25,6 +25,7 @@ function buildEmptyWorkflowConfig(mobileAccessEnabled) {
     groups: [],
     phaseLabels: {},
     phaseTypes: {},
+    phaseInputs: {},
     rejectTargets: {},
     contextFields: [],
     worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false },
@@ -142,12 +143,20 @@ router.get("/workflow", async (req, res) => {
   const seenGroups = new Set();
   const phaseLabels = {};
   const phaseTypes = {};
+  const phaseInputs = {};
   const phaseBackends = {};
   const rejectTargets = {};
 
   for (const p of WORKFLOW.phases) {
     phaseLabels[p.id] = p.label;
     phaseTypes[p.id] = p.type;
+    phaseInputs[p.id] = (p.inputs || []).map((input) => ({
+      name: input.name,
+      sourceType: input.sourceType,
+      phaseId: input.phaseId,
+      outputKey: input.outputKey,
+      contextLabel: input.contextLabel,
+    }));
     phaseBackends[p.id] = p.aiBackend || "claude";
     const targets = p.checkpoint?.rejectTargets || p.rejectTargets;
     if (targets) rejectTargets[p.id] = targets;
@@ -165,6 +174,7 @@ router.get("/workflow", async (req, res) => {
     groups,
     phaseLabels,
     phaseTypes,
+    phaseInputs,
     phaseBackends,
     rejectTargets,
     contextFields: deriveContextFields(WORKFLOW),
@@ -186,12 +196,20 @@ router.put("/settings/mobile-access", async (req, res) => {
     const seenGroups = new Set();
     const phaseLabels = {};
     const phaseTypes = {};
+    const phaseInputs = {};
     const phaseBackends = {};
     const rejectTargets = {};
 
     for (const p of WORKFLOW.phases) {
       phaseLabels[p.id] = p.label;
       phaseTypes[p.id] = p.type;
+      phaseInputs[p.id] = (p.inputs || []).map((input) => ({
+        name: input.name,
+        sourceType: input.sourceType,
+        phaseId: input.phaseId,
+        outputKey: input.outputKey,
+        contextLabel: input.contextLabel,
+      }));
       phaseBackends[p.id] = p.aiBackend || "claude";
       const targets = p.checkpoint?.rejectTargets || p.rejectTargets;
       if (targets) rejectTargets[p.id] = targets;
@@ -209,6 +227,7 @@ router.put("/settings/mobile-access", async (req, res) => {
       groups,
       phaseLabels,
       phaseTypes,
+      phaseInputs,
       phaseBackends,
       rejectTargets,
       contextFields: deriveContextFields(WORKFLOW),

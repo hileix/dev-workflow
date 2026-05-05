@@ -21,13 +21,6 @@ function playNotificationSound() {
   } catch {}
 }
 
-function findGroupForPhase(phaseId, groups) {
-  for (const g of groups) {
-    if (g.phases.includes(phaseId)) return g.key;
-  }
-  return null;
-}
-
 let prevStatusRef = {};
 let unsubscribeWorkflowEvents = null;
 
@@ -91,7 +84,7 @@ function applyDisconnectedState(set, get) {
   }
 }
 
-function attachWorkflowEvents(set, get, taskId) {
+function attachWorkflowEvents(set, get, taskId, runId = "") {
   if (unsubscribeWorkflowEvents) unsubscribeWorkflowEvents();
   unsubscribeWorkflowEvents = desktopApi.onWorkflowEvent((msg) => {
     if (!msg) return;
@@ -110,11 +103,9 @@ function attachWorkflowEvents(set, get, taskId) {
       set({ workflowState: state });
 
       const prevPhase = prevStatusRef._currentPhase;
-      const groups = useConfigStore.getState().workflowConfig?.groups || [];
 
       if (state.currentPhase && state.currentPhase !== prevPhase) {
-        const group = findGroupForPhase(state.currentPhase, groups);
-        if (group) set({ selectedGroup: group });
+        if (state.currentPhase !== "completed") set({ selectedPhase: state.currentPhase });
         if (prevPhase) playNotificationSound();
       }
 
@@ -123,8 +114,7 @@ function attachWorkflowEvents(set, get, taskId) {
         const prevStatus = prevStatusRef[phase.id];
         if (phase.status === "awaiting_input" && prevStatus !== "awaiting_input") {
           playNotificationSound();
-          const group = findGroupForPhase(phase.id, groups);
-          if (group) set({ selectedGroup: group });
+          set({ selectedPhase: phase.id });
         }
         if (phase.status === "in_progress") streaming = true;
       }
@@ -141,6 +131,8 @@ function attachWorkflowEvents(set, get, taskId) {
         useConfigStore.getState().loadWorkFolders();
       }
     } else if (msg.type === "phase_done") {
+      set({ isStreaming: false, streamingPhase: null });
+    } else if (msg.type === "phase_paused") {
       set({ isStreaming: false, streamingPhase: null });
     } else if (msg.type === "phase_content") {
       set((state) => ({ phaseMessages: { ...state.phaseMessages, [msg.phase]: msg.content } }));
@@ -176,7 +168,7 @@ function attachWorkflowEvents(set, get, taskId) {
 
   return () => {
     appendDebugEvent(set, { type: "client_detach", taskId }, "client");
-    if (taskId) desktopApi.detachWorkflow(taskId);
+    if (taskId) desktopApi.detachWorkflow(taskId, runId);
     if (unsubscribeWorkflowEvents) {
       unsubscribeWorkflowEvents();
       unsubscribeWorkflowEvents = null;
@@ -188,7 +180,7 @@ function attachWorkflowEvents(set, get, taskId) {
 export const useWorkflowStore = create((set, get) => ({
   activeTicket: null,
   workflowState: null,
-  selectedGroup: null,
+  selectedPhase: null,
   phaseMessages: {},
   phaseArtifacts: {},
   phaseInteractions: {},
@@ -200,8 +192,8 @@ export const useWorkflowStore = create((set, get) => ({
   lastError: null,
   toast: null,
 
-  setSelectedGroup(group) {
-    set({ selectedGroup: group });
+  setSelectedPhase(phase) {
+    set({ selectedPhase: phase });
   },
 
   showToast(message, duration = 3000) {
@@ -209,19 +201,19 @@ export const useWorkflowStore = create((set, get) => ({
     setTimeout(() => set({ toast: null }), duration);
   },
 
-  async loadTicket(taskId) {
+  async loadTicket(taskId, runId) {
     try {
-      const { state, messages, artifacts, interactions } = await desktopApi.getTaskState(taskId);
-      const groups = useConfigStore.getState().workflowConfig?.groups || [];
-      let group = null;
-      if (state.currentPhase) group = findGroupForPhase(state.currentPhase, groups);
+      const { state, messages, artifacts, interactions } = await desktopApi.getTaskState(taskId, runId);
+      const selectedPhase = state.currentPhase && state.currentPhase !== "completed"
+        ? state.currentPhase
+        : state.phases?.[0]?.id || null;
       set({
         activeTicket: taskId,
         workflowState: state,
         phaseMessages: messages || {},
         phaseArtifacts: artifacts || {},
         phaseInteractions: interactions || {},
-        selectedGroup: group,
+        selectedPhase,
         isStreaming: false,
         streamingPhase: null,
         connectionState: state.overallStatus === "completed" ? "disconnected" : "connecting",
@@ -231,7 +223,7 @@ export const useWorkflowStore = create((set, get) => ({
       });
 
       if (state.workFolder && state.overallStatus !== "completed") {
-        get().connectWorkflow(taskId, state.workFolder);
+        get().connectWorkflow(taskId, state.workFolder, undefined, undefined, state.runId || runId || "");
       }
     } catch {}
   },
@@ -239,7 +231,7 @@ export const useWorkflowStore = create((set, get) => ({
   async connectWorkflow(taskId, workFolder, contextValues, images, runId) {
     appendDebugEvent(set, { type: "client_connect", taskId, workFolder }, "client");
     set({ connectionState: "connecting" });
-    const detach = attachWorkflowEvents(set, get, taskId);
+    const detach = attachWorkflowEvents(set, get, taskId, runId);
     try {
       await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images, runId });
     } catch (err) {
@@ -254,15 +246,17 @@ export const useWorkflowStore = create((set, get) => ({
     if (!id || !selectedFolder) return;
 
     const workflowConfig = useConfigStore.getState().workflowConfig;
+    const firstPhase = workflowConfig?.phaseOrder?.[0] || null;
 
     set({
       activeTicket: id,
-      selectedGroup: null,
+      selectedPhase: firstPhase,
       phaseMessages: {},
       phaseArtifacts: {},
       phaseInteractions: {},
       workflowState: {
         taskId: id,
+        runId: runId || id,
         currentPhase: null,
         overallStatus: "loading",
         phases: (workflowConfig?.phaseOrder || []).map((pid) => ({
@@ -283,45 +277,98 @@ export const useWorkflowStore = create((set, get) => ({
   },
 
   async approve() {
-    const { activeTicket } = get();
+    const { activeTicket, workflowState } = get();
     if (!activeTicket) return;
     try {
-      await desktopApi.approveWorkflow(activeTicket);
+      await desktopApi.approveWorkflow(activeTicket, workflowState?.runId || "");
     } catch (err) {
       appendDebugEvent(set, { type: "error", message: err?.message || "Approve failed" }, "client");
     }
   },
 
   async reject(rejectTo) {
-    const { activeTicket } = get();
+    const { activeTicket, workflowState } = get();
     if (!activeTicket) return;
     try {
-      await desktopApi.rejectWorkflow(activeTicket, rejectTo);
+      await desktopApi.rejectWorkflow(activeTicket, rejectTo, workflowState?.runId || "");
     } catch (err) {
       appendDebugEvent(set, { type: "error", message: err?.message || "Reject failed", rejectTo }, "client");
     }
   },
 
   async sendMessage(text, images) {
-    const { activeTicket } = get();
+    const { activeTicket, workflowState } = get();
     if (!activeTicket) return;
     try {
-      await desktopApi.sendWorkflowMessage(activeTicket, text, images);
+      await desktopApi.sendWorkflowMessage(activeTicket, text, images, workflowState?.runId || "");
     } catch (err) {
       appendDebugEvent(set, { type: "error", message: err?.message || "Send message failed" }, "client");
     }
   },
 
-  async deleteTask() {
-    const { activeTicket } = get();
-    if (!activeTicket) return;
+  async restartPhase(phase) {
+    const { activeTicket, workflowState } = get();
+    if (!activeTicket || !phase) return;
+    appendDebugEvent(set, { type: "phase_restart_requested", phase }, "client");
+    set((state) => ({
+      isStreaming: true,
+      streamingPhase: phase,
+      lastError: null,
+      workflowState: state.workflowState
+        ? {
+            ...state.workflowState,
+            overallStatus: "in_progress",
+            currentPhase: phase,
+            phases: state.workflowState.phases.map((item) =>
+              item.id === phase ? { ...item, status: "in_progress" } : item
+            ),
+          }
+        : state.workflowState,
+    }));
+    try {
+      await desktopApi.restartWorkflowPhase(activeTicket, phase, workflowState?.runId || "");
+    } catch (err) {
+      set({ isStreaming: false, streamingPhase: null });
+      appendDebugEvent(set, { type: "error", message: err?.message || "Restart failed", phase }, "client");
+    }
+  },
+
+  async pausePhase(phase) {
+    const { activeTicket, workflowState } = get();
+    if (!activeTicket || !phase) return;
+    appendDebugEvent(set, { type: "phase_pause_requested", phase }, "client");
+    set((state) => ({
+      isStreaming: false,
+      streamingPhase: null,
+      workflowState: state.workflowState
+        ? {
+            ...state.workflowState,
+            overallStatus: "awaiting_input",
+            phases: state.workflowState.phases.map((item) =>
+              item.id === phase ? { ...item, status: "awaiting_input" } : item
+            ),
+          }
+        : state.workflowState,
+    }));
+    try {
+      await desktopApi.pauseWorkflowPhase(activeTicket, phase, workflowState?.runId || "");
+    } catch (err) {
+      appendDebugEvent(set, { type: "error", message: err?.message || "Pause failed", phase }, "client");
+    }
+  },
+
+  async deleteTask(taskId, runId) {
+    const { activeTicket, workflowState } = get();
+    const targetTaskId = taskId || activeTicket;
+    const targetRunId = runId || workflowState?.runId || "";
+    if (!targetTaskId) return false;
     try {
       if (unsubscribeWorkflowEvents) {
         unsubscribeWorkflowEvents();
         unsubscribeWorkflowEvents = null;
       }
-      desktopApi.detachWorkflow(activeTicket);
-      await desktopApi.removeTask(activeTicket);
+      desktopApi.detachWorkflow(targetTaskId, targetRunId);
+      await desktopApi.removeTask(targetTaskId, targetRunId);
       set({
         activeTicket: null,
         workflowState: null,
@@ -335,9 +382,11 @@ export const useWorkflowStore = create((set, get) => ({
         lastEventAt: null,
         lastError: null,
       });
-      useConfigStore.getState().loadWorkFolders();
+      await useConfigStore.getState().loadWorkFolders();
+      return true;
     } catch (err) {
       appendDebugEvent(set, { type: "error", message: err?.message || "Delete task failed" }, "client");
+      return false;
     }
   },
 }));

@@ -45,6 +45,7 @@ function StepCheckbox({ status }) {
 }
 
 function TaskCard({ task, groups, onClick, t }) {
+  const taskId = task.taskId || task.ticketId || "";
   const phaseStatusMap = {};
   for (const p of task.phases || []) {
     phaseStatusMap[p.id] = p.status;
@@ -58,7 +59,7 @@ function TaskCard({ task, groups, onClick, t }) {
       onClick={onClick}
     >
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-        <span className="text-sm font-semibold text-foreground">{task.taskId}</span>
+        <span className="text-sm font-semibold text-foreground">{taskId}</span>
         <Badge
           variant={
             task.status === "completed" ? "success" :
@@ -293,11 +294,13 @@ export default function HomePage() {
   const loadWorkFolders = useConfigStore((s) => s.loadWorkFolders);
   const workflowState = useWorkflowStore((s) => s.workflowState);
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow);
+  const loadTicket = useWorkflowStore((s) => s.loadTicket);
 
   useEffect(() => { loadWorkFolders(); }, []);
   const tasks = workFolders.flatMap((folder) =>
     (folder.tasks || []).map((task) => ({
       ...task,
+      taskId: task.taskId || task.ticketId || "",
       workFolderPath: folder.path,
       workFolderName: folder.name,
     }))
@@ -311,15 +314,19 @@ export default function HomePage() {
   const groups = workflowConfig?.groups || [];
   const canStartWorkflow = workflows.length > 0;
 
-  function handleStartWorkflow(id, folderPath, contextValues, images) {
-    startWorkflow(id, folderPath, contextValues, images);
+  function handleStartWorkflow(id, folderPath, contextValues, images, runId) {
+    startWorkflow(id, folderPath, contextValues, images, runId);
     setShowStartModal(false);
-    navigate(`/ticket/${id}`);
+    const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+    navigate(`/ticket/${encodeURIComponent(id)}${query}`);
   }
 
-  function handleResume(id) {
-    startWorkflow(id);
-    navigate(`/ticket/${id}`);
+  function handleOpenTask(task) {
+    const id = task.taskId;
+    if (!id) return;
+    loadTicket(id, task.runId);
+    const query = task.runId ? `?runId=${encodeURIComponent(task.runId)}` : "";
+    navigate(`/ticket/${encodeURIComponent(id)}${query}`);
   }
 
   return (
@@ -359,10 +366,12 @@ export default function HomePage() {
             </button>
             {tasks.map((task) => (
               <TaskCard
-                key={task.taskId}
+                key={`${task.workFolderPath}:${task.runId || task.taskId}`}
                 task={task}
                 groups={groups}
-                onClick={() => handleResume(task.taskId)}
+                onClick={() => {
+                  handleOpenTask(task);
+                }}
                 t={t}
               />
             ))}

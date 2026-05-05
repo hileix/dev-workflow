@@ -1,21 +1,25 @@
 import { Router } from "express";
 import { basename, resolve, join } from "path";
-import { stat, readFile, mkdir } from "fs/promises";
+import { stat, mkdir } from "fs/promises";
 import { spawn } from "child_process";
 import multer from "multer";
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
-import { readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
-import { getPhaseContent, readArtifact } from "../../../packages/core-lib/claude.mjs";
+import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
+import { getPhaseContent, readArtifact, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
 
 const upload = multer({ storage: multer.diskStorage({
   async destination(req, _file, cb) {
-    const baseDir = await getBaseDir();
-    const runId = String(req.params.runId || "").trim();
-    if (!runId) return cb(new Error("runId required"));
-    const dir = join(baseDir, runId, "uploads");
-    await mkdir(dir, { recursive: true });
-    cb(null, dir);
+    try {
+      const baseDir = await getBaseDir();
+      const runId = assertSafeRunId(req.params.runId || "");
+      if (!runId) return cb(new Error("runId required"));
+      const dir = join(baseDir, runId, "uploads");
+      await mkdir(dir, { recursive: true });
+      cb(null, dir);
+    } catch (error) {
+      cb(error);
+    }
   },
   filename(_req, file, cb) {
     cb(null, `${Date.now()}-${file.originalname}`);
@@ -26,15 +30,13 @@ const router = Router();
 
 router.get("/workfolders", async (req, res) => {
   const folders = await readWorkfolders();
-  const baseDir = await getBaseDir();
   for (const folder of folders) {
     if (!folder.tasks) continue;
     for (const task of folder.tasks) {
       try {
-        const runId = task.runId || await getTaskRunId(task.taskId);
+        const runId = assertSafeRunId(task.runId || await getTaskRunId(task.taskId));
         if (!runId) throw new Error("task not found");
-        const stateFile = join(baseDir, runId, "workflow-state.json");
-        const state = JSON.parse(await readFile(stateFile, "utf-8"));
+        const state = await readState(task.taskId, runId);
         task.status = state.overallStatus || task.status;
         task.phases = state.phases || [];
         task.runId = state.runId || runId;
@@ -74,18 +76,20 @@ router.delete("/workfolders", async (req, res) => {
 
 router.get("/tasks/:taskId/state", async (req, res) => {
   const { taskId } = req.params;
+  const runId = String(req.query.runId || "");
   try {
-    const state = await readState(taskId);
+    const state = await readState(taskId, runId);
+    const stateRunId = state.runId || runId;
     const messages = {};
     const artifacts = {};
     const interactions = {};
     for (const p of state.phases) {
-      const content = await getPhaseContent(taskId, p.id);
+      const content = await getPhaseContent(taskId, p.id, stateRunId);
       if (content) messages[p.id] = content;
-      const phaseInteractions = await readPhaseInteractions(taskId, p.id);
+      const phaseInteractions = await readPhaseInteractions(taskId, p.id, stateRunId);
       if (phaseInteractions.length > 0) interactions[p.id] = phaseInteractions;
       if (p.status !== "pending") {
-        const artifact = await readArtifact(taskId, p.id);
+        const artifact = await readArtifact(taskId, p.id, stateRunId);
         if (artifact) artifacts[p.id] = artifact;
       }
     }
@@ -97,9 +101,16 @@ router.get("/tasks/:taskId/state", async (req, res) => {
 
 router.delete("/tasks/:taskId", async (req, res) => {
   const { taskId } = req.params;
+  const runId = String(req.query.runId || "");
   if (!taskId) return res.status(400).json({ error: "taskId required" });
-  await deleteTask(taskId);
-  res.json({ ok: true });
+  try {
+    const safeRunId = assertSafeRunId(runId);
+    stopActiveWorkflow(taskId, safeRunId);
+    await deleteTask(taskId, safeRunId);
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: "task not found" });
+  }
 });
 
 router.post("/pick-folder", (req, res) => {

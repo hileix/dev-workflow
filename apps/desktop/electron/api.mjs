@@ -20,9 +20,9 @@ import {
   unloadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
-import { readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
+import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
-import { getPhaseContent, readArtifact } from "../../../packages/core-lib/claude.mjs";
+import { getPhaseContent, readArtifact, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
 
 function buildEmptyWorkflowConfig(mobileAccessEnabled) {
   return {
@@ -32,6 +32,7 @@ function buildEmptyWorkflowConfig(mobileAccessEnabled) {
     groups: [],
     phaseLabels: {},
     phaseTypes: {},
+    phaseInputs: {},
     rejectTargets: {},
     contextFields: [],
     worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false },
@@ -67,12 +68,20 @@ export async function getWorkflowConfig() {
   const seenGroups = new Set();
   const phaseLabels = {};
   const phaseTypes = {};
+  const phaseInputs = {};
   const phaseBackends = {};
   const rejectTargets = {};
 
   for (const phase of workflow.phases) {
     phaseLabels[phase.id] = phase.label;
     phaseTypes[phase.id] = phase.type;
+    phaseInputs[phase.id] = (phase.inputs || []).map((input) => ({
+      name: input.name,
+      sourceType: input.sourceType,
+      phaseId: input.phaseId,
+      outputKey: input.outputKey,
+      contextLabel: input.contextLabel,
+    }));
     phaseBackends[phase.id] = phase.aiBackend || "claude";
     const targets = phase.checkpoint?.rejectTargets || phase.rejectTargets;
     if (targets) rejectTargets[phase.id] = targets;
@@ -90,6 +99,7 @@ export async function getWorkflowConfig() {
     groups,
     phaseLabels,
     phaseTypes,
+    phaseInputs,
     phaseBackends,
     rejectTargets,
     contextFields: deriveContextFields(workflow),
@@ -276,15 +286,13 @@ export async function activateWorkflow(filename) {
 
 export async function listWorkFolders() {
   const folders = await readWorkfolders();
-  const baseDir = await getBaseDir();
   for (const folder of folders) {
     if (!folder.tasks) continue;
     for (const task of folder.tasks) {
       try {
-        const runId = task.runId || await getTaskRunId(task.taskId);
+        const runId = assertSafeRunId(task.runId || await getTaskRunId(task.taskId));
         if (!runId) throw new Error("task not found");
-        const stateFile = join(baseDir, runId, "workflow-state.json");
-        const state = JSON.parse(await readFile(stateFile, "utf-8"));
+        const state = await readState(task.taskId, runId);
         task.status = state.overallStatus || task.status;
         task.phases = state.phases || [];
         task.runId = state.runId || runId;
@@ -317,38 +325,40 @@ export async function removeWorkFolder(folderPath) {
   return folders;
 }
 
-export async function getTaskState(taskId) {
-  const state = await readState(taskId);
+export async function getTaskState(taskId, runId = "") {
+  const state = await readState(taskId, runId);
+  const stateRunId = state.runId || runId;
   const messages = {};
   const artifacts = {};
   const interactions = {};
   for (const phase of state.phases) {
-    const content = await getPhaseContent(taskId, phase.id);
+    const content = await getPhaseContent(taskId, phase.id, stateRunId);
     if (content) messages[phase.id] = content;
-    const phaseInteractions = await readPhaseInteractions(taskId, phase.id);
+    const phaseInteractions = await readPhaseInteractions(taskId, phase.id, stateRunId);
     if (phaseInteractions.length > 0) interactions[phase.id] = phaseInteractions;
     if (phase.status !== "pending") {
-      const artifact = await readArtifact(taskId, phase.id);
+      const artifact = await readArtifact(taskId, phase.id, stateRunId);
       if (artifact) artifacts[phase.id] = artifact;
     }
   }
   return { state, messages, artifacts, interactions };
 }
 
-export async function removeTask(taskId) {
+export async function removeTask(taskId, runId = "") {
   if (!taskId) throw new Error("taskId required");
-  await deleteTask(taskId);
+  const safeRunId = assertSafeRunId(runId);
+  stopActiveWorkflow(taskId, safeRunId);
+  await deleteTask(taskId, safeRunId);
   return { ok: true };
 }
 
-export async function saveTaskUploads(taskId, filePaths) {
-  if (!taskId) throw new Error("taskId required");
+export async function saveTaskUploads(runId, filePaths) {
+  const safeRunId = assertSafeRunId(runId);
+  if (!safeRunId) throw new Error("runId required");
   if (!Array.isArray(filePaths)) return { paths: [] };
 
   const baseDir = await getBaseDir();
-  const runId = await getTaskRunId(taskId);
-  if (!runId) throw new Error("task not found");
-  const uploadDir = join(baseDir, runId, "uploads");
+  const uploadDir = join(baseDir, safeRunId, "uploads");
   await mkdir(uploadDir, { recursive: true });
 
   const savedPaths = [];

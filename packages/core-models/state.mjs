@@ -3,7 +3,18 @@ import { readFile, writeFile, mkdir, appendFile, rm } from "fs/promises";
 import { getBaseDir, getWorkfoldersFile } from "./config.mjs";
 import { getWorkflow, getPhaseOrder, interpolate } from "./workflow.mjs";
 
-async function resolveTaskRunId(taskId) {
+export function assertSafeRunId(runId) {
+  const value = String(runId || "").trim();
+  if (!value) return "";
+  if (value === "." || value === ".." || value.includes("/") || value.includes("\\") || value.includes("\0")) {
+    throw new Error("invalid runId");
+  }
+  return value;
+}
+
+async function resolveTaskRunId(taskId, requestedRunId = "") {
+  const safeRequestedRunId = assertSafeRunId(requestedRunId);
+  if (safeRequestedRunId) return safeRequestedRunId;
   if (!taskId) return "";
   const baseDir = await getBaseDir();
   const file = getWorkfoldersFile(baseDir);
@@ -11,8 +22,9 @@ async function resolveTaskRunId(taskId) {
     const folders = JSON.parse(await readFile(file, "utf-8"));
     for (const folder of folders || []) {
       for (const task of folder.tasks || []) {
-        if (task.taskId === taskId && task.runId) {
-          return task.runId;
+        const storedTaskId = task.taskId || task.ticketId;
+        if (storedTaskId === taskId) {
+          return assertSafeRunId(task.runId || storedTaskId);
         }
       }
     }
@@ -20,39 +32,39 @@ async function resolveTaskRunId(taskId) {
   return "";
 }
 
-export async function getTaskRunId(taskId) {
-  return resolveTaskRunId(taskId);
+export async function getTaskRunId(taskId, runId = "") {
+  return resolveTaskRunId(taskId, runId);
 }
 
-export async function taskDir(taskId) {
+export async function taskDir(taskId, runId = "") {
   const baseDir = await getBaseDir();
-  const runId = await resolveTaskRunId(taskId);
-  if (!runId) throw new Error("task not found");
-  return join(baseDir, runId);
+  const resolvedRunId = await resolveTaskRunId(taskId, runId);
+  if (!resolvedRunId) throw new Error("task not found");
+  return join(baseDir, resolvedRunId);
 }
 
 async function stateFilePath(taskId) {
   return join(await taskDir(taskId), "workflow-state.json");
 }
 
-async function messagesDir(taskId) {
-  return join(await taskDir(taskId), "messages");
+async function messagesDir(taskId, runId = "") {
+  return join(await taskDir(taskId, runId), "messages");
 }
 
-async function interactionsDir(taskId) {
-  return join(await taskDir(taskId), "interactions");
+async function interactionsDir(taskId, runId = "") {
+  return join(await taskDir(taskId, runId), "interactions");
 }
 
-export async function appendToPhaseFile(taskId, phase, text) {
+export async function appendToPhaseFile(taskId, phase, text, runId = "") {
   if (!taskId || !phase) return;
-  const dir = await messagesDir(taskId);
+  const dir = await messagesDir(taskId, runId);
   await mkdir(dir, { recursive: true });
   await appendFile(join(dir, `${phase}.md`), text);
 }
 
-export async function appendPhaseInteraction(taskId, phase, interaction) {
+export async function appendPhaseInteraction(taskId, phase, interaction, runId = "") {
   if (!taskId || !phase || !interaction) return null;
-  const dir = await interactionsDir(taskId);
+  const dir = await interactionsDir(taskId, runId);
   await mkdir(dir, { recursive: true });
   const entry = {
     id: interaction.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -64,17 +76,17 @@ export async function appendPhaseInteraction(taskId, phase, interaction) {
   return entry;
 }
 
-export async function readPhaseMessages(taskId, phase) {
+export async function readPhaseMessages(taskId, phase, runId = "") {
   try {
-    return await readFile(join(await messagesDir(taskId), `${phase}.md`), "utf-8");
+    return await readFile(join(await messagesDir(taskId, runId), `${phase}.md`), "utf-8");
   } catch {
     return "";
   }
 }
 
-export async function readPhaseInteractions(taskId, phase) {
+export async function readPhaseInteractions(taskId, phase, runId = "") {
   try {
-    const raw = await readFile(join(await interactionsDir(taskId), `${phase}.jsonl`), "utf-8");
+    const raw = await readFile(join(await interactionsDir(taskId, runId), `${phase}.jsonl`), "utf-8");
     return raw
       .split("\n")
       .map((line) => line.trim())
@@ -116,31 +128,34 @@ export function makeInitialState(taskId, workFolder, baseDir, contextValues, opt
 
 export async function createTaskRunDir(taskId, runId) {
   const baseDir = await getBaseDir();
-  await mkdir(join(baseDir, runId), { recursive: true });
-  return join(baseDir, runId);
+  const safeRunId = assertSafeRunId(runId);
+  await mkdir(join(baseDir, safeRunId), { recursive: true });
+  return join(baseDir, safeRunId);
 }
 
-export async function readState(taskId) {
+export async function readState(taskId, runId = "") {
   const baseDir = await getBaseDir();
-  const runId = await resolveTaskRunId(taskId);
-  if (!runId) throw new Error("task not found");
-  return JSON.parse(await readFile(join(baseDir, runId, "workflow-state.json"), "utf-8"));
+  const resolvedRunId = await resolveTaskRunId(taskId, runId);
+  if (!resolvedRunId) throw new Error("task not found");
+  const state = JSON.parse(await readFile(join(baseDir, resolvedRunId, "workflow-state.json"), "utf-8"));
+  if (state.taskId && state.taskId !== taskId) throw new Error("task not found");
+  return state;
 }
 
 export async function writeState(taskId, state) {
   const baseDir = await getBaseDir();
-  const runId = state?.runId || await resolveTaskRunId(taskId);
+  const runId = assertSafeRunId(state?.runId || await resolveTaskRunId(taskId));
   if (!runId) throw new Error("task not found");
   state.updated = new Date().toISOString();
   await mkdir(join(baseDir, runId), { recursive: true });
   await writeFile(join(baseDir, runId, "workflow-state.json"), JSON.stringify(state, null, 2));
 }
 
-export async function clearTaskData(taskId) {
+export async function clearTaskData(taskId, runId = "") {
   const baseDir = await getBaseDir();
-  const runId = await resolveTaskRunId(taskId);
-  if (!runId) return;
-  await rm(join(baseDir, runId), { recursive: true, force: true });
+  const resolvedRunId = await resolveTaskRunId(taskId, runId);
+  if (!resolvedRunId) return;
+  await rm(join(baseDir, resolvedRunId), { recursive: true, force: true });
 }
 
 export function updatePhaseStatus(state, phaseId, status, sessionId) {

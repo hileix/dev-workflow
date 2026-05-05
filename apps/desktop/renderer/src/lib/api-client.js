@@ -15,6 +15,7 @@ function createWebApi() {
   let workflowSocket = null;
   let workflowHandler = null;
   let activeTicketId = null;
+  let activeRunId = "";
   let activeWorkFolder = "";
 
   async function request(path, options = {}) {
@@ -75,11 +76,17 @@ function createWebApi() {
     listWorkFolders: async () => request("/api/workfolders"),
     addWorkFolder: async (path) => request("/api/workfolders", { method: "POST", body: JSON.stringify({ path }) }),
     removeWorkFolder: async (path) => request("/api/workfolders", { method: "DELETE", body: JSON.stringify({ path }) }),
-    getTaskState: async (taskId) => request(`/api/tasks/${taskId}/state`),
+    getTaskState: async (taskId, runId) => {
+      const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+      return request(`/api/tasks/${encodeURIComponent(taskId)}/state${query}`);
+    },
     openInCode: async () => {
       throw new Error("Open in VS Code is only available in the desktop app");
     },
-    removeTask: async (taskId) => request(`/api/tasks/${taskId}`, { method: "DELETE" }),
+    removeTask: async (taskId, runId) => {
+      const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+      return request(`/api/tasks/${encodeURIComponent(taskId)}${query}`, { method: "DELETE" });
+    },
     saveTaskUploads: async (taskId, filePaths) => {
       if (!Array.isArray(filePaths) || filePaths.length === 0) return { paths: [] };
       const form = new FormData();
@@ -87,7 +94,7 @@ function createWebApi() {
         if (!entry || typeof entry !== "object" || !entry.name || !entry.data) continue;
         form.append("images", new File([new Uint8Array(entry.data)], entry.name));
       }
-      const response = await fetch(`${baseUrl}/api/tasks/${taskId}/upload`, {
+      const response = await fetch(`${baseUrl}/api/tasks/${encodeURIComponent(taskId)}/upload`, {
         method: "POST",
         body: form,
       });
@@ -97,6 +104,7 @@ function createWebApi() {
     },
     startWorkflow: async (payload) => {
       activeTicketId = payload.taskId;
+      activeRunId = payload.runId || "";
       activeWorkFolder = payload.workFolder;
       sendSocket({
         type: "start",
@@ -104,16 +112,23 @@ function createWebApi() {
         workFolder: payload.workFolder,
         contextValues: payload.contextValues,
         images: payload.images,
+        runId: payload.runId,
       });
     },
-    approveWorkflow: async (taskId) => {
-      sendSocket({ type: "approve", taskId });
+    approveWorkflow: async (taskId, runId) => {
+      sendSocket({ type: "approve", taskId, runId });
     },
-    rejectWorkflow: async (taskId, rejectTo) => {
-      sendSocket({ type: "reject", taskId, rejectTo });
+    rejectWorkflow: async (taskId, rejectTo, runId) => {
+      sendSocket({ type: "reject", taskId, rejectTo, runId });
     },
-    sendWorkflowMessage: async (taskId, text, images) => {
-      sendSocket({ type: "message", taskId, text, images });
+    sendWorkflowMessage: async (taskId, text, images, runId) => {
+      sendSocket({ type: "message", taskId, text, images, runId });
+    },
+    restartWorkflowPhase: async (taskId, phase, runId) => {
+      sendSocket({ type: "restart_phase", taskId, phase, runId });
+    },
+    pauseWorkflowPhase: async (taskId, phase, runId) => {
+      sendSocket({ type: "pause_phase", taskId, phase, runId });
     },
     onWorkflowEvent(callback) {
       workflowHandler = callback;
@@ -122,9 +137,10 @@ function createWebApi() {
         workflowHandler = null;
       };
     },
-    detachWorkflow(taskId) {
-      if (activeTicketId === taskId) {
+    detachWorkflow(taskId, runId) {
+      if (activeTicketId === taskId && (!runId || activeRunId === runId)) {
         activeTicketId = null;
+        activeRunId = "";
         activeWorkFolder = "";
       }
     },
