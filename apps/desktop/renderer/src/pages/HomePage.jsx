@@ -37,6 +37,14 @@ function StepCheckbox({ status }) {
       </svg>
     );
   }
+  if (status === "failed") {
+    return (
+      <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 20 20" fill="none">
+        <rect x="1" y="1" width="18" height="18" rx="3" fill="#dc2626" />
+        <path d="M7 7l6 6M13 7l-6 6" stroke="white" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
   return (
     <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 20 20" fill="none">
       <rect x="1" y="1" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.5" className="text-border" />
@@ -54,7 +62,11 @@ function TaskCard({ task, groups, onClick, t }) {
   return (
     <div
       className={`inline-block min-w-[18rem] overflow-hidden rounded-2xl border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset] cursor-pointer transition-colors hover:bg-accent/65 ${
-        task.status === "awaiting_input" ? "border-2 border-warning animate-pulse-subtle" : "border-border"
+        task.status === "failed"
+          ? "border-2 border-destructive"
+          : task.status === "awaiting_input"
+            ? "border-2 border-warning animate-pulse-subtle"
+            : "border-border"
       }`}
       onClick={onClick}
     >
@@ -65,6 +77,7 @@ function TaskCard({ task, groups, onClick, t }) {
             task.status === "completed" ? "success" :
             task.status === "awaiting_input" ? "warning" :
             task.status === "in_progress" ? "info" :
+            task.status === "failed" ? "destructive" :
             "secondary"
           }
         >
@@ -78,6 +91,7 @@ function TaskCard({ task, groups, onClick, t }) {
             const statuses = groupPhases.map((pid) => phaseStatusMap[pid] || "pending");
             let groupStatus = "pending";
             if (statuses.every((s) => s === "completed")) groupStatus = "completed";
+            else if (statuses.some((s) => s === "failed")) groupStatus = "failed";
             else if (statuses.some((s) => s === "awaiting_input")) groupStatus = "awaiting_input";
             else if (statuses.some((s) => s === "in_progress")) groupStatus = "in_progress";
 

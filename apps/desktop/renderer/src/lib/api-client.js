@@ -83,6 +83,9 @@ function createWebApi() {
     openInCode: async () => {
       throw new Error("Open in VS Code is only available in the desktop app");
     },
+    openTaskOutputInCode: async () => {
+      throw new Error("Open in VS Code is only available in the desktop app");
+    },
     removeTask: async (taskId, runId, options = {}) => {
       const params = new URLSearchParams();
       if (runId) params.set("runId", runId);

@@ -53,7 +53,7 @@ function publicTask(task, fallback = {}) {
     workFolder: task.workFolder || "",
     state: task.state || null,
     messages: task.messages || {},
-    artifacts: task.artifacts || {},
+    outputArtifacts: task.outputArtifacts || {},
     interactions: task.interactions || {},
     updatedAt: task.updatedAt || task.state?.updated || now(),
   };

@@ -26,6 +26,7 @@ function buildEmptyWorkflowConfig(mobileAccessEnabled) {
     phaseLabels: {},
     phaseTypes: {},
     phaseInputs: {},
+    phaseOutputs: {},
     rejectTargets: {},
     contextFields: [],
     worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false },
@@ -144,6 +145,7 @@ router.get("/workflow", async (req, res) => {
   const phaseLabels = {};
   const phaseTypes = {};
   const phaseInputs = {};
+  const phaseOutputs = {};
   const phaseBackends = {};
   const rejectTargets = {};
 
@@ -156,6 +158,12 @@ router.get("/workflow", async (req, res) => {
       phaseId: input.phaseId,
       outputKey: input.outputKey,
       contextLabel: input.contextLabel,
+      required: input.required,
+    }));
+    phaseOutputs[p.id] = (p.outputs || []).map((output) => ({
+      key: output.key,
+      kind: output.kind,
+      filename: output.filename,
     }));
     phaseBackends[p.id] = p.aiBackend || "claude";
     const targets = p.checkpoint?.rejectTargets || p.rejectTargets;
@@ -175,6 +183,7 @@ router.get("/workflow", async (req, res) => {
     phaseLabels,
     phaseTypes,
     phaseInputs,
+    phaseOutputs,
     phaseBackends,
     rejectTargets,
     contextFields: deriveContextFields(WORKFLOW),
@@ -197,6 +206,7 @@ router.put("/settings/mobile-access", async (req, res) => {
     const phaseLabels = {};
     const phaseTypes = {};
     const phaseInputs = {};
+    const phaseOutputs = {};
     const phaseBackends = {};
     const rejectTargets = {};
 
@@ -209,6 +219,12 @@ router.put("/settings/mobile-access", async (req, res) => {
         phaseId: input.phaseId,
         outputKey: input.outputKey,
         contextLabel: input.contextLabel,
+        required: input.required,
+      }));
+      phaseOutputs[p.id] = (p.outputs || []).map((output) => ({
+        key: output.key,
+        kind: output.kind,
+        filename: output.filename,
       }));
       phaseBackends[p.id] = p.aiBackend || "claude";
       const targets = p.checkpoint?.rejectTargets || p.rejectTargets;
@@ -228,6 +244,7 @@ router.put("/settings/mobile-access", async (req, res) => {
       phaseLabels,
       phaseTypes,
       phaseInputs,
+      phaseOutputs,
       phaseBackends,
       rejectTargets,
       contextFields: deriveContextFields(WORKFLOW),

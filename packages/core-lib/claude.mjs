@@ -1,9 +1,9 @@
-import { extname, join, relative, resolve } from "path";
-import { readFile, writeFile } from "fs/promises";
+import { dirname, extname, join, relative, resolve } from "path";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Codex } from "@openai/codex-sdk";
 import { getBaseDir } from "../core-models/config.mjs";
-import { getPhaseSkills, getPhaseArtifactFiles, getPhaseBackend, getWorkflow, interpolate, isAutoPhase, nextPhase } from "../core-models/workflow.mjs";
+import { getPhaseSkills, getPhaseBackend, getWorkflow, interpolate, isAutoPhase, nextPhase } from "../core-models/workflow.mjs";
 import { readState, writeState, updatePhaseStatus, appendToPhaseFile, appendPhaseInteraction, readPhaseMessages, taskDir } from "../core-models/state.mjs";
 import { upsertTask } from "../core-models/workfolders.mjs";
 import { removeWorktree } from "./worktree.mjs";
@@ -101,6 +101,31 @@ function getToolFilePath(input) {
   return input?.file_path || input?.path || input?.notebook_path || "";
 }
 
+function getReadToolPath(toolName, input) {
+  if (toolName === "Glob" && !input?.path && String(input?.pattern || "").startsWith("/")) {
+    return input.pattern;
+  }
+  return getToolFilePath(input);
+}
+
+async function persistTaskArtifactWrite(toolName, inputJson, taskRunDir) {
+  if (toolName !== "Write" || !taskRunDir) return;
+  let input;
+  try {
+    input = JSON.parse(inputJson);
+  } catch {
+    return;
+  }
+
+  const filePath = String(getToolFilePath(input) || "");
+  if (!filePath || typeof input.content !== "string") return;
+  if (!isPathInside(taskRunDir, filePath)) return;
+
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, input.content);
+  return { filePath, content: input.content };
+}
+
 function canPhaseEditWorkspace(phaseId) {
   const phase = getWorkflow()?.phases?.find((item) => item.id === phaseId);
   if (phase?.workspaceAccess === "write") return true;
@@ -112,12 +137,21 @@ function canPhaseEditWorkspace(phaseId) {
   return id.includes("implement") || label.includes("implement");
 }
 
-function createReadOnlyPhaseToolGuard(taskRunDir) {
+function createReadOnlyPhaseToolGuard(workFolder, taskRunDir) {
   const readTools = new Set(["Read", "Grep", "Glob", "LS"]);
   const writeTools = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
   return async (toolName, input) => {
-    if (readTools.has(toolName)) return { behavior: "allow" };
+    if (readTools.has(toolName)) {
+      const filePath = String(getReadToolPath(toolName, input) || "");
+      if (!filePath || isPathInside(workFolder, filePath) || isPathInside(taskRunDir, filePath)) {
+        return { behavior: "allow" };
+      }
+      return {
+        behavior: "deny",
+        message: "This workflow phase can only read the project workspace and its own task artifact files.",
+      };
+    }
     if (writeTools.has(toolName)) {
       const filePath = String(getToolFilePath(input) || "");
       if (filePath && isPathInside(taskRunDir, filePath)) return { behavior: "allow" };
@@ -188,7 +222,7 @@ function buildCodexEnv() {
   return env;
 }
 
-async function streamClaudeTurn({ prompt, workFolder, sessionId, imagePaths, abortController, onText, onTool, onSession, workspaceWrite, taskRunDir }) {
+async function streamClaudeTurn({ prompt, workFolder, sessionId, imagePaths, abortController, onText, onTool, onSession, onArtifactWrite, workspaceWrite, taskRunDir }) {
   const promptInput = await buildClaudePrompt(prompt, imagePaths);
   const phaseTools = workspaceWrite
     ? { type: "preset", preset: "claude_code" }
@@ -199,10 +233,11 @@ async function streamClaudeTurn({ prompt, workFolder, sessionId, imagePaths, abo
       cwd: workFolder,
       resume: sessionId || undefined,
       abortController,
+      additionalDirectories: workspaceWrite ? undefined : [taskRunDir],
       includePartialMessages: true,
       permissionMode: workspaceWrite ? "bypassPermissions" : "dontAsk",
       allowDangerouslySkipPermissions: workspaceWrite ? true : undefined,
-      canUseTool: workspaceWrite ? undefined : createReadOnlyPhaseToolGuard(taskRunDir),
+      canUseTool: workspaceWrite ? undefined : createReadOnlyPhaseToolGuard(workFolder, taskRunDir),
       systemPrompt: { type: "preset", preset: "claude_code" },
       tools: phaseTools,
       settingSources: ["user", "project", "local"],
@@ -223,6 +258,8 @@ async function streamClaudeTurn({ prompt, workFolder, sessionId, imagePaths, abo
       } else if (inner.type === "content_block_delta" && inner.delta?.type === "input_json_delta") {
         toolInputJson += inner.delta.partial_json || "";
       } else if (inner.type === "content_block_stop" && currentTool) {
+        const artifactWrite = await persistTaskArtifactWrite(currentTool, toolInputJson, taskRunDir);
+        if (artifactWrite) await onArtifactWrite(artifactWrite);
         await onTool(formatToolLog(currentTool, toolInputJson));
         currentTool = null;
         toolInputJson = "";
@@ -303,12 +340,12 @@ async function streamCodexTurn({ prompt, workFolder, sessionId, imagePaths, abor
   if (thread.id) onSession(thread.id);
 }
 
-async function streamAgentTurn({ backend, prompt, workFolder, sessionId, imagePaths, abortController, onText, onTool, onSession, workspaceWrite, taskRunDir }) {
+async function streamAgentTurn({ backend, prompt, workFolder, sessionId, imagePaths, abortController, onText, onTool, onSession, onArtifactWrite, workspaceWrite, taskRunDir }) {
   if (backend === AI_BACKENDS.CODEX) {
     return streamCodexTurn({ prompt, workFolder, sessionId, imagePaths, abortController, onText, onTool, onSession, workspaceWrite });
   }
 
-  return streamClaudeTurn({ prompt, workFolder, sessionId, imagePaths, abortController, onText, onTool, onSession, workspaceWrite, taskRunDir });
+  return streamClaudeTurn({ prompt, workFolder, sessionId, imagePaths, abortController, onText, onTool, onSession, onArtifactWrite, workspaceWrite, taskRunDir });
 }
 
 async function appendToolLog(taskId, phase, log, runId = "") {
@@ -318,6 +355,10 @@ async function appendToolLog(taskId, phase, log, runId = "") {
 
 function getOutputByKey(phase, outputKey) {
   return (phase?.outputs || []).find((output) => output.key === outputKey) || null;
+}
+
+function describePhaseOutput(output) {
+  return output?.key || output?.filename || "document";
 }
 
 async function readArtifactFile(taskId, filename, contextValues = {}, runId = "") {
@@ -336,20 +377,81 @@ async function writeArtifactFile(taskId, filename, content, contextValues = {}, 
   await writeFile(join(await taskDir(taskId, runId), resolved), content);
 }
 
-async function ensurePhaseArtifact(taskId, phaseId, state, runId = "") {
-  let artifact = await readArtifact(taskId, phaseId, state.runId || runId);
-  if (artifact) return artifact;
+async function resolveArtifactPath(taskId, filename, contextValues = {}, runId = "") {
+  if (!filename) return "";
+  const resolved = interpolate(filename, { taskId, runId, ...contextValues });
+  return join(await taskDir(taskId, runId), resolved);
+}
 
-  const messages = await readPhaseMessages(taskId, phaseId, state.runId || runId);
-  if (!messages) return "";
-
+async function getPhaseArtifactForPath(taskId, phaseId, filePath, state, runId = "") {
   const workflow = getWorkflow();
   const phase = workflow?.phases?.find((item) => item.id === phaseId);
-  const primaryOutput = Array.isArray(phase?.outputs) ? phase.outputs[0] : null;
-  if (primaryOutput?.filename) {
-    await writeArtifactFile(taskId, primaryOutput.filename, messages, state.contextValues || {}, state.runId || runId);
+  for (const output of phase?.outputs || []) {
+    if (!output?.key || !output.filename) continue;
+    const outputPath = await resolveArtifactPath(taskId, output.filename, state?.contextValues || {}, state?.runId || runId);
+    if (resolve(outputPath) === resolve(filePath)) {
+      return { outputKey: output.key };
+    }
   }
-  return messages;
+  return null;
+}
+
+async function ensurePhaseArtifact(taskId, phaseId, state, runId = "") {
+  const workflow = getWorkflow();
+  const phase = workflow?.phases?.find((item) => item.id === phaseId);
+  const output = (phase?.outputs || [])[0];
+  if (!output?.key || !output.filename) return null;
+  const content = await readPhaseOutputArtifact(taskId, phaseId, output.key, state.runId || runId);
+  return content ? { outputKey: output.key, content } : null;
+}
+
+async function validateRequiredPhaseInputs(taskId, phaseId, state, runId = "") {
+  const workflow = getWorkflow();
+  const phase = workflow?.phases?.find((item) => item.id === phaseId);
+  const contextValues = state?.contextValues || {};
+  const missing = [];
+
+  for (const input of phase?.inputs || []) {
+    if (!input?.name || input.required === false) continue;
+
+    let content = "";
+    if (input.sourceType === "workflow_context") {
+      content = contextValues[input.name] || "";
+    } else if (input.sourceType === "phase_output") {
+      const sourcePhase = workflow?.phases?.find((item) => item.id === input.phaseId);
+      const sourceOutput = getOutputByKey(sourcePhase, input.outputKey);
+      if (sourceOutput?.filename) {
+        content = await readArtifactFile(taskId, sourceOutput.filename, contextValues, state?.runId || runId);
+      }
+    }
+
+    if (!String(content || "").trim()) {
+      missing.push(input.sourceType === "phase_output"
+        ? `${input.phaseId || "unknown phase"}/${input.outputKey || input.name}`
+        : input.name);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Required input document missing for ${phase?.label || phaseId}: ${missing.join(", ")}`);
+  }
+}
+
+async function validatePhaseOutputs(taskId, phaseId, state, runId = "") {
+  const workflow = getWorkflow();
+  const phase = workflow?.phases?.find((item) => item.id === phaseId);
+  const contextValues = state?.contextValues || {};
+  const missing = [];
+
+  for (const output of phase?.outputs || []) {
+    if (!output?.filename) continue;
+    const content = await readArtifactFile(taskId, output.filename, contextValues, state?.runId || runId);
+    if (!String(content || "").trim()) missing.push(describePhaseOutput(output));
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Required output document missing for ${phase?.label || phaseId}: ${missing.join(", ")}`);
+  }
 }
 
 async function publishCheckpointArtifacts(taskId, phaseId, state) {
@@ -403,10 +505,13 @@ function buildRevisionPrompt(phasePrompt, userFeedback, currentArtifact) {
 
 async function completePhase(taskId, phase, runId, workFolder, send) {
   const latestState = await readState(taskId, runId);
-  updatePhaseStatus(latestState, phase, "completed");
+  await validateRequiredPhaseInputs(taskId, phase, latestState, runId);
   if (!isAutoPhase(phase)) {
     await publishCheckpointArtifacts(taskId, phase, latestState);
   }
+  await validatePhaseOutputs(taskId, phase, latestState, runId);
+
+  updatePhaseStatus(latestState, phase, "completed");
 
   const next = nextPhase(phase);
   if (next) {
@@ -432,7 +537,14 @@ async function completePhase(taskId, phase, runId, workFolder, send) {
   sendWorkflowEvent(send, { type: "state", state: latestState });
 
   const artifact = await ensurePhaseArtifact(taskId, phase, latestState, runId);
-  if (artifact) sendWorkflowEvent(send, { type: "phase_artifact", phase, content: artifact });
+  if (artifact) {
+    sendWorkflowEvent(send, {
+      type: "phase_artifact",
+      phase,
+      outputKey: artifact.outputKey,
+      content: artifact.content,
+    });
+  }
 
   if (next && !isAutoPhase(next)) {
     const content = await getPhaseContent(taskId, next, latestState.runId || runId);
@@ -446,20 +558,53 @@ async function completePhase(taskId, phase, runId, workFolder, send) {
   return latestState;
 }
 
+async function markPhaseFailed(taskId, phase, runId, workFolder, message, send, emitPhaseFailed = true) {
+  const state = await readState(taskId, runId).catch(() => null);
+  if (state) {
+    updatePhaseStatus(state, phase, "failed");
+    state.currentPhase = phase;
+    state.overallStatus = "failed";
+    await writeState(taskId, state);
+    await upsertTask(state.originalWorkFolder || workFolder, taskId, "failed", state.runId || runId, { create: false }).catch(() => {});
+    sendWorkflowEvent(send, { type: "state", state });
+  }
+  if (emitPhaseFailed) sendWorkflowEvent(send, { type: "phase_failed", phase, message });
+}
+
 async function recordPhaseInteraction(taskId, phase, send, interaction, runId = "") {
   const entry = await appendPhaseInteraction(taskId, phase, interaction, runId);
   if (entry) sendWorkflowEvent(send, { type: "phase_interaction", phase, interaction: entry });
   return entry;
 }
 
-export async function readArtifact(taskId, phase, runId = "") {
-  const PHASE_ARTIFACT_FILES = getPhaseArtifactFiles();
-  const fn = PHASE_ARTIFACT_FILES[phase];
-  if (fn) {
-    const state = await readState(taskId, runId).catch(() => null);
-    try { return await readFile(join(await taskDir(taskId, runId), fn(taskId, state?.contextValues || {})), "utf-8"); } catch {}
+export async function readPhaseOutputArtifact(taskId, phaseId, outputKey, runId = "") {
+  const workflow = getWorkflow();
+  const phase = workflow?.phases?.find((item) => item.id === phaseId);
+  const output = getOutputByKey(phase, outputKey);
+  if (!output?.filename) return "";
+  const state = await readState(taskId, runId).catch(() => null);
+  return readArtifactFile(taskId, output.filename, state?.contextValues || {}, state?.runId || runId);
+}
+
+export async function readPhaseOutputArtifacts(taskId, phaseId, runId = "") {
+  const workflow = getWorkflow();
+  const phase = workflow?.phases?.find((item) => item.id === phaseId);
+  const result = {};
+  for (const output of phase?.outputs || []) {
+    if (!output?.key || !output.filename) continue;
+    const content = await readPhaseOutputArtifact(taskId, phaseId, output.key, runId);
+    if (content) result[output.key] = content;
   }
-  return "";
+  return result;
+}
+
+export async function getPhaseOutputArtifactPath(taskId, phaseId, outputKey, runId = "") {
+  const workflow = getWorkflow();
+  const phase = workflow?.phases?.find((item) => item.id === phaseId);
+  const output = getOutputByKey(phase, outputKey);
+  if (!output?.filename) return "";
+  const state = await readState(taskId, runId).catch(() => null);
+  return resolveArtifactPath(taskId, output.filename, state?.contextValues || {}, state?.runId || runId);
 }
 
 export async function getPhaseContent(taskId, phase, runId = "") {
@@ -469,15 +614,7 @@ export async function getPhaseContent(taskId, phase, runId = "") {
     if (!state) return "";
     stateRunId = state.runId || stateRunId;
   }
-  const messages = await readPhaseMessages(taskId, phase, stateRunId);
-  if (!isAutoPhase(phase)) {
-    const artifact = await readArtifact(taskId, phase, stateRunId);
-    if (artifact) return messages ? artifact + "\n\n---\n\n" + messages : artifact;
-  }
-  if (messages) return messages;
-  const artifact = await readArtifact(taskId, phase, stateRunId);
-  if (artifact) return artifact;
-  return "";
+  return readPhaseMessages(taskId, phase, stateRunId);
 }
 
 async function runPromptForPhase({ taskId, phase, prompt, sessionId = null, imagePaths = [], runId = "" }) {
@@ -527,6 +664,17 @@ async function runPromptForPhase({ taskId, phase, prompt, sessionId = null, imag
         }, runId);
         await appendToolLog(taskId, phase, log, runId);
       },
+      onArtifactWrite: async ({ filePath, content }) => {
+        const state = await readState(taskId, runId).catch(() => null);
+        const artifact = await getPhaseArtifactForPath(taskId, phase, filePath, state, runId);
+        if (!artifact) return;
+        sendWorkflowEvent(wf.send, {
+          type: "phase_artifact",
+          phase,
+          outputKey: artifact.outputKey,
+          content,
+        });
+      },
       onSession: (nextSessionId) => {
         if (!nextSessionId) return;
         wf.phaseSessionIds[phase] = nextSessionId;
@@ -545,6 +693,7 @@ async function runPromptForPhase({ taskId, phase, prompt, sessionId = null, imag
     });
   } catch (err) {
     if (err?.name !== "AbortError") {
+      if (err && typeof err === "object") err.workflowPhaseFailedEmitted = true;
       sendWorkflowEvent(wf.send, {
         type: "phase_failed",
         phase,
@@ -565,9 +714,11 @@ export async function runPhase(taskId, phase, sessionId) {
   if (!wf) return;
   const { workFolder, send } = wf;
   const runId = wf.runId || "";
+  let phaseRunId = runId;
 
   try {
     const { prompt, state } = await buildPhasePrompt(taskId, phase, runId);
+    phaseRunId = state.runId || runId;
     const imagePaths = wf.startImages && wf.startImages.length > 0 ? [...wf.startImages] : [];
     wf.startImages = [];
 
@@ -577,13 +728,15 @@ export async function runPhase(taskId, phase, sessionId) {
       prompt,
       sessionId: sessionId || null,
       imagePaths,
-      runId: state.runId || runId,
+      runId: phaseRunId,
     });
+    await completePhase(taskId, phase, phaseRunId, workFolder, send);
     sendWorkflowEvent(send, { type: "phase_completed", phase });
-    await completePhase(taskId, phase, state.runId || runId, workFolder, send);
   } catch (err) {
     if (err?.name === "AbortError") return;
-    sendWorkflowEvent(send, { type: "error", message: err.message });
+    const message = err?.message || String(err || "Agent run failed");
+    await markPhaseFailed(taskId, phase, phaseRunId, workFolder, message, send, !err.workflowPhaseFailedEmitted);
+    sendWorkflowEvent(send, { type: "error", phase, message });
   }
 }
 
@@ -596,9 +749,12 @@ export async function continuePhaseConversation(taskId, phase, prompt, imagePath
 
   if (options.mode === "phase_revision") {
     const phasePrompt = await buildPhasePrompt(taskId, phase, wf.runId || "");
-    const currentArtifact = await readArtifact(taskId, phase, phasePrompt.runId);
+    const phaseConfig = getWorkflow()?.phases?.find((item) => item.id === phase);
+    const output = (phaseConfig?.outputs || [])[0];
+    const currentArtifact = output?.key
+      ? await readPhaseOutputArtifact(taskId, phase, output.key, phasePrompt.runId)
+      : "";
     nextPrompt = buildRevisionPrompt(phasePrompt.prompt, prompt, currentArtifact);
-    sessionId = null;
     promptRunId = phasePrompt.runId;
   }
 
@@ -615,6 +771,7 @@ export async function continuePhaseConversation(taskId, phase, prompt, imagePath
 export async function completePhaseAfterUserTurn(taskId, phase, runId = "") {
   const wf = activeWorkflows.get(taskId);
   if (!wf) return null;
+  const state = await completePhase(taskId, phase, runId || wf.runId || "", wf.workFolder, wf.send);
   sendWorkflowEvent(wf.send, { type: "phase_completed", phase });
-  return completePhase(taskId, phase, runId || wf.runId || "", wf.workFolder, wf.send);
+  return state;
 }

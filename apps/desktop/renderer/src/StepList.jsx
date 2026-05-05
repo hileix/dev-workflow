@@ -6,6 +6,7 @@ import { Button } from "./components/ui/button";
 function getStatusLabel(status, t) {
   if (status === "awaiting_input") return t("stepList.waiting");
   if (status === "in_progress") return t("stepList.running");
+  if (status === "failed") return t("stepList.failed");
   return null;
 }
 
@@ -42,10 +43,11 @@ export default function StepList({ phases, currentPhase, selectedPhase, onSelect
                   "w-5 h-5 border-2 border-input rounded flex items-center justify-center text-xs font-bold shrink-0",
                   status === "completed" && "bg-success border-success-foreground text-success-foreground",
                   status === "awaiting_input" && "bg-warning border-warning-foreground text-warning-foreground",
-                  status === "in_progress" && "bg-info border-info-foreground text-info-foreground"
+                  status === "in_progress" && "bg-info border-info-foreground text-info-foreground",
+                  status === "failed" && "bg-destructive border-destructive text-destructive-foreground"
                 )}
               >
-                {status === "completed" ? "✓" : status === "awaiting_input" ? "!" : status === "in_progress" ? "•" : ""}
+                {status === "completed" ? "✓" : status === "awaiting_input" ? "!" : status === "in_progress" ? "•" : status === "failed" ? "×" : ""}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate">{phaseLabels?.[phaseId] || phaseId}</span>
@@ -57,7 +59,7 @@ export default function StepList({ phases, currentPhase, selectedPhase, onSelect
               </span>
               {statusLabel && (
                 <Badge
-                  variant={status === "awaiting_input" ? "warning" : "info"}
+                  variant={status === "failed" ? "destructive" : status === "awaiting_input" ? "warning" : "info"}
                   className="animate-pulse-subtle"
                 >
                   {statusLabel}

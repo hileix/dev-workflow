@@ -75,7 +75,7 @@ function createArtifactLocator(output) {
 
 function getPhaseOutputLocator(phase, outputKey) {
   const output = (phase?.outputs || []).find((item) => item.key === outputKey);
-  return createArtifactLocator(output || getPrimaryOutput(phase));
+  return createArtifactLocator(output);
 }
 
 function getContextValue(contextValues, key) {

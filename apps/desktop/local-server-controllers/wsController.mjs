@@ -8,7 +8,7 @@ import {
   activeWorkflows,
   wsSend,
   runPhase,
-  readArtifact,
+  readPhaseOutputArtifacts,
   getPhaseContent,
   continuePhaseConversation,
   completePhaseAfterUserTurn,
@@ -48,8 +48,10 @@ export function setupWebSocket(server) {
             const content = await getPhaseContent(taskId, p.id, existingState.runId || runId || "");
             if (content) wsSend(ws, { type: "phase_content", phase: p.id, content });
             if (p.status !== "pending") {
-              const artifact = await readArtifact(taskId, p.id, existingState.runId || runId || "");
-              if (artifact) wsSend(ws, { type: "phase_artifact", phase: p.id, content: artifact });
+              const outputArtifacts = await readPhaseOutputArtifacts(taskId, p.id, existingState.runId || runId || "");
+              for (const [outputKey, outputContent] of Object.entries(outputArtifacts)) {
+                wsSend(ws, { type: "phase_artifact", phase: p.id, outputKey, content: outputContent });
+              }
             }
           }
 

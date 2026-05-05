@@ -22,7 +22,7 @@ import {
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
 import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
-import { getPhaseContent, readArtifact, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
+import { getPhaseContent, getPhaseOutputArtifactPath, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
 
 function buildEmptyWorkflowConfig(mobileAccessEnabled) {
   return {
@@ -33,6 +33,7 @@ function buildEmptyWorkflowConfig(mobileAccessEnabled) {
     phaseLabels: {},
     phaseTypes: {},
     phaseInputs: {},
+    phaseOutputs: {},
     rejectTargets: {},
     contextFields: [],
     worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false },
@@ -69,6 +70,7 @@ export async function getWorkflowConfig() {
   const phaseLabels = {};
   const phaseTypes = {};
   const phaseInputs = {};
+  const phaseOutputs = {};
   const phaseBackends = {};
   const rejectTargets = {};
 
@@ -81,6 +83,12 @@ export async function getWorkflowConfig() {
       phaseId: input.phaseId,
       outputKey: input.outputKey,
       contextLabel: input.contextLabel,
+      required: input.required,
+    }));
+    phaseOutputs[phase.id] = (phase.outputs || []).map((output) => ({
+      key: output.key,
+      kind: output.kind,
+      filename: output.filename,
     }));
     phaseBackends[phase.id] = phase.aiBackend || "claude";
     const targets = phase.checkpoint?.rejectTargets || phase.rejectTargets;
@@ -100,6 +108,7 @@ export async function getWorkflowConfig() {
     phaseLabels,
     phaseTypes,
     phaseInputs,
+    phaseOutputs,
     phaseBackends,
     rejectTargets,
     contextFields: deriveContextFields(workflow),
@@ -329,7 +338,7 @@ export async function getTaskState(taskId, runId = "") {
   const state = await readState(taskId, runId);
   const stateRunId = state.runId || runId;
   const messages = {};
-  const artifacts = {};
+  const outputArtifacts = {};
   const interactions = {};
   for (const phase of state.phases) {
     const content = await getPhaseContent(taskId, phase.id, stateRunId);
@@ -337,11 +346,20 @@ export async function getTaskState(taskId, runId = "") {
     const phaseInteractions = await readPhaseInteractions(taskId, phase.id, stateRunId);
     if (phaseInteractions.length > 0) interactions[phase.id] = phaseInteractions;
     if (phase.status !== "pending") {
-      const artifact = await readArtifact(taskId, phase.id, stateRunId);
-      if (artifact) artifacts[phase.id] = artifact;
+      const phaseOutputArtifacts = await readPhaseOutputArtifacts(taskId, phase.id, stateRunId);
+      if (Object.keys(phaseOutputArtifacts).length > 0) {
+        outputArtifacts[phase.id] = phaseOutputArtifacts;
+      }
     }
   }
-  return { state, messages, artifacts, interactions };
+  return { state, messages, outputArtifacts, interactions };
+}
+
+export async function getTaskOutputPath(taskId, runId = "", phaseId = "", outputKey = "") {
+  if (!taskId || !phaseId || !outputKey) throw new Error("document path required");
+  const outputPath = await getPhaseOutputArtifactPath(taskId, phaseId, outputKey, runId);
+  if (!outputPath) throw new Error("document path not found");
+  return outputPath;
 }
 
 export async function removeTask(taskId, runId = "", options = {}) {

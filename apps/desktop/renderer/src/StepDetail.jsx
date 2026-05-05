@@ -202,7 +202,7 @@ function LoadingItem({ t }) {
   );
 }
 
-export default function StepDetail({ phase, content, artifact, interactions = [], activeBackend, isStreaming, isRunning, isAwaiting, onApprove, onReject, onSendMessage, phaseLabels, phaseTypes, rejectTargets }) {
+export default function StepDetail({ phase, content, artifact, interactions = [], emptyDocumentMessage = "", activeBackend, isStreaming, isRunning, isAwaiting, isFailed, onApprove, onReject, onSendMessage, onOpenDocument, phaseLabels, phaseTypes, rejectTargets }) {
   const { t } = useI18n();
   const [input, setInput] = useState("");
   const [images, setImages] = useState([]);
@@ -352,6 +352,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
         {isStreaming && <Badge variant="info" className="animate-pulse-subtle">{t("stepDetail.streaming")}</Badge>}
         {!isStreaming && isRunning && <Badge variant="info" className="animate-pulse-subtle">{t("stepDetail.running")}</Badge>}
         {isAwaiting && <Badge variant="warning">{t("stepDetail.waitingForInput")}</Badge>}
+        {isFailed && <Badge variant="destructive">{t("status.failed")}</Badge>}
       </div>
 
       <div className="grid flex-1 min-h-0 xl:grid-cols-[minmax(0,1fr)_420px]">
@@ -375,19 +376,30 @@ export default function StepDetail({ phase, content, artifact, interactions = []
             <div className="mx-auto max-w-4xl">
               <div className="mb-5 flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
                 <FileText className="h-4 w-4" />
-                {t("stepDetail.document")}
+                {onOpenDocument ? (
+                  <button
+                    type="button"
+                    className="rounded-sm px-0.5 py-0.5 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    title={t("stepDetail.openDocumentInCode")}
+                    onClick={onOpenDocument}
+                  >
+                    {t("stepDetail.document")}
+                  </button>
+                ) : (
+                  <span>{t("stepDetail.document")}</span>
+                )}
               </div>
               {artifact ? (
                 <div className="prose prose-sm dark:prose-invert max-w-none">
                   <Markdown>{artifact}</Markdown>
                 </div>
               ) : (
-                <div className="rounded-lg border border-dashed border-border bg-card/35 px-4 py-8 text-center text-sm text-muted-foreground">
+                <div className={`rounded-lg border border-dashed border-border bg-card/35 px-4 py-8 text-center text-sm ${emptyDocumentMessage ? "text-destructive" : "text-muted-foreground"}`}>
                   {isStreaming || isRunning
                     ? t("stepDetail.receivingOutput")
-                    : isCheckpoint
-                      ? t("stepDetail.noCheckpointDocument")
-                      : t("stepDetail.noDocument")}
+                    : emptyDocumentMessage || (isCheckpoint
+                        ? t("stepDetail.noCheckpointDocument")
+                        : t("stepDetail.noDocument"))}
                 </div>
               )}
             </div>

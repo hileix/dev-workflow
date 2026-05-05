@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { RotateCcw, Square } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, RotateCcw, Square } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import StepList from "../StepList";
 import StepDetail from "../StepDetail";
@@ -26,7 +26,21 @@ function getWorktreeDisplayName(worktree) {
   return "";
 }
 
-function getCheckpointInputDocument(phaseId, workflowConfig, phaseArtifacts, phaseMessages, contextValues) {
+function getPhaseOutputDocument(phaseId, workflowConfig, phaseOutputArtifacts) {
+  const output = (workflowConfig?.phaseOutputs?.[phaseId] || [])[0];
+  if (!output?.key) return "";
+  return phaseOutputArtifacts?.[phaseId]?.[output.key] || "";
+}
+
+function getPhaseOutputTarget(phaseId, workflowConfig, phaseOutputArtifacts) {
+  const output = (workflowConfig?.phaseOutputs?.[phaseId] || [])[0];
+  if (!output?.key) return null;
+  const content = phaseOutputArtifacts?.[phaseId]?.[output.key];
+  if (!String(content || "").trim()) return null;
+  return { phaseId, outputKey: output.key };
+}
+
+function getCheckpointInputDocument(phaseId, workflowConfig, phaseOutputArtifacts, contextValues) {
   const inputs = workflowConfig?.phaseInputs?.[phaseId] || [];
   const documents = [];
 
@@ -39,7 +53,7 @@ function getCheckpointInputDocument(phaseId, workflowConfig, phaseArtifacts, pha
       content = contextValues?.[input.name] || "";
     } else if (input.sourceType === "phase_output" && input.phaseId) {
       label = input.name || workflowConfig?.phaseLabels?.[input.phaseId] || input.phaseId;
-      content = phaseArtifacts?.[input.phaseId] || phaseMessages?.[input.phaseId] || "";
+      content = input.outputKey ? phaseOutputArtifacts?.[input.phaseId]?.[input.outputKey] || "" : "";
     }
 
     const normalizedContent = String(content || "");
@@ -51,6 +65,146 @@ function getCheckpointInputDocument(phaseId, workflowConfig, phaseArtifacts, pha
   if (documents.length === 0) return "";
   if (documents.length === 1) return documents[0].content;
   return documents.map((item) => `## ${item.label}\n\n${item.content}`).join("\n\n---\n\n");
+}
+
+function getCheckpointDocumentTarget(phaseId, workflowConfig, phaseOutputArtifacts) {
+  const inputs = workflowConfig?.phaseInputs?.[phaseId] || [];
+  const targets = [];
+
+  for (const input of inputs) {
+    if (input?.sourceType !== "phase_output" || !input.phaseId || !input.outputKey) continue;
+    const content = phaseOutputArtifacts?.[input.phaseId]?.[input.outputKey];
+    if (String(content || "").trim()) {
+      targets.push({ phaseId: input.phaseId, outputKey: input.outputKey });
+    }
+  }
+
+  return targets.length === 1 ? targets[0] : null;
+}
+
+function getDocumentContentForInput(input, phaseOutputArtifacts, contextValues) {
+  if (input.sourceType === "workflow_context") return contextValues?.[input.name] || "";
+  if (input.sourceType !== "phase_output" || !input.phaseId) return "";
+  return input.outputKey ? phaseOutputArtifacts?.[input.phaseId]?.[input.outputKey] || "" : "";
+}
+
+function getMissingDocumentMessage({ t, phaseId, workflowConfig, phaseOutputArtifacts, contextValues, activeStatus, isCheckpointPhase }) {
+  if (!phaseId || activeStatus === "pending") return "";
+
+  if (isCheckpointPhase) {
+    const inputs = workflowConfig?.phaseInputs?.[phaseId] || [];
+    const missingInput = inputs.find((input) =>
+      input.required !== false && !String(getDocumentContentForInput(input, phaseOutputArtifacts, contextValues) || "").trim()
+    );
+    if (!missingInput) return "";
+    if (missingInput.sourceType === "phase_output") {
+      return t("stepDetail.missingInputDocument", {
+        phase: workflowConfig?.phaseLabels?.[missingInput.phaseId] || missingInput.phaseId || "",
+        output: missingInput.outputKey || missingInput.name || "",
+      });
+    }
+    return t("stepDetail.missingContextDocument", { input: missingInput.name || "" });
+  }
+
+  if (activeStatus !== "completed" && activeStatus !== "failed") return "";
+  const output = (workflowConfig?.phaseOutputs?.[phaseId] || [])[0];
+  if (!output?.key) return "";
+  const content = phaseOutputArtifacts?.[phaseId]?.[output.key];
+  if (String(content || "").trim()) return "";
+  return t("stepDetail.missingOutputDocument", { output: output.key });
+}
+
+function hasEvent(debugEvents, type, phase = "") {
+  return (debugEvents || []).some((event) => {
+    const payload = event?.payload || {};
+    if (payload.type !== type) return false;
+    return !phase || payload.phase === phase;
+  });
+}
+
+function stepStatus(done, running) {
+  if (done) return "completed";
+  if (running) return "running";
+  return "pending";
+}
+
+function buildStartupSteps({ t, debugEvents, workflowState, workflowConfig, connectionState }) {
+  if (workflowState?.overallStatus !== "loading") return [];
+
+  const receivedState = hasEvent(debugEvents, "state") || workflowState?.overallStatus !== "loading";
+  const worktreeEnabled = Boolean(workflowConfig?.worktree?.enabled || workflowState?.worktree?.enabled);
+  const worktreeNamingStarted = hasEvent(debugEvents, "worktree_naming_started");
+  const worktreeNamingDone = hasEvent(debugEvents, "worktree_naming_completed");
+  const worktreePreparing = hasEvent(debugEvents, "worktree_preparing");
+  const worktreeReady = hasEvent(debugEvents, "worktree_ready") || Boolean(workflowState?.worktree?.enabled);
+
+  const steps = [
+    {
+      key: "connect",
+      label: t("stepDetail.startupConnect"),
+      status: stepStatus(receivedState || hasEvent(debugEvents, "workflow_starting"), connectionState === "connecting"),
+    },
+  ];
+
+  if (worktreeEnabled) {
+    steps.push(
+      {
+        key: "name-worktree",
+        label: t("stepDetail.startupNameWorktree"),
+        status: stepStatus(worktreeNamingDone || worktreePreparing || worktreeReady, worktreeNamingStarted),
+      },
+      {
+        key: "prepare-worktree",
+        label: t("stepDetail.startupPrepareWorktree"),
+        status: stepStatus(worktreeReady, worktreePreparing),
+      },
+    );
+  }
+
+  steps.push(
+    {
+      key: "state",
+      label: t("stepDetail.startupState"),
+      status: stepStatus(receivedState, worktreeEnabled ? worktreeReady : hasEvent(debugEvents, "workflow_starting")),
+    }
+  );
+
+  return steps;
+}
+
+function StartupProgressModal({ steps, t }) {
+  if (steps.length === 0) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/55 px-6 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <div className="w-full max-w-xl rounded-lg border border-border bg-card px-6 py-5 shadow-xl">
+        <div className="mb-4">
+          <h2 className="text-base font-semibold text-foreground">{t("stepDetail.startupTitle")}</h2>
+        </div>
+        <div className="space-y-3">
+          {steps.map((step) => {
+            const Icon = step.status === "completed" ? CheckCircle2 : step.status === "running" ? Loader2 : Circle;
+            return (
+              <div key={step.key} className="flex items-center gap-3 text-sm">
+                <Icon
+                  className={`h-4 w-4 shrink-0 ${
+                    step.status === "completed"
+                      ? "text-success"
+                      : step.status === "running"
+                        ? "animate-spin text-info"
+                        : "text-muted-foreground/50"
+                  }`}
+                />
+                <span className={step.status === "pending" ? "text-muted-foreground" : "text-foreground"}>
+                  {step.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function TicketPage() {
@@ -75,11 +229,12 @@ export default function TicketPage() {
   const selectedPhase = useWorkflowStore((s) => s.selectedPhase);
   const setSelectedPhase = useWorkflowStore((s) => s.setSelectedPhase);
   const phaseMessages = useWorkflowStore((s) => s.phaseMessages);
-  const phaseArtifacts = useWorkflowStore((s) => s.phaseArtifacts);
+  const phaseOutputArtifacts = useWorkflowStore((s) => s.phaseOutputArtifacts);
   const phaseInteractions = useWorkflowStore((s) => s.phaseInteractions);
   const isStreaming = useWorkflowStore((s) => s.isStreaming);
   const streamingPhase = useWorkflowStore((s) => s.streamingPhase);
   const debugEvents = useWorkflowStore((s) => s.debugEvents);
+  const connectionState = useWorkflowStore((s) => s.connectionState);
   const lastEventAt = useWorkflowStore((s) => s.lastEventAt);
   const lastError = useWorkflowStore((s) => s.lastError);
   const approve = useWorkflowStore((s) => s.approve);
@@ -100,21 +255,43 @@ export default function TicketPage() {
   const isPhaseStreaming = isStreaming && activePhase === streamingPhase;
   const isPhaseRunning = activeStatus === "in_progress";
   const isPhaseAwaiting = activeStatus === "awaiting_input";
+  const isPhaseFailed = activeStatus === "failed";
   const isAutoPhase = workflowConfig?.phaseTypes?.[activePhase] === "auto";
   const canPausePhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && isPhaseRunning && !lastError);
-  const canRestartPhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && !isStreaming && (lastError || isPhaseAwaiting));
+  const canRestartPhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && !isStreaming && (lastError || isPhaseAwaiting || isPhaseFailed));
 
   const isCheckpointPhase = workflowConfig?.phaseTypes?.[activePhase] === "checkpoint";
   const activePhaseContent = activePhase ? phaseMessages[activePhase] || "" : "";
   const activePhaseInputDocument = activePhase
-    ? getCheckpointInputDocument(activePhase, workflowConfig, phaseArtifacts, phaseMessages, workflowState?.contextValues)
+    ? getCheckpointInputDocument(activePhase, workflowConfig, phaseOutputArtifacts, workflowState?.contextValues)
     : "";
   const activePhaseArtifact = activePhase
     ? isCheckpointPhase
-      ? activePhaseInputDocument || phaseArtifacts[activePhase] || ""
-      : phaseArtifacts[activePhase] || ""
+      ? activePhaseInputDocument
+      : getPhaseOutputDocument(activePhase, workflowConfig, phaseOutputArtifacts)
     : "";
+  const documentOpenTarget = activePhase
+    ? isCheckpointPhase
+      ? getCheckpointDocumentTarget(activePhase, workflowConfig, phaseOutputArtifacts)
+      : getPhaseOutputTarget(activePhase, workflowConfig, phaseOutputArtifacts)
+    : null;
   const activePhaseInteractions = activePhase ? phaseInteractions[activePhase] || [] : [];
+  const emptyDocumentMessage = getMissingDocumentMessage({
+    t,
+    phaseId: activePhase,
+    workflowConfig,
+    phaseOutputArtifacts,
+    contextValues: workflowState?.contextValues,
+    activeStatus,
+    isCheckpointPhase,
+  });
+  const startupSteps = buildStartupSteps({
+    t,
+    debugEvents,
+    workflowState,
+    workflowConfig,
+    connectionState,
+  });
 
   async function handleDelete() {
     setShowDeleteConfirm(false);
@@ -152,6 +329,20 @@ export default function TicketPage() {
       await appApi.openInCode(targetPath);
     } catch (error) {
       showToast(error?.message || t("ticket.openInCodeFailed"));
+    }
+  }
+
+  async function handleOpenDocument() {
+    if (!taskId || !documentOpenTarget) return;
+    try {
+      await appApi.openTaskOutputInCode(
+        taskId,
+        workflowState?.runId || urlRunId || "",
+        documentOpenTarget.phaseId,
+        documentOpenTarget.outputKey,
+      );
+    } catch (error) {
+      showToast(error?.message || t("ticket.openDocumentInCodeFailed"));
     }
   }
 
@@ -227,7 +418,7 @@ export default function TicketPage() {
             phaseLabels={workflowConfig?.phaseLabels || {}}
             phaseTypes={workflowConfig?.phaseTypes || {}}
             onDelete={() => {
-              setDeleteWorktree(false);
+              setDeleteWorktree(hasWorktree);
               setShowDeleteConfirm(true);
             }}
           />
@@ -236,19 +427,24 @@ export default function TicketPage() {
             content={activePhaseContent}
             artifact={activePhaseArtifact}
             interactions={activePhaseInteractions}
+            emptyDocumentMessage={emptyDocumentMessage}
             activeBackend={workflowConfig?.phaseBackends?.[activePhase]}
             isStreaming={isPhaseStreaming}
             isRunning={isPhaseRunning}
             isAwaiting={isPhaseAwaiting}
+            isFailed={isPhaseFailed}
             onApprove={approve}
             onReject={reject}
             onSendMessage={sendMessage}
+            onOpenDocument={documentOpenTarget ? handleOpenDocument : undefined}
             phaseLabels={workflowConfig?.phaseLabels || {}}
             phaseTypes={workflowConfig?.phaseTypes || {}}
             rejectTargets={workflowConfig?.rejectTargets || {}}
           />
         </div>
       </div>
+
+      <StartupProgressModal steps={startupSteps} t={t} />
 
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowDeleteConfirm(false)}>

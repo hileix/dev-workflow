@@ -91,7 +91,16 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
     appendDebugEvent(set, msg);
 
     if (msg.type === "phase_artifact") {
-      set((state) => ({ phaseArtifacts: { ...state.phaseArtifacts, [msg.phase]: msg.content } }));
+      if (!msg.outputKey) return;
+      set((state) => ({
+        phaseOutputArtifacts: {
+          ...state.phaseOutputArtifacts,
+          [msg.phase]: {
+            ...(state.phaseOutputArtifacts[msg.phase] || {}),
+            [msg.outputKey]: msg.content,
+          },
+        },
+      }));
     } else if (msg.type === "text_delta") {
       set((state) => ({
         phaseMessages: { ...state.phaseMessages, [msg.phase]: (state.phaseMessages[msg.phase] || "") + msg.text },
@@ -182,7 +191,7 @@ export const useWorkflowStore = create((set, get) => ({
   workflowState: null,
   selectedPhase: null,
   phaseMessages: {},
-  phaseArtifacts: {},
+  phaseOutputArtifacts: {},
   phaseInteractions: {},
   isStreaming: false,
   streamingPhase: null,
@@ -203,7 +212,7 @@ export const useWorkflowStore = create((set, get) => ({
 
   async loadTicket(taskId, runId) {
     try {
-      const { state, messages, artifacts, interactions } = await desktopApi.getTaskState(taskId, runId);
+      const { state, messages, outputArtifacts, interactions } = await desktopApi.getTaskState(taskId, runId);
       const selectedPhase = state.currentPhase && state.currentPhase !== "completed"
         ? state.currentPhase
         : state.phases?.[0]?.id || null;
@@ -211,7 +220,7 @@ export const useWorkflowStore = create((set, get) => ({
         activeTicket: taskId,
         workflowState: state,
         phaseMessages: messages || {},
-        phaseArtifacts: artifacts || {},
+        phaseOutputArtifacts: outputArtifacts || {},
         phaseInteractions: interactions || {},
         selectedPhase,
         isStreaming: false,
@@ -252,7 +261,7 @@ export const useWorkflowStore = create((set, get) => ({
       activeTicket: id,
       selectedPhase: firstPhase,
       phaseMessages: {},
-      phaseArtifacts: {},
+      phaseOutputArtifacts: {},
       phaseInteractions: {},
       workflowState: {
         taskId: id,
@@ -373,7 +382,7 @@ export const useWorkflowStore = create((set, get) => ({
         activeTicket: null,
         workflowState: null,
         phaseMessages: {},
-        phaseArtifacts: {},
+        phaseOutputArtifacts: {},
         phaseInteractions: {},
         isStreaming: false,
         streamingPhase: null,

@@ -1,8 +1,7 @@
-import { mkdir } from "fs/promises";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
 import { readManagedSkillContentSync } from "../../../packages/core-models/skills.mjs";
-import { getPhaseOrder, getRejectTargets, isAutoPhase, nextPhase } from "../../../packages/core-models/workflow.mjs";
+import { getPhaseOrder, getRejectTargets, isAutoPhase } from "../../../packages/core-models/workflow.mjs";
 import {
   createTaskRunDir,
   readState,
@@ -18,15 +17,13 @@ import {
   activeWorkflows,
   sendWorkflowEvent,
   runPhase,
-  readArtifact,
+  readPhaseOutputArtifacts,
   getPhaseContent,
   continuePhaseConversation,
   completePhaseAfterUserTurn,
 } from "../../../packages/core-lib/claude.mjs";
-import { getWorkflow, interpolate } from "../../../packages/core-models/workflow.mjs";
+import { getWorkflow } from "../../../packages/core-models/workflow.mjs";
 import { prepareWorktree, removeWorktree } from "../../../packages/core-lib/worktree.mjs";
-import { readFile, writeFile } from "fs/promises";
-import { join } from "path";
 import { nanoid } from "nanoid";
 
 const DEFAULT_WORKTREE_NAMING_SKILL = `Choose a concise Git branch name for this workflow run.
@@ -88,43 +85,6 @@ async function finalizeWorktreeIfNeeded(state, forceRemove = false) {
   await removeWorktree(state.worktree, { force: forceRemove });
 }
 
-async function applyCheckpointPublishRules(taskId, phaseId, state) {
-  const workflow = getWorkflow();
-  const phase = workflow?.phases?.find((item) => item.id === phaseId);
-  const publishRules = phase?.checkpoint?.publish || [];
-  const contextValues = state?.contextValues || {};
-  if (publishRules.length === 0) return;
-
-  for (const rule of publishRules) {
-    const sourceInput = (phase.inputs || []).find((input) => input.name === rule.sourceName);
-    const targetOutput = (phase.outputs || []).find((output) => output.key === rule.asOutputKey);
-    if (!sourceInput || !targetOutput?.filename) continue;
-
-    let content = "";
-    if (sourceInput.sourceType === "workflow_context") {
-      content = contextValues[sourceInput.name] || "";
-    } else if (sourceInput.sourceType === "phase_output") {
-      const sourcePhase = workflow.phases.find((item) => item.id === sourceInput.phaseId);
-      const sourceOutput = (sourcePhase?.outputs || []).find((output) => output.key === sourceInput.outputKey);
-      if (!sourceOutput?.filename) continue;
-      try {
-        content = await readFile(
-          join(await createTaskRunDir(taskId, state.runId), interpolate(sourceOutput.filename, { taskId, runId: state.runId, ...contextValues })),
-          "utf-8"
-        );
-      } catch {
-        content = "";
-      }
-    }
-
-    if (!content) continue;
-    await writeFile(
-      join(await createTaskRunDir(taskId, state.runId), interpolate(targetOutput.filename, { taskId, runId: state.runId, ...contextValues })),
-      content
-    );
-  }
-}
-
 export async function startWorkflowSession(taskId, workFolder, contextValues, images, runId, sender, options = {}) {
   if (!taskId || !workFolder) throw new Error("taskId and workFolder required");
   if (!getWorkflow() || getPhaseOrder().length === 0) {
@@ -154,8 +114,10 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
       const content = await getPhaseContent(taskId, p.id, existingState.runId || "");
       if (content) sender({ type: "phase_content", phase: p.id, content });
       if (p.status !== "pending") {
-        const artifact = await readArtifact(taskId, p.id, existingState.runId || "");
-        if (artifact) sender({ type: "phase_artifact", phase: p.id, content: artifact });
+        const outputArtifacts = await readPhaseOutputArtifacts(taskId, p.id, existingState.runId || "");
+        for (const [outputKey, outputContent] of Object.entries(outputArtifacts)) {
+          sender({ type: "phase_artifact", phase: p.id, outputKey, content: outputContent });
+        }
       }
     }
 
@@ -172,19 +134,36 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   if (existingState) await clearTaskData(taskId, runId || existingState.runId || "");
   const finalRunId = runId || nanoid();
   const phaseOrder = getPhaseOrder();
-  const dir = await createTaskRunDir(taskId, finalRunId);
+  await createTaskRunDir(taskId, finalRunId);
 
   const workflow = getWorkflow();
+  sender({ type: "workflow_starting", taskId, runId: finalRunId });
   const requestedWorktreeName = String(options?.worktreeName || "").trim();
+  if (workflow.worktree?.enabled && !requestedWorktreeName) {
+    sender({ type: "worktree_naming_started" });
+  }
   const worktreeName = workflow.worktree?.enabled
     ? requestedWorktreeName || await generateWorktreeName({ taskId, workFolder, contextValues, workflow })
     : "";
+  if (workflow.worktree?.enabled && !requestedWorktreeName) {
+    sender({ type: "worktree_naming_completed", name: worktreeName });
+  }
+  if (workflow.worktree?.enabled) {
+    sender({ type: "worktree_preparing", name: worktreeName });
+  }
   const preparedWorktree = await prepareWorktree({
     repoRoot: workFolder,
     taskId,
     worktree: workflow.worktree,
     worktreeName,
   });
+  if (preparedWorktree.enabled) {
+    sender({
+      type: "worktree_ready",
+      branchName: preparedWorktree.branchName,
+      rootPath: preparedWorktree.rootPath,
+    });
+  }
   const runtimeWorkFolder = preparedWorktree.workFolder;
   const baseDir = await getBaseDir();
   const state = makeInitialState(taskId, runtimeWorkFolder, baseDir, contextValues, {
@@ -215,6 +194,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   });
   await upsertTask(workFolder, taskId, "in_progress", finalRunId);
   sender({ type: "state", state });
+  sender({ type: "phase_initializing", phase: phaseOrder[0] });
   runPhase(taskId, phaseOrder[0]);
 }
 
@@ -225,30 +205,8 @@ export async function approveWorkflow(taskId, sender, runId = "") {
   const state = await readState(taskId, runId || wf.runId || "");
   const cur = state.currentPhase;
   if (isAutoPhase(cur)) throw new Error(`cannot approve auto phase ${cur}`);
-  await applyCheckpointPublishRules(taskId, cur, state);
-  updatePhaseStatus(state, cur, "completed");
-  const next = nextPhase(cur);
-  if (next) {
-    state.currentPhase = next;
-    if (isAutoPhase(next)) {
-      updatePhaseStatus(state, next, "in_progress");
-      state.overallStatus = "in_progress";
-    } else {
-      updatePhaseStatus(state, next, "awaiting_input");
-      state.overallStatus = "awaiting_input";
-    }
-  } else {
-    state.overallStatus = "completed";
-    state.currentPhase = "completed";
-    await finalizeWorktreeIfNeeded(state);
-    upsertTask(state.originalWorkFolder || wf.workFolder, taskId, "completed", state.runId || wf.runId || "", { create: false }).catch(() => {});
-  }
-  await writeState(taskId, state);
-  sender({ type: "state", state });
-
-  if (next && isAutoPhase(next)) {
-    runPhase(taskId, next);
-  }
+  wf.send = createEmitter(sender);
+  await completePhaseAfterUserTurn(taskId, cur, state.runId || runId || wf.runId || "");
 }
 
 export async function rejectWorkflow(taskId, rejectTo, sender, runId = "") {

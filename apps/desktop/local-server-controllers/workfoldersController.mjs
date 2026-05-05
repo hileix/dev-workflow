@@ -6,7 +6,7 @@ import multer from "multer";
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
 import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
-import { getPhaseContent, readArtifact, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
+import { getPhaseContent, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
 
 const upload = multer({ storage: multer.diskStorage({
   async destination(req, _file, cb) {
@@ -81,7 +81,7 @@ router.get("/tasks/:taskId/state", async (req, res) => {
     const state = await readState(taskId, runId);
     const stateRunId = state.runId || runId;
     const messages = {};
-    const artifacts = {};
+    const outputArtifacts = {};
     const interactions = {};
     for (const p of state.phases) {
       const content = await getPhaseContent(taskId, p.id, stateRunId);
@@ -89,11 +89,13 @@ router.get("/tasks/:taskId/state", async (req, res) => {
       const phaseInteractions = await readPhaseInteractions(taskId, p.id, stateRunId);
       if (phaseInteractions.length > 0) interactions[p.id] = phaseInteractions;
       if (p.status !== "pending") {
-        const artifact = await readArtifact(taskId, p.id, stateRunId);
-        if (artifact) artifacts[p.id] = artifact;
+        const phaseOutputArtifacts = await readPhaseOutputArtifacts(taskId, p.id, stateRunId);
+        if (Object.keys(phaseOutputArtifacts).length > 0) {
+          outputArtifacts[p.id] = phaseOutputArtifacts;
+        }
       }
     }
-    res.json({ state, messages, artifacts, interactions });
+    res.json({ state, messages, outputArtifacts, interactions });
   } catch {
     res.status(404).json({ error: "task not found" });
   }
