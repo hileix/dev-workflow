@@ -1,5 +1,7 @@
 import { mkdir } from "fs/promises";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { getBaseDir } from "../../../packages/core-models/config.mjs";
+import { readManagedSkillContentSync } from "../../../packages/core-models/skills.mjs";
 import { getPhaseOrder, getRejectTargets, isAutoPhase, nextPhase } from "../../../packages/core-models/workflow.mjs";
 import {
   createTaskRunDir,
@@ -27,8 +29,57 @@ import { readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { nanoid } from "nanoid";
 
+const DEFAULT_WORKTREE_NAMING_SKILL = `Choose a concise Git branch name for this workflow run.
+
+Rules:
+- Return exactly one name and no explanation.
+- Use Conventional Commits style as a branch prefix: feat/, fix/, docs/, refactor/, test/, chore/, perf/, ci/, build/, or style/.
+- Use lowercase kebab-case after the prefix.
+- Keep it under 48 characters when practical.
+- Prefer the task intent over generic words.`;
+
 function createEmitter(sender) {
   return (event) => sender(event);
+}
+
+function cleanGeneratedWorktreeName(value) {
+  return String(value || "")
+    .trim()
+    .split(/\r?\n/)
+    .find((line) => line.trim())
+    ?.trim()
+    .replace(/^`+|`+$/g, "")
+    .replace(/^["']|["']$/g, "") || "";
+}
+
+async function generateWorktreeName({ taskId, workFolder, contextValues, workflow }) {
+  const skill = readManagedSkillContentSync("worktree-naming") || DEFAULT_WORKTREE_NAMING_SKILL;
+  const context = [
+    `Task ID: ${taskId}`,
+    `Workflow: ${workflow?.name || ""}`,
+    `Work folder: ${workFolder}`,
+    `Task context: ${JSON.stringify(contextValues || {})}`,
+  ].join("\n");
+
+  const prompt = `${skill}\n\n${context}`;
+  try {
+    let name = "";
+    for await (const message of query({
+      prompt,
+      options: {
+        cwd: workFolder,
+        permissionMode: "default",
+        maxTurns: 1,
+      },
+    })) {
+      if (message.type === "result" && message.subtype === "success") {
+        name = cleanGeneratedWorktreeName(message.result);
+      }
+    }
+    return name;
+  } catch {
+    return "";
+  }
 }
 
 async function finalizeWorktreeIfNeeded(state, forceRemove = false) {
@@ -74,7 +125,7 @@ async function applyCheckpointPublishRules(taskId, phaseId, state) {
   }
 }
 
-export async function startWorkflowSession(taskId, workFolder, contextValues, images, runId, sender) {
+export async function startWorkflowSession(taskId, workFolder, contextValues, images, runId, sender, options = {}) {
   if (!taskId || !workFolder) throw new Error("taskId and workFolder required");
   if (!getWorkflow() || getPhaseOrder().length === 0) {
     throw new Error("no workflow configured");
@@ -124,10 +175,15 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   const dir = await createTaskRunDir(taskId, finalRunId);
 
   const workflow = getWorkflow();
+  const requestedWorktreeName = String(options?.worktreeName || "").trim();
+  const worktreeName = workflow.worktree?.enabled
+    ? requestedWorktreeName || await generateWorktreeName({ taskId, workFolder, contextValues, workflow })
+    : "";
   const preparedWorktree = await prepareWorktree({
     repoRoot: workFolder,
     taskId,
     worktree: workflow.worktree,
+    worktreeName,
   });
   const runtimeWorkFolder = preparedWorktree.workFolder;
   const baseDir = await getBaseDir();

@@ -1,4 +1,4 @@
-import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "path";
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "path";
 import { access, cp, mkdir, stat } from "fs/promises";
 import { execFile } from "child_process";
 
@@ -21,6 +21,26 @@ function sanitizeNamePart(value, fallback) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized || fallback;
+}
+
+function normalizeBranchName(value, fallback) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, "/")
+    .replace(/^([a-z]+)(?:\([^)]+\))?:\s*(.+)$/i, "$1/$2")
+    .split("/")
+    .map((part) => sanitizeNamePart(part, ""))
+    .filter(Boolean)
+    .join("/");
+
+  return normalized || fallback;
+}
+
+function branchToWorktreeName(branchName) {
+  return String(branchName || "")
+    .replace(/\//g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function normalizeMigrationFiles(files) {
@@ -74,15 +94,17 @@ async function branchExists(repoRoot, branchName) {
   }
 }
 
-async function findAvailableWorktree(repoRoot, taskId) {
-  const repoName = sanitizeNamePart(basename(repoRoot), "repo");
+async function findAvailableWorktree(repoRoot, taskId, preferredName) {
   const ticketSlug = sanitizeNamePart(taskId, "task");
+  const fallbackBranch = `chore/${ticketSlug}`;
+  const baseBranchName = normalizeBranchName(preferredName, fallbackBranch);
+  const baseDirName = branchToWorktreeName(baseBranchName);
   const parentDir = dirname(repoRoot);
 
   for (let index = 0; index < 50; index++) {
     const suffix = index === 0 ? "" : `-${index + 1}`;
-    const dirName = `${repoName}-wt-${ticketSlug}${suffix}`;
-    const branchName = `workflow/${ticketSlug}${suffix}`;
+    const branchName = `${baseBranchName}${suffix}`;
+    const dirName = `${baseDirName}${suffix}`;
     const worktreePath = join(parentDir, dirName);
 
     if (await pathExists(worktreePath)) continue;
@@ -102,7 +124,7 @@ export function normalizeWorktreeConfig(worktree) {
   return { enabled, files, customFiles, removeOnComplete };
 }
 
-export async function prepareWorktree({ repoRoot, taskId, worktree }) {
+export async function prepareWorktree({ repoRoot, taskId, worktree, worktreeName }) {
   const worktreeConfig = normalizeWorktreeConfig(worktree);
   if (!worktreeConfig.enabled) {
     return {
@@ -124,7 +146,7 @@ export async function prepareWorktree({ repoRoot, taskId, worktree }) {
 
   const sourceRoot = repoStatus;
   const selectedSubdir = relative(sourceRoot, resolve(repoRoot));
-  const { worktreePath, branchName } = await findAvailableWorktree(sourceRoot, taskId);
+  const { worktreePath, branchName } = await findAvailableWorktree(sourceRoot, taskId, worktreeName);
   await mkdir(dirname(worktreePath), { recursive: true });
   await execGit(["worktree", "add", "-b", branchName, worktreePath, "HEAD"], sourceRoot);
 

@@ -228,12 +228,12 @@ export const useWorkflowStore = create((set, get) => ({
     } catch {}
   },
 
-  async connectWorkflow(taskId, workFolder, contextValues, images, runId) {
+  async connectWorkflow(taskId, workFolder, contextValues, images, runId, worktreeName) {
     appendDebugEvent(set, { type: "client_connect", taskId, workFolder }, "client");
     set({ connectionState: "connecting" });
     const detach = attachWorkflowEvents(set, get, taskId, runId);
     try {
-      await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images, runId });
+      await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images, runId, worktreeName });
     } catch (err) {
       appendDebugEvent(set, { type: "error", message: err?.message || "Failed to start workflow" }, "client");
       detach();
@@ -241,7 +241,7 @@ export const useWorkflowStore = create((set, get) => ({
     }
   },
 
-  startWorkflow(id, folder, contextValues, images, runId) {
+  startWorkflow(id, folder, contextValues, images, runId, worktreeName) {
     const selectedFolder = folder || useConfigStore.getState().selectedFolder;
     if (!id || !selectedFolder) return;
 
@@ -273,7 +273,7 @@ export const useWorkflowStore = create((set, get) => ({
     });
     prevStatusRef = {};
 
-    get().connectWorkflow(id, selectedFolder, contextValues, images, runId);
+    get().connectWorkflow(id, selectedFolder, contextValues, images, runId, worktreeName);
   },
 
   async approve() {

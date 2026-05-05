@@ -98,6 +98,7 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
   const [selectedWorkflow, setSelectedWorkflow] = useState(workflows[0]?.filename || null);
   const [selectedFolder, setSelectedFolder] = useState(defaultFolder);
   const [contextValues, setContextValues] = useState({});
+  const [worktreeName, setWorktreeName] = useState("");
   const [images, setImages] = useState([]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -163,7 +164,7 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
         uploadedPaths = data.paths || [];
       }
 
-      onStart(id, selectedFolder, contextValues, uploadedPaths.length > 0 ? uploadedPaths : undefined, runId);
+      onStart(id, selectedFolder, contextValues, uploadedPaths.length > 0 ? uploadedPaths : undefined, runId, worktreeName.trim());
     } finally {
       setSubmitting(false);
     }
@@ -238,6 +239,20 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
               ))}
             </div>
           </div>
+          {worktreeConfig.enabled && (
+            <div className="space-y-2">
+              <span className="text-xs font-semibold text-muted-foreground">{t("home.worktreeName")}</span>
+              <input
+                value={worktreeName}
+                onChange={(e) => setWorktreeName(e.target.value)}
+                placeholder={t("home.worktreeNamePlaceholder")}
+                className="flex h-11 w-full rounded-lg border border-input bg-secondary px-4 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring"
+              />
+              <div className="text-[10px] text-muted-foreground">
+                {t("home.worktreeNameHint")}
+              </div>
+            </div>
+          )}
           <form className="space-y-3" onSubmit={handleSubmit}>
             {displayContextFields.map((field, i) => (
               <div key={field.key} className="space-y-2">
@@ -314,8 +329,8 @@ export default function HomePage() {
   const groups = workflowConfig?.groups || [];
   const canStartWorkflow = workflows.length > 0;
 
-  function handleStartWorkflow(id, folderPath, contextValues, images, runId) {
-    startWorkflow(id, folderPath, contextValues, images, runId);
+  function handleStartWorkflow(id, folderPath, contextValues, images, runId, worktreeName) {
+    startWorkflow(id, folderPath, contextValues, images, runId, worktreeName);
     setShowStartModal(false);
     const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
     navigate(`/ticket/${encodeURIComponent(id)}${query}`);

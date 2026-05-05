@@ -151,6 +151,7 @@ function registerIpcHandlers() {
       payload.images,
       payload.runId,
       (message) => event.sender.send("workflow:event", message),
+      { worktreeName: payload.worktreeName },
     )
   );
   ipcMain.handle("app:approve-workflow", (event, taskId, runId) =>

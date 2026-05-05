@@ -67,6 +67,34 @@ function buildSkillContent({ name, description, body }) {
   ].join("\n");
 }
 
+const DEFAULT_MANAGED_SKILLS = [
+  {
+    slug: "worktree-naming",
+    name: "worktree-naming",
+    description: "Generate Git branch and worktree names for workflow runs.",
+    body: [
+      "Choose a concise Git branch name for this workflow run.",
+      "",
+      "Rules:",
+      "- Return exactly one name and no explanation.",
+      "- Use Conventional Commits style as a branch prefix: feat/, fix/, docs/, refactor/, test/, chore/, perf/, ci/, build/, or style/.",
+      "- Use lowercase kebab-case after the prefix.",
+      "- Keep it under 48 characters when practical.",
+      "- Prefer the task intent over generic words.",
+    ].join("\n"),
+  },
+];
+
+async function ensureDefaultManagedSkills() {
+  await mkdir(getSkillsDir(), { recursive: true });
+  for (const skill of DEFAULT_MANAGED_SKILLS) {
+    const targetFile = skillFile(skill.slug);
+    if (existsSync(targetFile)) continue;
+    await mkdir(skillDir(skill.slug), { recursive: true });
+    await writeFile(targetFile, buildSkillContent(skill));
+  }
+}
+
 async function readSkill(slug) {
   const content = await readFile(skillFile(slug), "utf-8");
   const parsed = parseSkillContent(content);
@@ -120,6 +148,7 @@ async function copySkillDir(sourceDir) {
 }
 
 export async function listManagedSkills() {
+  await ensureDefaultManagedSkills();
   const root = getSkillsDir();
   const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   const skills = [];
