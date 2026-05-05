@@ -2,6 +2,7 @@
 
 - https://github.com/superagent-ai/vibekit
 - https://github.com/codeany-ai/open-agent-sdk-typescript
+- https://github.com/langgenius/dify
 
 
 base:

@@ -503,6 +503,52 @@ function buildRevisionPrompt(phasePrompt, userFeedback, currentArtifact) {
   ].filter(Boolean).join("\n\n");
 }
 
+function normalizeRoutingValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getFirstNonEmptyLine(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || "";
+}
+
+async function resolveRoutedNextPhase(taskId, phaseId, state, runId = "") {
+  const workflow = getWorkflow();
+  const phase = workflow?.phases?.find((item) => item.id === phaseId);
+  const routing = phase?.routing;
+  if (!routing) return nextPhase(phaseId);
+
+  const validPhaseIds = new Set((workflow?.phases || []).map((item) => item.id));
+  const resolveTarget = (target) => {
+    const nextTarget = String(target || "").trim();
+    if (!nextTarget) return "";
+    if (!validPhaseIds.has(nextTarget)) {
+      throw new Error(`Invalid routed next phase "${nextTarget}" from ${phaseId}`);
+    }
+    return nextTarget;
+  };
+
+  const rules = Array.isArray(routing.rules) ? routing.rules : [];
+  if (routing.outputKey && rules.length > 0) {
+    const content = await readPhaseOutputArtifact(taskId, phaseId, routing.outputKey, state?.runId || runId);
+    const actual = normalizeRoutingValue(getFirstNonEmptyLine(content));
+    for (const rule of rules) {
+      const expected = normalizeRoutingValue(rule?.equals);
+      if (!expected) continue;
+      if (actual === expected) {
+        return resolveTarget(rule.target);
+      }
+    }
+  }
+
+  const fallbackTarget = resolveTarget(routing.defaultTarget);
+  if (fallbackTarget) return fallbackTarget;
+
+  return nextPhase(phaseId);
+}
+
 async function completePhase(taskId, phase, runId, workFolder, send) {
   const latestState = await readState(taskId, runId);
   await validateRequiredPhaseInputs(taskId, phase, latestState, runId);
@@ -513,7 +559,7 @@ async function completePhase(taskId, phase, runId, workFolder, send) {
 
   updatePhaseStatus(latestState, phase, "completed");
 
-  const next = nextPhase(phase);
+  const next = await resolveRoutedNextPhase(taskId, phase, latestState, runId);
   if (next) {
     latestState.currentPhase = next;
     if (!isAutoPhase(next)) {

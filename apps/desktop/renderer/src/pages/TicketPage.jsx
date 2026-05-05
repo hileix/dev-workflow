@@ -210,6 +210,7 @@ function StartupProgressModal({ steps, t }) {
 export default function TicketPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteWorktree, setDeleteWorktree] = useState(false);
+  const [isDeletingTask, setIsDeletingTask] = useState(false);
   const navigate = useNavigate();
   const { id: urlTicketId } = useParams();
   const [searchParams] = useSearchParams();
@@ -294,11 +295,17 @@ export default function TicketPage() {
   });
 
   async function handleDelete() {
-    setShowDeleteConfirm(false);
+    if (isDeletingTask) return;
+    setIsDeletingTask(true);
     const deleted = await deleteTask(taskId, workflowState?.runId || urlRunId, {
       removeWorktree: hasWorktree && deleteWorktree,
     });
-    if (deleted) navigate("/");
+    if (deleted) {
+      navigate("/");
+      return;
+    }
+    setIsDeletingTask(false);
+    showToast(t("ticket.deleteTaskFailed"));
   }
 
   async function handleCopyDebugInfo() {
@@ -447,13 +454,44 @@ export default function TicketPage() {
       <StartupProgressModal steps={startupSteps} t={t} />
 
       {showDeleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowDeleteConfirm(false)}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => {
+            if (!isDeletingTask) setShowDeleteConfirm(false);
+          }}
+        >
           <div className="bg-card border border-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-foreground mb-2">{t("ticket.deleteTask")}</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              {t("ticket.deleteTaskConfirm", { name: taskId })}
-            </p>
-            {hasWorktree && (
+            {isDeletingTask ? (
+              <>
+                <div className="mb-4 flex items-center gap-3">
+                  <Loader2 className="h-5 w-5 animate-spin text-info" />
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground">{t("ticket.deletingTask")}</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">{t("ticket.deletingTaskHint")}</p>
+                  </div>
+                </div>
+                <div className="space-y-2 rounded-md border border-border bg-secondary/35 p-3 text-sm">
+                  <div className="flex items-center gap-2 text-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-info" />
+                    <span>{t("ticket.deletingTaskData")}</span>
+                  </div>
+                  {hasWorktree && deleteWorktree && (
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Circle className="h-3.5 w-3.5" />
+                      <span>{t("ticket.deletingWorktree")}</span>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className="text-sm font-semibold text-foreground mb-2">{t("ticket.deleteTask")}</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  {t("ticket.deleteTaskConfirm", { name: taskId })}
+                </p>
+              </>
+            )}
+            {hasWorktree && !isDeletingTask && (
               <label className="mb-4 flex items-start gap-3 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
                 <input
                   type="checkbox"
@@ -473,12 +511,14 @@ export default function TicketPage() {
                 </span>
               </label>
             )}
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" size="sm" onClick={() => setShowDeleteConfirm(false)}>{t("common.cancel")}</Button>
-              <Button variant="destructive" size="sm" onClick={handleDelete}>
-                {hasWorktree && deleteWorktree ? t("ticket.deleteTaskAndWorktree") : t("common.delete")}
-              </Button>
-            </div>
+            {!isDeletingTask && (
+              <div className="flex justify-end gap-3">
+                <Button variant="outline" size="sm" onClick={() => setShowDeleteConfirm(false)}>{t("common.cancel")}</Button>
+                <Button variant="destructive" size="sm" onClick={handleDelete}>
+                  {hasWorktree && deleteWorktree ? t("ticket.deleteTaskAndWorktree") : t("common.delete")}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       )}
