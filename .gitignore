@@ -1,5 +1,6 @@
 node_modules/
 renderer/dist/
+apps/desktop/renderer/dist/
 renderer/node_modules/
 
 references/

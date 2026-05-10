@@ -1,0 +1,442 @@
+{
+  "id": "superpowers_development_workflow",
+  "name": "Superpowers Development Workflow",
+  "version": 1,
+  "runtime": "langgraph",
+  "ui": {
+    "layout": "vertical",
+    "nodePositions": {
+      "explore_context": { "x": 120, "y": 80 },
+      "draft_design": { "x": 120, "y": 310 },
+      "design_review": { "x": 120, "y": 540 },
+      "write_plan": { "x": 120, "y": 770 },
+      "plan_review": { "x": 120, "y": 1000 },
+      "implement_with_tdd": { "x": 120, "y": 1230 },
+      "review_spec_compliance": { "x": 120, "y": 1460 },
+      "review_code_quality": { "x": 120, "y": 1690 },
+      "review_gate": { "x": 120, "y": 1920 },
+      "verify_and_finish": { "x": 120, "y": 2150 },
+      "completion_review": { "x": 120, "y": 2380 }
+    }
+  },
+  "worktree": {
+    "enabled": true,
+    "files": [
+      ".env",
+      ".env.local",
+      ".env.development",
+      ".env.production",
+      ".npmrc",
+      ".pnpmrc",
+      ".yarnrc.yml",
+      ".claude/settings.local.json"
+    ],
+    "customFiles": [],
+    "removeOnComplete": false
+  },
+  "agents": {
+    "designer": {
+      "backend": "claude",
+      "skill": "",
+      "model": "",
+      "workspaceAccess": "read",
+      "options": {}
+    },
+    "planner": {
+      "backend": "claude",
+      "skill": "",
+      "model": "",
+      "workspaceAccess": "read",
+      "options": {}
+    },
+    "coder": {
+      "backend": "codex",
+      "skill": "",
+      "model": "gpt-5.5",
+      "workspaceAccess": "write",
+      "options": {
+        "thread": {
+          "modelReasoningEffort": "high"
+        }
+      }
+    },
+    "reviewer": {
+      "backend": "codex",
+      "skill": "",
+      "model": "gpt-5.5",
+      "workspaceAccess": "read",
+      "options": {
+        "thread": {
+          "modelReasoningEffort": "high"
+        }
+      }
+    },
+    "finisher": {
+      "backend": "codex",
+      "skill": "",
+      "model": "gpt-5.4",
+      "workspaceAccess": "write",
+      "options": {
+        "thread": {
+          "modelReasoningEffort": "medium"
+        }
+      }
+    }
+  },
+  "contextGroups": [
+    {
+      "id": "design_session",
+      "label": "Design Session",
+      "agent": "designer",
+      "sharedSession": true
+    },
+    {
+      "id": "coding_session",
+      "label": "Coding Session",
+      "agent": "coder",
+      "sharedSession": true
+    },
+    {
+      "id": "review_session",
+      "label": "Review Session",
+      "agent": "reviewer",
+      "sharedSession": false
+    }
+  ],
+  "steps": [
+    {
+      "id": "explore_context",
+      "type": "agent",
+      "label": "Explore Context",
+      "agent": "designer",
+      "contextGroup": "design_session",
+      "workspaceAccess": "read",
+      "inputs": [
+        {
+          "name": "task",
+          "sourceType": "workflow_context",
+          "contextLabel": "Task Description",
+          "contextPlaceholder": "Describe the feature, bug, or product change you want to build.",
+          "required": true
+        },
+        {
+          "name": "constraints",
+          "sourceType": "workflow_context",
+          "contextLabel": "Constraints",
+          "contextPlaceholder": "Optional constraints, out-of-scope items, preferred files, or verification commands.",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "key": "context_report",
+          "kind": "markdown",
+          "filename": "01-context-report.md"
+        }
+      ],
+      "prompt": "Act as the Superpowers context scout, adapted from Superpowers' brainstorming flow.\n\nTask:\n{{task}}\n\nConstraints:\n{{constraints}}\n\nDo this before proposing implementation:\n- Inspect the repository structure, docs, and relevant source files.\n- Identify the likely modules, entrypoints, commands, and existing patterns.\n- Surface assumptions, ambiguous requirements, and any scope risk.\n- Do not edit source code.\n- Save the result to {{taskDir}}/01-context-report.md.\n\nOutput format:\n# Context Report\n\n## Task Restatement\n## Relevant Repo Reality\n## Assumptions\n## Questions Or Ambiguities\n## Suggested Scope Boundary",
+      "next": "draft_design"
+    },
+    {
+      "id": "draft_design",
+      "type": "agent",
+      "label": "Draft Design",
+      "agent": "designer",
+      "contextGroup": "design_session",
+      "workspaceAccess": "read",
+      "inputs": [
+        {
+          "name": "context",
+          "sourceType": "step_output",
+          "stepId": "explore_context",
+          "outputKey": "context_report",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "design_draft",
+          "kind": "markdown",
+          "filename": "02-design-draft.md"
+        }
+      ],
+      "prompt": "Create a concise design draft using the Superpowers brainstorming pattern.\n\nRead {{taskDir}}/01-context-report.md first.\n\nRequirements:\n- Propose 2-3 approaches with tradeoffs.\n- Recommend one approach and explain why.\n- Keep the scope conservative and avoid speculative features.\n- Cover architecture, data flow, UI/API impact if relevant, error handling, and verification.\n- Do not edit source code.\n- Save the design to {{taskDir}}/02-design-draft.md.\n\nOutput format:\n# Design Draft\n\n## Goal\n## Options\n## Recommended Approach\n## Architecture\n## Data Flow\n## Testing And Verification\n## Out Of Scope",
+      "next": "design_review"
+    },
+    {
+      "id": "design_review",
+      "type": "checkpoint",
+      "label": "Design Review",
+      "question": "Approve this design draft?",
+      "inputs": [
+        {
+          "name": "design",
+          "sourceType": "step_output",
+          "stepId": "draft_design",
+          "outputKey": "design_draft",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "approved_design",
+          "kind": "markdown",
+          "filename": "03-design-approved.md"
+        }
+      ],
+      "approve": "write_plan",
+      "rejectTo": "draft_design",
+      "rejectTargets": [
+        "draft_design",
+        "explore_context"
+      ],
+      "publish": [
+        {
+          "action": "approve",
+          "sourceName": "design",
+          "asOutputKey": "approved_design",
+          "filename": "03-design-approved.md"
+        }
+      ]
+    },
+    {
+      "id": "write_plan",
+      "type": "agent",
+      "label": "Write Plan",
+      "agent": "planner",
+      "workspaceAccess": "read",
+      "inputs": [
+        {
+          "name": "design",
+          "sourceType": "step_output",
+          "stepId": "design_review",
+          "outputKey": "approved_design",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "implementation_plan",
+          "kind": "markdown",
+          "filename": "04-implementation-plan.md"
+        }
+      ],
+      "prompt": "Write an implementation plan adapted from Superpowers' writing-plans skill.\n\nRead {{taskDir}}/03-design-approved.md first.\n\nPlan requirements:\n- Break the work into small tasks.\n- For each task, include exact files, concrete steps, and verification commands.\n- Prefer test-first steps when the repo has a suitable test path.\n- For UI-only or doc-only work, provide the smallest meaningful verification.\n- Avoid placeholders, vague instructions, and speculative work.\n- Save the plan to {{taskDir}}/04-implementation-plan.md.\n\nOutput format:\n# Implementation Plan\n\n## Goal\n## Files\n## Tasks\nUse checkbox steps for each task.\n## Verification\n## Risks",
+      "next": "plan_review"
+    },
+    {
+      "id": "plan_review",
+      "type": "checkpoint",
+      "label": "Plan Review",
+      "question": "Approve this implementation plan?",
+      "inputs": [
+        {
+          "name": "plan",
+          "sourceType": "step_output",
+          "stepId": "write_plan",
+          "outputKey": "implementation_plan",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "approved_plan",
+          "kind": "markdown",
+          "filename": "05-plan-approved.md"
+        }
+      ],
+      "approve": "implement_with_tdd",
+      "rejectTo": "write_plan",
+      "rejectTargets": [
+        "write_plan",
+        "draft_design"
+      ],
+      "publish": [
+        {
+          "action": "approve",
+          "sourceName": "plan",
+          "asOutputKey": "approved_plan",
+          "filename": "05-plan-approved.md"
+        }
+      ]
+    },
+    {
+      "id": "implement_with_tdd",
+      "type": "agent",
+      "label": "Implement With TDD",
+      "agent": "coder",
+      "contextGroup": "coding_session",
+      "workspaceAccess": "write",
+      "inputs": [
+        {
+          "name": "plan",
+          "sourceType": "step_output",
+          "stepId": "plan_review",
+          "outputKey": "approved_plan",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "implementation_summary",
+          "kind": "markdown",
+          "filename": "06-implementation-summary.md"
+        }
+      ],
+      "prompt": "Execute the approved plan using the Superpowers implementation principles.\n\nRead {{taskDir}}/05-plan-approved.md first.\n\nRules:\n- Work in the current workflow worktree.\n- Keep changes surgical and preserve existing behavior unless the plan requires changing it.\n- Use RED-GREEN-REFACTOR when a meaningful automated test path exists: write the failing test, verify it fails, implement the minimal fix, verify it passes.\n- If no automated test path exists, explain the manual/build verification used.\n- Do not add speculative abstractions or compatibility work that was not requested.\n- Save a summary to {{taskDir}}/06-implementation-summary.md.\n\nSummary format:\n# Implementation Summary\n\n## Changes Made\n## Files Changed\n## Verification Run\n## Known Follow-ups Or Risks",
+      "next": "review_spec_compliance"
+    },
+    {
+      "id": "review_spec_compliance",
+      "type": "agent",
+      "label": "Spec Compliance Review",
+      "agent": "reviewer",
+      "contextGroup": "review_session",
+      "workspaceAccess": "read",
+      "inputs": [
+        {
+          "name": "design",
+          "sourceType": "step_output",
+          "stepId": "design_review",
+          "outputKey": "approved_design",
+          "required": true
+        },
+        {
+          "name": "plan",
+          "sourceType": "step_output",
+          "stepId": "plan_review",
+          "outputKey": "approved_plan",
+          "required": true
+        },
+        {
+          "name": "implementation",
+          "sourceType": "step_output",
+          "stepId": "implement_with_tdd",
+          "outputKey": "implementation_summary",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "spec_review",
+          "kind": "markdown",
+          "filename": "07-spec-compliance-review.md"
+        }
+      ],
+      "prompt": "Review the implementation for spec compliance only.\n\nRead:\n- {{taskDir}}/03-design-approved.md\n- {{taskDir}}/05-plan-approved.md\n- {{taskDir}}/06-implementation-summary.md\n\nCheck:\n- Required behavior was implemented.\n- No requested behavior was missed.\n- No unrelated behavior was added.\n- Verification matches the plan.\n\nSave the review to {{taskDir}}/07-spec-compliance-review.md.\n\nLead with findings by severity. If there are no findings, say: No spec compliance findings.",
+      "next": "review_code_quality"
+    },
+    {
+      "id": "review_code_quality",
+      "type": "agent",
+      "label": "Code Quality Review",
+      "agent": "reviewer",
+      "contextGroup": "review_session",
+      "workspaceAccess": "read",
+      "inputs": [
+        {
+          "name": "spec_review",
+          "sourceType": "step_output",
+          "stepId": "review_spec_compliance",
+          "outputKey": "spec_review",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "quality_review",
+          "kind": "markdown",
+          "filename": "08-code-quality-review.md"
+        }
+      ],
+      "prompt": "Review the implementation for code quality and regression risk.\n\nRead {{taskDir}}/07-spec-compliance-review.md and inspect the current git diff.\n\nFocus on:\n- Bugs, behavioral regressions, race conditions, data loss, and security issues.\n- Missing or weak verification.\n- Overcomplication relative to the approved plan.\n- Unrelated file churn.\n\nSave the review to {{taskDir}}/08-code-quality-review.md.\n\nLead with findings by severity. If there are no findings, say: No code quality findings.",
+      "next": "review_gate"
+    },
+    {
+      "id": "review_gate",
+      "type": "checkpoint",
+      "label": "Review Gate",
+      "question": "Approve the implementation and reviews?",
+      "inputs": [
+        {
+          "name": "spec_review",
+          "sourceType": "step_output",
+          "stepId": "review_spec_compliance",
+          "outputKey": "spec_review",
+          "required": true
+        },
+        {
+          "name": "quality_review",
+          "sourceType": "step_output",
+          "stepId": "review_code_quality",
+          "outputKey": "quality_review",
+          "required": true
+        }
+      ],
+      "outputs": [],
+      "approve": "verify_and_finish",
+      "rejectTo": "implement_with_tdd",
+      "rejectTargets": [
+        "implement_with_tdd",
+        "write_plan",
+        "draft_design"
+      ],
+      "publish": []
+    },
+    {
+      "id": "verify_and_finish",
+      "type": "agent",
+      "label": "Verify And Finish",
+      "agent": "finisher",
+      "workspaceAccess": "write",
+      "inputs": [
+        {
+          "name": "implementation",
+          "sourceType": "step_output",
+          "stepId": "implement_with_tdd",
+          "outputKey": "implementation_summary",
+          "required": true
+        },
+        {
+          "name": "quality_review",
+          "sourceType": "step_output",
+          "stepId": "review_code_quality",
+          "outputKey": "quality_review",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "completion_report",
+          "kind": "markdown",
+          "filename": "09-completion-report.md"
+        }
+      ],
+      "prompt": "Prepare the branch completion report using Superpowers' finishing-a-development-branch pattern.\n\nRead:\n- {{taskDir}}/06-implementation-summary.md\n- {{taskDir}}/08-code-quality-review.md\n\nDo:\n- Run the final verification command from the approved plan when possible.\n- Inspect git status and summarize changed files.\n- Do not merge, push, discard, or delete the worktree automatically.\n- Present concrete next options: merge locally, push/create PR, keep branch/worktree, or discard after confirmation.\n- Save the report to {{taskDir}}/09-completion-report.md.\n\nOutput format:\n# Completion Report\n\n## Final Verification\n## Git Status\n## Changed Files\n## Recommended Next Step\n## Available Completion Options",
+      "next": "completion_review"
+    },
+    {
+      "id": "completion_review",
+      "type": "checkpoint",
+      "label": "Completion Review",
+      "question": "Approve this completion report?",
+      "inputs": [
+        {
+          "name": "completion",
+          "sourceType": "step_output",
+          "stepId": "verify_and_finish",
+          "outputKey": "completion_report",
+          "required": true
+        }
+      ],
+      "outputs": [],
+      "approve": "",
+      "rejectTo": "verify_and_finish",
+      "rejectTargets": [
+        "verify_and_finish",
+        "implement_with_tdd"
+      ],
+      "publish": []
+    }
+  ]
+}
