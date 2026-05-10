@@ -143,6 +143,33 @@
     text-orientation: mixed;
   }
 
+  .react-flow {
+    background: var(--bg);
+    color: var(--fg);
+  }
+
+  .react-flow__controls,
+  .react-flow__minimap {
+    border: 1px solid var(--border-color);
+    background: var(--card);
+    box-shadow: none;
+  }
+
+  .react-flow__controls-button {
+    border-bottom: 1px solid var(--border-color);
+    background: var(--card);
+    color: var(--fg);
+  }
+
+  .react-flow__controls-button:hover {
+    background: var(--accent);
+  }
+
+  .react-flow__edge-textbg {
+    fill: var(--card);
+    stroke: var(--border-color);
+  }
+
   *::-webkit-scrollbar {
     width: 6px;
   }

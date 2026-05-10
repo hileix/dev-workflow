@@ -43,6 +43,24 @@ export const useConfigStore = create((set, get) => ({
     }
   },
 
+  async setAiBackendOverride(backend) {
+    const previousConfig = get().workflowConfig;
+    set({
+      workflowConfig: {
+        ...(previousConfig || {}),
+        aiBackendOverride: backend,
+      },
+    });
+    try {
+      const workflowConfig = await desktopApi.setAiBackendOverride(backend);
+      set({ workflowConfig });
+      return workflowConfig;
+    } catch (error) {
+      set({ workflowConfig: previousConfig });
+      throw error;
+    }
+  },
+
   async loadWorkflows() {
     try {
       const data = await desktopApi.listWorkflows();

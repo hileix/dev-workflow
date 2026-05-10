@@ -8,10 +8,13 @@ import {
   pickFolder,
   getWorkflowConfig,
   setMobileAccessEnabled,
+  setAiBackendOverride,
   listWorkflows,
   getWorkflowByFilename,
   createWorkflow,
+  createWorkflowDraft,
   updateWorkflow,
+  updateWorkflowDraft,
   generateSkill,
   listSkills,
   saveSkill,
@@ -126,10 +129,13 @@ function registerIpcHandlers() {
   ipcMain.handle("app:pick-folder", (event) => pickFolder(BrowserWindow.fromWebContents(event.sender)));
   ipcMain.handle("app:get-workflow-config", () => getWorkflowConfig());
   ipcMain.handle("app:set-mobile-access-enabled", (_event, enabled) => setMobileAccessEnabled(enabled));
+  ipcMain.handle("app:set-ai-backend-override", (_event, backend) => setAiBackendOverride(backend));
   ipcMain.handle("app:list-workflows", () => listWorkflows());
   ipcMain.handle("app:get-workflow", (_event, filename) => getWorkflowByFilename(filename));
   ipcMain.handle("app:create-workflow", (_event, workflow) => createWorkflow(workflow));
+  ipcMain.handle("app:create-workflow-draft", (_event, workflow) => createWorkflowDraft(workflow));
   ipcMain.handle("app:update-workflow", (_event, filename, workflow) => updateWorkflow(filename, workflow));
+  ipcMain.handle("app:update-workflow-draft", (_event, filename, workflow) => updateWorkflowDraft(filename, workflow));
   ipcMain.handle("app:generate-skill", (_event, payload) => generateSkill(payload));
   ipcMain.handle("app:list-skills", () => listSkills());
   ipcMain.handle("app:save-skill", (_event, skill) => saveSkill(skill));
@@ -155,14 +161,14 @@ function registerIpcHandlers() {
       payload.images,
       payload.runId,
       (message) => event.sender.send("workflow:event", message),
-      { worktreeName: payload.worktreeName },
+      { worktreeName: payload.worktreeName, workflowFilename: payload.workflowFilename },
     )
   );
   ipcMain.handle("app:approve-workflow", (event, taskId, runId) =>
     approveWorkflow(taskId, (message) => event.sender.send("workflow:event", message), runId)
   );
-  ipcMain.handle("app:reject-workflow", (event, taskId, rejectTo, runId) =>
-    rejectWorkflow(taskId, rejectTo, (message) => event.sender.send("workflow:event", message), runId)
+  ipcMain.handle("app:reject-workflow", (event, taskId, rejectTo, reason, runId) =>
+    rejectWorkflow(taskId, rejectTo, reason, (message) => event.sender.send("workflow:event", message), runId)
   );
   ipcMain.handle("app:send-workflow-message", (event, taskId, text, images, runId) =>
     sendWorkflowMessage(taskId, text, images, (message) => event.sender.send("workflow:event", message), runId)

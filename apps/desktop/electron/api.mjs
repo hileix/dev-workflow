@@ -7,7 +7,9 @@ import {
   saveConfig,
   getBaseDir,
   getWorkflowDir,
+  readAiBackendOverride,
   readMobileAccessEnabled,
+  saveAiBackendOverride,
   saveMobileAccessEnabled,
 } from "../../../packages/core-models/config.mjs";
 import {
@@ -15,29 +17,21 @@ import {
   getActiveWorkflowFile,
   setActiveWorkflowFile,
   deriveContextFields,
-  getPhaseOrder,
+  getWorkflowConfigShape,
   loadWorkflow,
   unloadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
+import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index.mjs";
 import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
 import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
 import { getPhaseContent, getPhaseOutputArtifactPath, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
 
-function buildEmptyWorkflowConfig(mobileAccessEnabled) {
+function buildEmptyWorkflowConfig(mobileAccessEnabled, aiBackendOverride = "") {
   return {
-    name: "",
-    activeWorkflow: getActiveWorkflowFile(),
-    phaseOrder: [],
-    groups: [],
-    phaseLabels: {},
-    phaseTypes: {},
-    phaseInputs: {},
-    phaseOutputs: {},
-    rejectTargets: {},
-    contextFields: [],
-    worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false },
+    ...getWorkflowConfigShape(null),
     mobileAccessEnabled,
+    aiBackendOverride,
   };
 }
 
@@ -60,65 +54,24 @@ export async function pickFolder(browserWindow) {
 export async function getWorkflowConfig() {
   const workflow = getWorkflow();
   const mobileAccessEnabled = await readMobileAccessEnabled();
+  const aiBackendOverride = await readAiBackendOverride();
   if (!workflow) {
-    return buildEmptyWorkflowConfig(mobileAccessEnabled);
+    return buildEmptyWorkflowConfig(mobileAccessEnabled, aiBackendOverride);
   }
-
-  const phaseOrder = getPhaseOrder();
-  const groups = [];
-  const seenGroups = new Set();
-  const phaseLabels = {};
-  const phaseTypes = {};
-  const phaseInputs = {};
-  const phaseOutputs = {};
-  const phaseBackends = {};
-  const rejectTargets = {};
-
-  for (const phase of workflow.phases) {
-    phaseLabels[phase.id] = phase.label;
-    phaseTypes[phase.id] = phase.type;
-    phaseInputs[phase.id] = (phase.inputs || []).map((input) => ({
-      name: input.name,
-      sourceType: input.sourceType,
-      phaseId: input.phaseId,
-      outputKey: input.outputKey,
-      contextLabel: input.contextLabel,
-      required: input.required,
-    }));
-    phaseOutputs[phase.id] = (phase.outputs || []).map((output) => ({
-      key: output.key,
-      kind: output.kind,
-      filename: output.filename,
-    }));
-    phaseBackends[phase.id] = phase.aiBackend || "claude";
-    const targets = phase.checkpoint?.rejectTargets || phase.rejectTargets;
-    if (targets) rejectTargets[phase.id] = targets;
-    if (!seenGroups.has(phase.group)) {
-      seenGroups.add(phase.group);
-      groups.push({ key: phase.group, label: phase.groupLabel || phase.label, phases: [] });
-    }
-    groups.find((group) => group.key === phase.group).phases.push(phase.id);
-  }
-
   return {
-    name: workflow.name,
-    activeWorkflow: getActiveWorkflowFile(),
-    phaseOrder,
-    groups,
-    phaseLabels,
-    phaseTypes,
-    phaseInputs,
-    phaseOutputs,
-    phaseBackends,
-    rejectTargets,
-    contextFields: deriveContextFields(workflow),
-    worktree: workflow.worktree || { enabled: false, files: [] },
+    ...getWorkflowConfigShape(workflow),
     mobileAccessEnabled,
+    aiBackendOverride,
   };
 }
 
 export async function setMobileAccessEnabled(enabled) {
   await saveMobileAccessEnabled(enabled);
+  return getWorkflowConfig();
+}
+
+export async function setAiBackendOverride(backend) {
+  await saveAiBackendOverride(backend);
   return getWorkflowConfig();
 }
 
@@ -134,7 +87,10 @@ export async function listWorkflows() {
         workflows.push({
           filename: file,
           name: raw.name || file,
-          phaseCount: raw.phases?.length || 0,
+          phaseCount: raw.steps?.length || 0,
+          phaseOrder: (raw.steps || []).map((step) => step.id).filter(Boolean),
+          groups: getWorkflowConfigShape(raw).groups,
+          workflowConfig: getWorkflowConfigShape(raw),
           contextFields: deriveContextFields(raw),
           worktree: raw.worktree || { enabled: false, files: [] },
         });
@@ -153,21 +109,30 @@ export async function getWorkflowByFilename(filename) {
 }
 
 export async function createWorkflow(workflow) {
-  if (!workflow.name || !workflow.phases) throw new Error("name and phases required");
-  const filename = workflow.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".json";
+  return createWorkflowFile(workflow, false);
+}
+
+export async function createWorkflowDraft(workflow) {
+  return createWorkflowFile(workflow, true);
+}
+
+async function createWorkflowFile(workflow, isDraft) {
+  const data = isDraft ? workflow : validateWorkflowDsl(workflow);
+  if (!String(data.name || "").trim()) throw new Error("workflow name is required");
+  const filename = data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".json";
   const workflowDir = await ensureWorkflowDir();
   const filepath = join(workflowDir, filename);
   const existing = await stat(filepath).catch(() => null);
   if (existing) throw new Error("workflow with this name already exists");
-  await writeFile(filepath, JSON.stringify(workflow, null, 2));
-  if (!getWorkflow()) {
+  await writeFile(filepath, JSON.stringify(data, null, 2));
+  if (!isDraft && !getWorkflow()) {
     loadWorkflow(filepath);
     setActiveWorkflowFile(filename);
     const config = await readConfig();
     config.activeWorkflow = filename;
     await saveConfig(config);
   }
-  return { filename, name: workflow.name };
+  return { filename, name: data.name };
 }
 
 export async function generateSkill({ label, id, prompt, description }) {
@@ -248,14 +213,23 @@ export async function importSkills(browserWindow) {
 }
 
 export async function updateWorkflow(filename, workflow) {
+  return updateWorkflowFile(filename, workflow, false);
+}
+
+export async function updateWorkflowDraft(filename, workflow) {
+  return updateWorkflowFile(filename, workflow, true);
+}
+
+async function updateWorkflowFile(filename, workflow, isDraft) {
   if (!filename.endsWith(".json")) throw new Error("invalid filename");
-  if (!workflow.name || !workflow.phases) throw new Error("name and phases required");
+  const data = isDraft ? workflow : validateWorkflowDsl(workflow);
+  if (!String(data.name || "").trim()) throw new Error("workflow name is required");
   const workflowDir = await ensureWorkflowDir();
-  await writeFile(join(workflowDir, filename), JSON.stringify(workflow, null, 2));
-  if (filename === getActiveWorkflowFile()) {
+  await writeFile(join(workflowDir, filename), JSON.stringify(data, null, 2));
+  if (!isDraft && filename === getActiveWorkflowFile()) {
     loadWorkflow(join(workflowDir, filename));
   }
-  return { filename, name: workflow.name };
+  return { filename, name: data.name };
 }
 
 export async function removeWorkflow(filename) {
@@ -305,6 +279,7 @@ export async function listWorkFolders() {
         task.status = state.overallStatus || task.status;
         task.phases = state.phases || [];
         task.runId = state.runId || runId;
+        task.workflowConfig = state.workflowConfig || null;
       } catch {
         task.phases = [];
       }

@@ -1,7 +1,16 @@
-import { useState, useEffect } from "react";
-import { CheckCircle2, Circle, Loader2, RotateCcw, Square } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import {
+  Background,
+  BaseEdge,
+  Controls,
+  Handle,
+  MarkerType,
+  Position,
+  ReactFlow,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import { CheckCircle2, Circle, Loader2, RotateCcw, Square, Trash2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import StepList from "../StepList";
 import StepDetail from "../StepDetail";
 import { BackButton } from "../components/back-button";
 import { useI18n } from "../components/i18n-provider";
@@ -11,10 +20,151 @@ import { Button } from "../components/ui/button";
 import { WindowChrome } from "../components/window-chrome";
 import WorkflowDebugPanel from "../components/WorkflowDebugPanel";
 import { getAppApi } from "../lib/api-client";
+import { cn } from "../lib/utils";
 import { useWorkflowStore } from "../stores/workflowStore";
 import { useConfigStore } from "../stores/configStore";
 
 const appApi = getAppApi();
+const NODE_X = 24;
+const NODE_Y_GAP = 190;
+
+function getStatusTone(status) {
+  if (status === "completed") return "success";
+  if (status === "awaiting_input") return "warning";
+  if (status === "in_progress") return "info";
+  if (status === "failed") return "destructive";
+  return "muted";
+}
+
+function getStatusLabel(status) {
+  if (status === "completed") return "done";
+  if (status === "awaiting_input") return "waiting";
+  if (status === "in_progress") return "running";
+  if (status === "failed") return "failed";
+  return "pending";
+}
+
+function RunStepNode({ data }) {
+  const tone = getStatusTone(data.status);
+  const isCheckpoint = data.type === "checkpoint";
+  const isCondition = data.type === "condition";
+
+  return (
+    <button
+      type="button"
+      className={cn(
+        "w-[270px] rounded-lg border bg-card px-4 py-3 text-left shadow-sm transition-colors",
+        data.selected ? "border-ring ring-2 ring-ring/25" : "border-border hover:border-ring/60",
+        tone === "success" && "border-success/60",
+        tone === "warning" && "border-warning/70",
+        tone === "info" && "border-info/70",
+        tone === "destructive" && "border-destructive/70"
+      )}
+      onClick={(event) => {
+        event.stopPropagation();
+        data.onSelect();
+      }}
+    >
+      <Handle type="target" position={Position.Top} className="!h-3 !w-3 !border-2 !border-card !bg-muted-foreground" />
+      <Handle id="return" type="target" position={Position.Right} isConnectable={false} className="!top-1/2 !h-3 !w-3 !border-0 !bg-transparent" />
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-foreground">{data.label}</div>
+          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{data.id}</div>
+        </div>
+        <Badge
+          variant={
+            tone === "success" ? "success" :
+              tone === "warning" ? "warning" :
+                tone === "info" ? "info" :
+                  tone === "destructive" ? "destructive" : "outline"
+          }
+          className={cn("shrink-0 text-[10px]", tone === "info" && "animate-pulse-subtle")}
+        >
+          {getStatusLabel(data.status)}
+        </Badge>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
+        <span>{isCheckpoint ? "checkpoint" : isCondition ? "conditional gate" : data.backend || "agent"}</span>
+        {data.updated && <span className="font-mono">{data.updated}</span>}
+      </div>
+      <div className="mt-1 truncate text-[10px] text-muted-foreground">outputs: {data.outputs}</div>
+      {isCheckpoint ? (
+        <>
+          <Handle id="approve" type="source" position={Position.Bottom} className="!left-1/2 !h-3 !w-3 !-translate-x-1/2 !border-2 !border-card !bg-success" />
+          <Handle id="reject" type="source" position={Position.Right} className="!top-1/2 !h-3 !w-3 !-translate-y-1/2 !border-2 !border-card !bg-warning" />
+        </>
+      ) : isCondition ? (
+        <>
+          <Handle id="pass" type="source" position={Position.Bottom} className="!left-1/2 !h-3 !w-3 !-translate-x-1/2 !border-2 !border-card !bg-success" />
+          <Handle id="fail" type="source" position={Position.Right} className="!top-1/2 !h-3 !w-3 !-translate-y-1/2 !border-2 !border-card !bg-warning" />
+        </>
+      ) : (
+        <Handle id="next" type="source" position={Position.Bottom} className="!h-3 !w-3 !border-2 !border-card !bg-primary" />
+      )}
+    </button>
+  );
+}
+
+const runNodeTypes = {
+  runStep: RunStepNode,
+};
+
+function RunRouteEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  markerEnd,
+  style,
+  label,
+  labelStyle,
+  labelBgPadding,
+  labelBgBorderRadius,
+  data,
+}) {
+  const isBackRoute = data?.sourceIndex >= data?.targetIndex;
+  const isRejectRoute = data?.routeKind === "reject" || data?.routeKind === "fail";
+  const isReturnRoute = isBackRoute || isRejectRoute;
+  const routeSpan = Math.max(0, (data?.sourceIndex ?? 0) - (data?.targetIndex ?? 0));
+  const sideGap = isRejectRoute ? 28 + routeSpan * 14 : 32;
+  let path;
+  let labelX;
+  let labelY;
+
+  if (isReturnRoute) {
+    const laneX = Math.max(sourceX, targetX) + sideGap;
+    path = `M ${sourceX},${sourceY} H ${laneX} V ${targetY} H ${targetX}`;
+    labelX = laneX;
+    labelY = sourceY + (targetY - sourceY) / 2;
+  } else {
+    const laneY = sourceY + (targetY - sourceY) / 2;
+    path = `M ${sourceX},${sourceY} V ${laneY} H ${targetX} V ${targetY}`;
+    labelX = sourceX + (targetX - sourceX) / 2;
+    labelY = laneY;
+  }
+
+  return (
+    <BaseEdge
+      id={id}
+      path={path}
+      markerEnd={markerEnd}
+      style={style}
+      label={label}
+      labelX={labelX}
+      labelY={labelY}
+      labelStyle={labelStyle}
+      labelBgPadding={labelBgPadding}
+      labelBgBorderRadius={labelBgBorderRadius}
+      interactionWidth={28}
+    />
+  );
+}
+
+const runEdgeTypes = {
+  runRoute: RunRouteEdge,
+};
 
 function getWorktreeDisplayName(worktree) {
   if (!worktree?.enabled) return "";
@@ -38,6 +188,97 @@ function getPhaseOutputTarget(phaseId, workflowConfig, phaseOutputArtifacts) {
   const content = phaseOutputArtifacts?.[phaseId]?.[output.key];
   if (!String(content || "").trim()) return null;
   return { phaseId, outputKey: output.key };
+}
+
+function formatNodeUpdated(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function getPhaseOutputSummary(phaseId, workflowConfig) {
+  const outputs = workflowConfig?.phaseOutputs?.[phaseId] || [];
+  if (outputs.length === 0) return "none";
+  return outputs.map((output) => output.key || output.filename).filter(Boolean).join(", ") || "none";
+}
+
+function buildRunNodes({ phases, workflowConfig, selectedPhase, onSelect }) {
+  return (phases || []).map((phase, index) => {
+    const phaseId = phase.id || phase.name;
+    return {
+      id: phaseId,
+      type: "runStep",
+      position: { x: NODE_X, y: 80 + index * NODE_Y_GAP },
+      data: {
+        id: phaseId,
+        label: workflowConfig?.phaseLabels?.[phaseId] || phaseId,
+        type: workflowConfig?.phaseTypes?.[phaseId] || "auto",
+        backend: workflowConfig?.phaseBackends?.[phaseId] || "",
+        status: phase.status || "pending",
+        updated: formatNodeUpdated(phase.updated),
+        outputs: getPhaseOutputSummary(phaseId, workflowConfig),
+        selected: phaseId === selectedPhase,
+        onSelect: () => onSelect(phaseId),
+      },
+    };
+  });
+}
+
+function buildRunEdges(phases, workflowConfig) {
+  const ids = (phases || []).map((phase) => phase.id || phase.name).filter(Boolean);
+  const knownIds = new Set(ids);
+  const phaseIndexById = new Map(ids.map((id, index) => [id, index]));
+  const edges = [];
+
+  const getBaseEdge = (phaseId, targetId, sourceHandle, label, color, dashed = false) => ({
+    id: `${phaseId}-${sourceHandle}-${targetId}`,
+    source: phaseId,
+    target: targetId,
+    sourceHandle,
+    targetHandle: sourceHandle === "reject" || sourceHandle === "fail" ? "return" : undefined,
+    label,
+    type: "runRoute",
+    animated: dashed,
+    markerEnd: { type: MarkerType.ArrowClosed, color },
+    style: { stroke: color, strokeWidth: 1.8, ...(dashed ? { strokeDasharray: "5 4" } : {}) },
+    labelStyle: { fill: color, fontSize: 11, fontWeight: 700 },
+    labelBgPadding: [6, 3],
+    labelBgBorderRadius: 4,
+    data: {
+      routeKind: sourceHandle,
+      sourceIndex: phaseIndexById.get(phaseId) ?? 0,
+      targetIndex: phaseIndexById.get(targetId) ?? 0,
+    },
+  });
+
+  ids.forEach((phaseId, index) => {
+    const nextId = ids[index + 1];
+    const phaseType = workflowConfig?.phaseTypes?.[phaseId] || "auto";
+    const conditionRoutes = workflowConfig?.conditionRoutes?.[phaseId] || {};
+
+    if (phaseType === "condition") {
+      if (conditionRoutes.passTo && knownIds.has(conditionRoutes.passTo)) {
+        edges.push(getBaseEdge(phaseId, conditionRoutes.passTo, "pass", "pass", "#16a34a"));
+      }
+      if (conditionRoutes.failTo && knownIds.has(conditionRoutes.failTo)) {
+        edges.push(getBaseEdge(phaseId, conditionRoutes.failTo, "fail", "fail", "#d97706", true));
+      }
+      return;
+    }
+
+    if (nextId) {
+      edges.push(getBaseEdge(phaseId, nextId, "next", "", "#2563eb"));
+    }
+
+    const rejectTargets = workflowConfig?.rejectTargets?.[phaseId] || [];
+    rejectTargets.forEach((targetId) => {
+      if (!knownIds.has(targetId)) return;
+      edges.push(getBaseEdge(phaseId, targetId, "reject", "reject", "#d97706", true));
+    });
+  });
+
+  return edges;
 }
 
 function getCheckpointInputDocument(phaseId, workflowConfig, phaseOutputArtifacts, contextValues) {
@@ -245,54 +486,70 @@ export default function TicketPage() {
   const pausePhase = useWorkflowStore((s) => s.pausePhase);
   const deleteTask = useWorkflowStore((s) => s.deleteTask);
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
+  const runWorkflowConfig = workflowState?.workflowConfig || workflowConfig;
 
   const taskId = urlTicketId || activeTicket;
   const worktreeDisplayName = getWorktreeDisplayName(workflowState?.worktree);
   const hasWorktree = Boolean(workflowState?.worktree?.enabled);
   const currentPhase = workflowState?.currentPhase;
   const phases = workflowState?.phases || [];
-  const activePhase = selectedPhase || currentPhase || phases[0]?.id || null;
+  const selectedRunPhase = selectedPhase;
+  const activePhase = selectedRunPhase || currentPhase || phases[0]?.id || null;
   const activeStatus = phases.find((p) => (p.id || p.name) === activePhase)?.status;
-  const isPhaseStreaming = isStreaming && activePhase === streamingPhase;
-  const isPhaseRunning = activeStatus === "in_progress";
-  const isPhaseAwaiting = activeStatus === "awaiting_input";
-  const isPhaseFailed = activeStatus === "failed";
-  const isAutoPhase = workflowConfig?.phaseTypes?.[activePhase] === "auto";
-  const canPausePhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && isPhaseRunning && !lastError);
-  const canRestartPhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && !isStreaming && (lastError || isPhaseAwaiting || isPhaseFailed));
+  const isActivePhaseRunning = activeStatus === "in_progress";
+  const isActivePhaseAwaiting = activeStatus === "awaiting_input";
+  const isActivePhaseFailed = activeStatus === "failed";
+  const isAutoPhase = runWorkflowConfig?.phaseTypes?.[activePhase] === "auto" || runWorkflowConfig?.phaseTypes?.[activePhase] === "condition";
+  const canPausePhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && isActivePhaseRunning && !lastError);
+  const canRestartPhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && !isStreaming && (lastError || isActivePhaseAwaiting || isActivePhaseFailed));
 
-  const isCheckpointPhase = workflowConfig?.phaseTypes?.[activePhase] === "checkpoint";
-  const activePhaseContent = activePhase ? phaseMessages[activePhase] || "" : "";
-  const activePhaseInputDocument = activePhase
-    ? getCheckpointInputDocument(activePhase, workflowConfig, phaseOutputArtifacts, workflowState?.contextValues)
+  const detailPhase = activePhase;
+  const detailStatus = phases.find((p) => (p.id || p.name) === detailPhase)?.status;
+  const isPhaseStreaming = isStreaming && detailPhase === streamingPhase;
+  const isPhaseRunning = detailStatus === "in_progress";
+  const isPhaseAwaiting = detailStatus === "awaiting_input";
+  const isPhaseFailed = detailStatus === "failed";
+  const isCheckpointPhase = runWorkflowConfig?.phaseTypes?.[detailPhase] === "checkpoint";
+  const activePhaseContent = detailPhase ? phaseMessages[detailPhase] || "" : "";
+  const activePhaseInputDocument = detailPhase
+    ? getCheckpointInputDocument(detailPhase, runWorkflowConfig, phaseOutputArtifacts, workflowState?.contextValues)
     : "";
-  const activePhaseArtifact = activePhase
+  const activePhaseArtifact = detailPhase
     ? isCheckpointPhase
       ? activePhaseInputDocument
-      : getPhaseOutputDocument(activePhase, workflowConfig, phaseOutputArtifacts)
+      : getPhaseOutputDocument(detailPhase, runWorkflowConfig, phaseOutputArtifacts)
     : "";
-  const documentOpenTarget = activePhase
+  const documentOpenTarget = detailPhase
     ? isCheckpointPhase
-      ? getCheckpointDocumentTarget(activePhase, workflowConfig, phaseOutputArtifacts)
-      : getPhaseOutputTarget(activePhase, workflowConfig, phaseOutputArtifacts)
+      ? getCheckpointDocumentTarget(detailPhase, runWorkflowConfig, phaseOutputArtifacts)
+      : getPhaseOutputTarget(detailPhase, runWorkflowConfig, phaseOutputArtifacts)
     : null;
-  const activePhaseInteractions = activePhase ? phaseInteractions[activePhase] || [] : [];
+  const activePhaseInteractions = detailPhase ? phaseInteractions[detailPhase] || [] : [];
+  const activePhaseBackend = activePhaseInteractions.findLast?.((interaction) => interaction.backend)?.backend
+    || runWorkflowConfig?.phaseBackends?.[detailPhase];
   const emptyDocumentMessage = getMissingDocumentMessage({
     t,
-    phaseId: activePhase,
-    workflowConfig,
+    phaseId: detailPhase,
+    workflowConfig: runWorkflowConfig,
     phaseOutputArtifacts,
     contextValues: workflowState?.contextValues,
-    activeStatus,
+    activeStatus: detailStatus,
     isCheckpointPhase,
   });
   const startupSteps = buildStartupSteps({
     t,
     debugEvents,
     workflowState,
-    workflowConfig,
+    workflowConfig: runWorkflowConfig,
     connectionState,
   });
+  const runNodes = useMemo(() => buildRunNodes({
+    phases,
+    workflowConfig: runWorkflowConfig,
+    selectedPhase: detailPhase,
+    onSelect: setSelectedPhase,
+  }), [phases, runWorkflowConfig, detailPhase, setSelectedPhase]);
+  const runEdges = useMemo(() => buildRunEdges(phases, runWorkflowConfig), [phases, runWorkflowConfig]);
 
   async function handleDelete() {
     if (isDeletingTask) return;
@@ -411,43 +668,89 @@ export default function TicketPage() {
               debugEvents={debugEvents}
               lastEventAt={lastEventAt}
               lastError={lastError}
-              phaseLabels={workflowConfig?.phaseLabels || {}}
+              phaseLabels={runWorkflowConfig?.phaseLabels || {}}
               onCopy={handleCopyDebugInfo}
             />
           </div>
         </div>
-        <div className="flex flex-1 min-h-0">
-          <StepList
-            phases={phases.map((p) => ({ name: p.id || p.name, status: p.status, updated: p.updated }))}
-            currentPhase={currentPhase}
-            selectedPhase={activePhase}
-            onSelect={setSelectedPhase}
-            phaseLabels={workflowConfig?.phaseLabels || {}}
-            phaseTypes={workflowConfig?.phaseTypes || {}}
-            onDelete={() => {
-              setDeleteWorktree(hasWorktree);
-              setShowDeleteConfirm(true);
-            }}
-          />
-          <StepDetail
-            phase={activePhase}
-            content={activePhaseContent}
-            artifact={activePhaseArtifact}
-            interactions={activePhaseInteractions}
-            emptyDocumentMessage={emptyDocumentMessage}
-            activeBackend={workflowConfig?.phaseBackends?.[activePhase]}
-            isStreaming={isPhaseStreaming}
-            isRunning={isPhaseRunning}
-            isAwaiting={isPhaseAwaiting}
-            isFailed={isPhaseFailed}
-            onApprove={approve}
-            onReject={reject}
-            onSendMessage={sendMessage}
-            onOpenDocument={documentOpenTarget ? handleOpenDocument : undefined}
-            phaseLabels={workflowConfig?.phaseLabels || {}}
-            phaseTypes={workflowConfig?.phaseTypes || {}}
-            rejectTargets={workflowConfig?.rejectTargets || {}}
-          />
+        <div className="grid flex-1 min-h-0 grid-cols-[320px_minmax(0,1fr)] bg-background/55">
+          <aside className="flex min-h-0 flex-col overflow-hidden border-r border-border bg-card/70">
+            <div className="border-b border-border px-4 py-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-foreground">Task Run Graph</h2>
+                <p className="text-xs text-muted-foreground">Workflow execution order.</p>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1">
+              <ReactFlow
+                nodes={runNodes}
+                edges={runEdges}
+                nodeTypes={runNodeTypes}
+                edgeTypes={runEdgeTypes}
+                onNodeClick={(event, node) => {
+                  event.stopPropagation();
+                  setSelectedPhase(node.id);
+                }}
+                defaultViewport={{ x: 16, y: 36, zoom: 0.92 }}
+                nodesDraggable={false}
+                nodesConnectable={false}
+                elementsSelectable
+                deleteKeyCode={null}
+                proOptions={{ hideAttribution: true }}
+              >
+                <Background color="var(--border-color)" gap={18} />
+                <Controls showInteractive={false} />
+              </ReactFlow>
+            </div>
+          </aside>
+
+          <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-card/95">
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="min-w-0">
+                  <h2 className="truncate text-sm font-semibold text-foreground">Run details</h2>
+                  <p className="truncate text-xs text-muted-foreground">Selected workflow step output and conversation.</p>
+                </div>
+                <Badge variant={workflowState?.overallStatus === "completed" ? "success" : workflowState?.overallStatus === "awaiting_input" ? "warning" : "outline"}>
+                  {workflowState?.overallStatus || "unknown"}
+                </Badge>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => {
+                    setDeleteWorktree(hasWorktree);
+                    setShowDeleteConfirm(true);
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {t("stepList.deleteTask")}
+                </Button>
+              </div>
+            </div>
+            <StepDetail
+              phase={detailPhase}
+              content={activePhaseContent}
+              artifact={activePhaseArtifact}
+              interactions={activePhaseInteractions}
+              emptyDocumentMessage={emptyDocumentMessage}
+              activeBackend={activePhaseBackend}
+              isStreaming={isPhaseStreaming}
+              isRunning={isPhaseRunning}
+              isAwaiting={isPhaseAwaiting}
+              isFailed={isPhaseFailed}
+              onApprove={approve}
+              onReject={reject}
+              onSendMessage={sendMessage}
+              onOpenDocument={documentOpenTarget ? handleOpenDocument : undefined}
+              phaseLabels={runWorkflowConfig?.phaseLabels || {}}
+              phaseTypes={runWorkflowConfig?.phaseTypes || {}}
+              rejectTargets={runWorkflowConfig?.rejectTargets || {}}
+            />
+          </section>
         </div>
       </div>
 

@@ -4,10 +4,10 @@ import { cn } from "../../lib/utils";
 
 const Select = forwardRef(({ className, children, ...props }, ref) => {
   return (
-    <div className="relative">
+    <div className="relative min-w-0">
       <select
         className={cn(
-          "h-9 w-full appearance-none rounded-md border border-input bg-card/70 px-3 pr-9 text-sm text-foreground outline-none focus:border-ring disabled:cursor-not-allowed disabled:opacity-50",
+          "h-9 w-full min-w-0 appearance-none rounded-md border border-input bg-card/70 px-3 pr-9 text-sm text-foreground outline-none focus:border-ring disabled:cursor-not-allowed disabled:opacity-50",
           className
         )}
         ref={ref}

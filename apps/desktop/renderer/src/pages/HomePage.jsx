@@ -52,8 +52,9 @@ function StepCheckbox({ status }) {
   );
 }
 
-function TaskCard({ task, groups, onClick, t }) {
+function TaskCard({ task, onClick, t }) {
   const taskId = task.taskId || task.ticketId || "";
+  const groups = task.workflowConfig?.groups || [];
   const phaseStatusMap = {};
   for (const p of task.phases || []) {
     phaseStatusMap[p.id] = p.status;
@@ -108,8 +109,11 @@ function TaskCard({ task, groups, onClick, t }) {
   );
 }
 
-function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, onClose, t }) {
-  const [selectedWorkflow, setSelectedWorkflow] = useState(workflows[0]?.filename || null);
+function StartWorkflowModal({ workflows, workFolders, defaultFolder, defaultWorkflow, onStart, onClose, t }) {
+  const initialWorkflow = workflows.some((wf) => wf.filename === defaultWorkflow)
+    ? defaultWorkflow
+    : workflows[0]?.filename || null;
+  const [selectedWorkflow, setSelectedWorkflow] = useState(initialWorkflow);
   const [selectedFolder, setSelectedFolder] = useState(defaultFolder);
   const [contextValues, setContextValues] = useState({});
   const [worktreeName, setWorktreeName] = useState("");
@@ -178,7 +182,7 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, onStart, on
         uploadedPaths = data.paths || [];
       }
 
-      onStart(id, selectedFolder, contextValues, uploadedPaths.length > 0 ? uploadedPaths : undefined, runId, worktreeName.trim());
+      onStart(id, selectedFolder, contextValues, uploadedPaths.length > 0 ? uploadedPaths : undefined, runId, worktreeName.trim(), selectedWorkflow);
     } finally {
       setSubmitting(false);
     }
@@ -319,6 +323,7 @@ export default function HomePage() {
   const workFolders = useConfigStore((s) => s.workFolders);
   const selectedFolder = useConfigStore((s) => s.selectedFolder);
   const workflows = useConfigStore((s) => s.workflows);
+  const activeWorkflowFile = useConfigStore((s) => s.activeWorkflowFile);
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
   const loadWorkFolders = useConfigStore((s) => s.loadWorkFolders);
   const workflowState = useWorkflowStore((s) => s.workflowState);
@@ -335,16 +340,20 @@ export default function HomePage() {
     }))
   ).map((task) => {
     if (workflowState && task.taskId === workflowState.taskId && workflowState.overallStatus !== "completed") {
-      return { ...task, status: workflowState.overallStatus, phases: workflowState.phases };
+      return {
+        ...task,
+        status: workflowState.overallStatus,
+        phases: workflowState.phases,
+        workflowConfig: workflowState.workflowConfig || task.workflowConfig,
+      };
     }
     return task;
   });
 
-  const groups = workflowConfig?.groups || [];
   const canStartWorkflow = workflows.length > 0;
 
-  function handleStartWorkflow(id, folderPath, contextValues, images, runId, worktreeName) {
-    startWorkflow(id, folderPath, contextValues, images, runId, worktreeName);
+  function handleStartWorkflow(id, folderPath, contextValues, images, runId, worktreeName, workflowFilename) {
+    startWorkflow(id, folderPath, contextValues, images, runId, worktreeName, workflowFilename);
     setShowStartModal(false);
     const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
     navigate(`/ticket/${encodeURIComponent(id)}${query}`);
@@ -397,7 +406,6 @@ export default function HomePage() {
               <TaskCard
                 key={`${task.workFolderPath}:${task.runId || task.taskId}`}
                 task={task}
-                groups={groups}
                 onClick={() => {
                   handleOpenTask(task);
                 }}
@@ -413,6 +421,7 @@ export default function HomePage() {
           workflows={workflows}
           workFolders={workFolders}
           defaultFolder={selectedFolder}
+          defaultWorkflow={activeWorkflowFile}
           onStart={handleStartWorkflow}
           onClose={() => setShowStartModal(false)}
           t={t}

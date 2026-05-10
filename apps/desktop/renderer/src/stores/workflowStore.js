@@ -68,6 +68,29 @@ function appendPhaseInteraction(set, phase, interaction) {
   }));
 }
 
+function markPhaseRunning(set, phaseId) {
+  if (!phaseId) return;
+  set((state) => {
+    if (!state.workflowState) return {};
+    return {
+      selectedPhase: phaseId,
+      workflowState: {
+        ...state.workflowState,
+        currentPhase: phaseId,
+        overallStatus: "in_progress",
+        phases: (state.workflowState.phases || []).map((phase) => ({
+          ...phase,
+          status: phase.id === phaseId
+            ? "in_progress"
+            : phase.status === "in_progress"
+              ? "completed"
+              : phase.status,
+        })),
+      },
+    };
+  });
+}
+
 function applyDisconnectedState(set, get) {
   const state = get().workflowState;
   if (state) {
@@ -101,9 +124,24 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
           },
         },
       }));
+    } else if (msg.type === "backend_selected") {
+      markPhaseRunning(set, msg.phase);
     } else if (msg.type === "text_delta") {
+      markPhaseRunning(set, msg.phase);
       set((state) => ({
         phaseMessages: { ...state.phaseMessages, [msg.phase]: (state.phaseMessages[msg.phase] || "") + msg.text },
+        phaseInteractions: {
+          ...state.phaseInteractions,
+          [msg.phase]: [
+            ...(state.phaseInteractions[msg.phase] || []),
+            {
+              role: "assistant",
+              type: "assistant_delta",
+              text: msg.text,
+              backend: msg.backend,
+            },
+          ],
+        },
         isStreaming: true,
         streamingPhase: msg.phase,
       }));
@@ -155,10 +193,23 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
         },
       }));
     } else if (msg.type === "tool_use") {
+      markPhaseRunning(set, msg.phase);
       set((state) => ({
         phaseMessages: {
           ...state.phaseMessages,
           [msg.phase]: (state.phaseMessages[msg.phase] || "") + `\n\n*${msg.log || msg.name}*\n\n`,
+        },
+        phaseInteractions: {
+          ...state.phaseInteractions,
+          [msg.phase]: [
+            ...(state.phaseInteractions[msg.phase] || []),
+            {
+              role: "tool",
+              type: "tool_use",
+              text: msg.log || msg.name || "",
+              backend: msg.name,
+            },
+          ],
         },
       }));
     } else if (msg.type === "session_attached" && msg.phase && msg.sessionId) {
@@ -232,17 +283,17 @@ export const useWorkflowStore = create((set, get) => ({
       });
 
       if (state.workFolder && state.overallStatus !== "completed") {
-        get().connectWorkflow(taskId, state.workFolder, undefined, undefined, state.runId || runId || "");
+        get().connectWorkflow(taskId, state.workFolder, undefined, undefined, state.runId || runId || "", "", state.workflowFilename || "");
       }
     } catch {}
   },
 
-  async connectWorkflow(taskId, workFolder, contextValues, images, runId, worktreeName) {
+  async connectWorkflow(taskId, workFolder, contextValues, images, runId, worktreeName, workflowFilename) {
     appendDebugEvent(set, { type: "client_connect", taskId, workFolder }, "client");
     set({ connectionState: "connecting" });
     const detach = attachWorkflowEvents(set, get, taskId, runId);
     try {
-      await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images, runId, worktreeName });
+      await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images, runId, worktreeName, workflowFilename });
     } catch (err) {
       appendDebugEvent(set, { type: "error", message: err?.message || "Failed to start workflow" }, "client");
       detach();
@@ -250,12 +301,16 @@ export const useWorkflowStore = create((set, get) => ({
     }
   },
 
-  startWorkflow(id, folder, contextValues, images, runId, worktreeName) {
+  startWorkflow(id, folder, contextValues, images, runId, worktreeName, workflowFilename) {
     const selectedFolder = folder || useConfigStore.getState().selectedFolder;
     if (!id || !selectedFolder) return;
 
-    const workflowConfig = useConfigStore.getState().workflowConfig;
-    const firstPhase = workflowConfig?.phaseOrder?.[0] || null;
+    const configState = useConfigStore.getState();
+    const workflowConfig = configState.workflowConfig;
+    const selectedWorkflow = configState.workflows.find((workflow) => workflow.filename === workflowFilename);
+    const runWorkflowConfig = selectedWorkflow?.workflowConfig || workflowConfig;
+    const phaseOrder = runWorkflowConfig?.phaseOrder || [];
+    const firstPhase = phaseOrder[0] || null;
 
     set({
       activeTicket: id,
@@ -268,7 +323,9 @@ export const useWorkflowStore = create((set, get) => ({
         runId: runId || id,
         currentPhase: null,
         overallStatus: "loading",
-        phases: (workflowConfig?.phaseOrder || []).map((pid) => ({
+        workflowFilename: workflowFilename || runWorkflowConfig?.activeWorkflow || "",
+        workflowConfig: runWorkflowConfig,
+        phases: phaseOrder.map((pid) => ({
           id: pid,
           name: pid,
           status: "pending",
@@ -282,7 +339,7 @@ export const useWorkflowStore = create((set, get) => ({
     });
     prevStatusRef = {};
 
-    get().connectWorkflow(id, selectedFolder, contextValues, images, runId, worktreeName);
+    get().connectWorkflow(id, selectedFolder, contextValues, images, runId, worktreeName, workflowFilename);
   },
 
   async approve() {
@@ -295,11 +352,11 @@ export const useWorkflowStore = create((set, get) => ({
     }
   },
 
-  async reject(rejectTo) {
+  async reject(rejectTo, reason) {
     const { activeTicket, workflowState } = get();
     if (!activeTicket) return;
     try {
-      await desktopApi.rejectWorkflow(activeTicket, rejectTo, workflowState?.runId || "");
+      await desktopApi.rejectWorkflow(activeTicket, rejectTo, reason, workflowState?.runId || "");
     } catch (err) {
       appendDebugEvent(set, { type: "error", message: err?.message || "Reject failed", rejectTo }, "client");
     }

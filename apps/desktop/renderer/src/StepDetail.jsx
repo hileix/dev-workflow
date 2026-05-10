@@ -208,6 +208,8 @@ export default function StepDetail({ phase, content, artifact, interactions = []
   const [images, setImages] = useState([]);
   const [quotedText, setQuotedText] = useState("");
   const [quoteButton, setQuoteButton] = useState(null);
+  const [rejectTarget, setRejectTarget] = useState("");
+  const [rejectReason, setRejectReason] = useState("");
   const contentRef = useRef(null);
   const conversationRef = useRef(null);
   const composerRef = useRef(null);
@@ -303,6 +305,24 @@ export default function StepDetail({ phase, content, artifact, interactions = []
     });
   }
 
+  function openRejectModal(target) {
+    setRejectTarget(target);
+    setRejectReason("");
+  }
+
+  function closeRejectModal() {
+    setRejectTarget("");
+    setRejectReason("");
+  }
+
+  function submitReject(e) {
+    e.preventDefault();
+    const reason = rejectReason.trim();
+    if (!rejectTarget || !reason) return;
+    onReject?.(rejectTarget, reason);
+    closeRejectModal();
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!canSend) return;
@@ -336,7 +356,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
 
   if (!phase) {
     return (
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
           {t("stepDetail.selectStep")}
         </div>
@@ -345,7 +365,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
   }
 
   return (
-    <div className="flex-1 flex flex-col min-w-0">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-3 border-b border-border bg-background/78 px-6 py-4">
         <h2 className="text-base font-semibold text-foreground">{phaseLabels?.[phase] || phase}</h2>
         {isCheckpoint && <Badge variant="outline">{t("stepDetail.checkpoint")}</Badge>}
@@ -355,8 +375,8 @@ export default function StepDetail({ phase, content, artifact, interactions = []
         {isFailed && <Badge variant="destructive">{t("status.failed")}</Badge>}
       </div>
 
-      <div className="grid flex-1 min-h-0 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="flex min-h-0 flex-col">
+      <div className="grid min-h-0 flex-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_420px]">
+        <section className="flex min-h-0 flex-col overflow-hidden">
           <div className="relative min-h-0 flex-1 overflow-y-auto px-6 pb-8 pt-6 text-sm leading-relaxed" ref={contentRef}>
             {quoteButton && (
               <button
@@ -407,7 +427,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
           {isAwaiting && isCheckpoint && (
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border bg-background px-6 py-3">
               {rejectOptions.map((target) => (
-                <Button key={target} variant="outline" onClick={() => onReject?.(target)}>
+                <Button key={target} variant="outline" onClick={() => openRejectModal(target)}>
                   {t("stepDetail.rejectTo", { phase: phaseLabels?.[target] || target })}
                 </Button>
               ))}
@@ -416,7 +436,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
           )}
         </section>
 
-        <aside className="flex min-h-0 flex-col border-t border-border bg-card/45 xl:border-l xl:border-t-0">
+        <aside className="flex min-h-0 flex-col overflow-hidden border-t border-border bg-card/45 xl:border-l xl:border-t-0">
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
             <div className="flex min-w-0 items-center gap-2">
               <DetailIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -429,11 +449,11 @@ export default function StepDetail({ phase, content, artifact, interactions = []
               conversation.map((item, idx) => (
                 <ConversationItem key={item.id || `${item.type}-${idx}`} item={item} t={t} />
               ))
-            ) : (
+            ) : !showLoading ? (
               <div className="rounded-lg border border-dashed border-border bg-background/45 px-4 py-8 text-center text-sm text-muted-foreground">
                 {t("stepDetail.noConversation")}
               </div>
-            )}
+            ) : null}
             {showLoading && <LoadingItem t={t} />}
           </div>
 
@@ -492,6 +512,49 @@ export default function StepDetail({ phase, content, artifact, interactions = []
         </aside>
       </div>
 
+      {rejectTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+          <form
+            className="w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-lg"
+            onSubmit={submitReject}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">
+                  {t("stepDetail.rejectReasonTitle")}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {t("stepDetail.rejectReasonHint", { phase: phaseLabels?.[rejectTarget] || rejectTarget })}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeRejectModal}
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={t("common.close")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              rows={5}
+              autoFocus
+              placeholder={t("stepDetail.rejectReasonPlaceholder")}
+              className="min-h-28 w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={closeRejectModal}>
+                {t("common.cancel")}
+              </Button>
+              <Button type="submit" disabled={!rejectReason.trim()}>
+                {t("stepDetail.submitReject")}
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

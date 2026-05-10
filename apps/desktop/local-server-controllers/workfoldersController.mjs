@@ -40,6 +40,7 @@ router.get("/workfolders", async (req, res) => {
         task.status = state.overallStatus || task.status;
         task.phases = state.phases || [];
         task.runId = state.runId || runId;
+        task.workflowConfig = state.workflowConfig || null;
       } catch {
         task.phases = [];
       }
