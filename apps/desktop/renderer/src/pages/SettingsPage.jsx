@@ -9,6 +9,7 @@ import { Button } from "../components/ui/button";
 import { WindowChrome } from "../components/window-chrome";
 import { cn } from "../lib/utils";
 import { useConfigStore } from "../stores/configStore";
+import { useWorkflowStore } from "../stores/workflowStore";
 
 export default function SettingsPage() {
   const { t } = useI18n();
@@ -16,6 +17,7 @@ export default function SettingsPage() {
   const [editingWorkflow, setEditingWorkflow] = useState(null);
   const [showEditor, setShowEditor] = useState(false);
   const [savingMobileAccess, setSavingMobileAccess] = useState(false);
+  const [savingAiBackend, setSavingAiBackend] = useState(false);
   const [confirmRemoveWorkflow, setConfirmRemoveWorkflow] = useState(null);
   const [confirmRemoveWorkflowStep, setConfirmRemoveWorkflowStep] = useState(1);
   const [confirmRemoveFolder, setConfirmRemoveFolder] = useState(null);
@@ -27,6 +29,7 @@ export default function SettingsPage() {
   const selectedFolder = useConfigStore((s) => s.selectedFolder);
   const setSelectedFolder = useConfigStore((s) => s.setSelectedFolder);
   const setMobileAccessEnabled = useConfigStore((s) => s.setMobileAccessEnabled);
+  const setAiBackendOverride = useConfigStore((s) => s.setAiBackendOverride);
   const deleteWorkflow = useConfigStore((s) => s.deleteWorkflow);
   const addFolder = useConfigStore((s) => s.addFolder);
   const removeFolder = useConfigStore((s) => s.removeFolder);
@@ -37,7 +40,9 @@ export default function SettingsPage() {
   const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
   const loadSkills = useConfigStore((s) => s.loadSkills);
   const loadWorkFolders = useConfigStore((s) => s.loadWorkFolders);
+  const showToast = useWorkflowStore((s) => s.showToast);
   const mobileAccessEnabled = workflowConfig?.mobileAccessEnabled === true;
+  const aiBackendOverride = workflowConfig?.aiBackendOverride || "claude";
   const tabs = [
     { key: "workflows", label: t("settings.tab.workflows") },
     { key: "skills", label: t("settings.tab.skills") },
@@ -80,46 +85,90 @@ export default function SettingsPage() {
             </div>
           </div>
           <div className="mb-6 rounded-2xl border border-border bg-card/78 p-4 shadow-[0_1px_0_rgba(255,255,255,0.7)_inset]">
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1">
-                <h3 className="text-[15px] font-semibold text-foreground">{t("settings.mobileAccessTitle")}</h3>
-                <p className="text-sm text-muted-foreground">{t("settings.mobileAccessHint")}</p>
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <h3 className="text-[15px] font-semibold text-foreground">{t("settings.mobileAccessTitle")}</h3>
+                    <p className="text-sm text-muted-foreground">{t("settings.mobileAccessHint")}</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={mobileAccessEnabled}
+                    aria-label={t("settings.mobileAccessTitle")}
+                    disabled={savingMobileAccess}
+                    className={cn(
+                      "relative h-7 w-12 shrink-0 rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                      mobileAccessEnabled
+                        ? "border-primary bg-primary"
+                        : "border-border bg-muted"
+                    )}
+                    onClick={async () => {
+                      const nextEnabled = !mobileAccessEnabled;
+                      setSavingMobileAccess(true);
+                      try {
+                        await setMobileAccessEnabled(nextEnabled);
+                        showToast(t("settings.mobileAccessSaved"));
+                      } catch {
+                        showToast(t("settings.mobileAccessSaveFailed"));
+                      } finally {
+                        setSavingMobileAccess(false);
+                      }
+                    }}
+                  >
+                    <span
+                      className={cn(
+                        "absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-sm transition-transform",
+                        mobileAccessEnabled ? "translate-x-5" : "translate-x-0"
+                      )}
+                    />
+                  </button>
+                </div>
+                <div className="mt-3 text-xs font-medium text-muted-foreground">
+                  {mobileAccessEnabled ? t("settings.mobileAccessOn") : t("settings.mobileAccessOff")}
+                </div>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={mobileAccessEnabled}
-                aria-label={t("settings.mobileAccessTitle")}
-                disabled={savingMobileAccess}
-                className={cn(
-                  "relative h-7 w-12 rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-                  mobileAccessEnabled
-                    ? "border-primary bg-primary"
-                    : "border-border bg-muted"
-                )}
-                onClick={async () => {
-                  const nextEnabled = !mobileAccessEnabled;
-                  setSavingMobileAccess(true);
-                  try {
-                    await setMobileAccessEnabled(nextEnabled);
-                    showToast(t("settings.mobileAccessSaved"));
-                  } catch {
-                    showToast(t("settings.mobileAccessSaveFailed"));
-                  } finally {
-                    setSavingMobileAccess(false);
-                  }
-                }}
-              >
-                <span
-                  className={cn(
-                    "absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-sm transition-transform",
-                    mobileAccessEnabled ? "translate-x-5" : "translate-x-0"
-                  )}
-                />
-              </button>
-            </div>
-            <div className="mt-3 text-xs font-medium text-muted-foreground">
-              {mobileAccessEnabled ? t("settings.mobileAccessOn") : t("settings.mobileAccessOff")}
+              <div>
+                <div className="space-y-1">
+                  <h3 className="text-[15px] font-semibold text-foreground">{t("settings.aiBackendTitle")}</h3>
+                  <p className="text-sm text-muted-foreground">{t("settings.aiBackendHint")}</p>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {[
+                    ["claude", "Claude"],
+                    ["codex", "Codex"],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      disabled={savingAiBackend}
+                      className={cn(
+                        "rounded-xl border px-3 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                        aiBackendOverride === value
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border bg-background/70 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      )}
+                      onClick={async () => {
+                        setSavingAiBackend(true);
+                        try {
+                          await setAiBackendOverride(value);
+                          showToast(t("settings.aiBackendSaved"));
+                        } catch {
+                          showToast(t("settings.aiBackendSaveFailed"));
+                        } finally {
+                          setSavingAiBackend(false);
+                        }
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-3 text-xs font-medium text-muted-foreground">
+                  {t("settings.aiBackendOverrideOn", { backend: aiBackendOverride })}
+                </div>
+              </div>
             </div>
           </div>
 

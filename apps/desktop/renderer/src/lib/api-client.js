@@ -59,10 +59,13 @@ function createWebApi() {
     pickFolder: async () => request("/api/pick-folder", { method: "POST" }),
     getWorkflowConfig: async () => request("/api/workflow"),
     setMobileAccessEnabled: async (enabled) => request("/api/settings/mobile-access", { method: "PUT", body: JSON.stringify({ enabled }) }),
+    setAiBackendOverride: async (backend) => request("/api/settings/ai-backend", { method: "PUT", body: JSON.stringify({ backend }) }),
     listWorkflows: async () => request("/api/workflows"),
     getWorkflow: async (filename) => request(`/api/workflows/${filename}`),
     createWorkflow: async (workflow) => request("/api/workflows", { method: "POST", body: JSON.stringify(workflow) }),
+    createWorkflowDraft: async (workflow) => request("/api/workflows?draft=1", { method: "POST", body: JSON.stringify(workflow) }),
     updateWorkflow: async (filename, workflow) => request(`/api/workflows/${filename}`, { method: "PUT", body: JSON.stringify(workflow) }),
+    updateWorkflowDraft: async (filename, workflow) => request(`/api/workflows/${filename}?draft=1`, { method: "PUT", body: JSON.stringify(workflow) }),
     generateSkill: async (payload) => request("/api/generate-skill", { method: "POST", body: JSON.stringify(payload) }),
     listSkills: async () => request("/api/skills"),
     saveSkill: async (skill) => request("/api/skills", { method: "POST", body: JSON.stringify(skill) }),
@@ -119,13 +122,15 @@ function createWebApi() {
         contextValues: payload.contextValues,
         images: payload.images,
         runId: payload.runId,
+        worktreeName: payload.worktreeName,
+        workflowFilename: payload.workflowFilename,
       });
     },
     approveWorkflow: async (taskId, runId) => {
       sendSocket({ type: "approve", taskId, runId });
     },
-    rejectWorkflow: async (taskId, rejectTo, runId) => {
-      sendSocket({ type: "reject", taskId, rejectTo, runId });
+    rejectWorkflow: async (taskId, rejectTo, reason, runId) => {
+      sendSocket({ type: "reject", taskId, rejectTo, reason, runId });
     },
     sendWorkflowMessage: async (taskId, text, images, runId) => {
       sendSocket({ type: "message", taskId, text, images, runId });

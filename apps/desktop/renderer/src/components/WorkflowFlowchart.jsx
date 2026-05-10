@@ -15,7 +15,11 @@ function titleCase(value) {
 function outputText(phase) {
   const outputs = Array.isArray(phase?.outputs) ? phase.outputs : [];
   if (phase?.type === "checkpoint") {
-    const publish = Array.isArray(phase?.checkpoint?.publish) ? phase.checkpoint.publish : [];
+    const publish = Array.isArray(phase?.checkpoint?.publish)
+      ? phase.checkpoint.publish
+      : Array.isArray(phase?.publish)
+        ? phase.publish
+        : [];
     return publish.map((rule) => rule.asOutputKey || rule.filename).filter(Boolean).join(", ");
   }
   return outputs.map((output) => output.key || output.filename).filter(Boolean).join(", ");
@@ -23,7 +27,7 @@ function outputText(phase) {
 
 function inputText(phase) {
   const inputs = Array.isArray(phase?.inputs) ? phase.inputs : [];
-  return inputs.map((input) => input.name || input.outputKey).filter(Boolean).join(", ");
+  return inputs.map((input) => input.name || input.outputKey || input.stepId).filter(Boolean).join(", ");
 }
 
 function clamp(value, min, max) {

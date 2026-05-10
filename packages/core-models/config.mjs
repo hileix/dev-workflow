@@ -79,6 +79,28 @@ export async function saveMobileAccessEnabled(enabled) {
   return config.mobileAccessEnabled;
 }
 
+export function normalizeAiBackendOverride(value) {
+  const backend = String(value || "").trim();
+  return backend === "codex" ? "codex" : "claude";
+}
+
+export function readAiBackendOverrideSync() {
+  const config = readConfigSync();
+  return normalizeAiBackendOverride(config.aiBackendOverride);
+}
+
+export async function readAiBackendOverride() {
+  const config = await readConfig();
+  return normalizeAiBackendOverride(config.aiBackendOverride);
+}
+
+export async function saveAiBackendOverride(backend) {
+  const config = await readConfig();
+  config.aiBackendOverride = normalizeAiBackendOverride(backend);
+  await saveConfig(config);
+  return config.aiBackendOverride;
+}
+
 export function setRuntimeBaseDir(baseDir) {
   runtimeBaseDir = baseDir || "";
 }

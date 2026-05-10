@@ -6,31 +6,25 @@ import {
   readConfig,
   saveConfig,
   getWorkflowDir,
+  readAiBackendOverride,
   readMobileAccessEnabled,
+  saveAiBackendOverride,
   saveMobileAccessEnabled,
 } from "../../../packages/core-models/config.mjs";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
 import {
   getWorkflow, getActiveWorkflowFile, setActiveWorkflowFile,
-  deriveContextFields, getPhaseOrder, loadWorkflow, unloadWorkflow,
+  deriveContextFields, getWorkflowConfigShape, loadWorkflow, unloadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
+import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index.mjs";
 
 const router = Router();
 
-function buildEmptyWorkflowConfig(mobileAccessEnabled) {
+function buildEmptyWorkflowConfig(mobileAccessEnabled, aiBackendOverride = "") {
   return {
-    name: "",
-    activeWorkflow: getActiveWorkflowFile(),
-    phaseOrder: [],
-    groups: [],
-    phaseLabels: {},
-    phaseTypes: {},
-    phaseInputs: {},
-    phaseOutputs: {},
-    rejectTargets: {},
-    contextFields: [],
-    worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false },
+    ...getWorkflowConfigShape(null),
     mobileAccessEnabled,
+    aiBackendOverride,
   };
 }
 
@@ -38,6 +32,22 @@ async function ensureWorkflowDir() {
   const workflowDir = getWorkflowDir();
   await mkdir(workflowDir, { recursive: true });
   return workflowDir;
+}
+
+function getWorkflowFilename(workflow) {
+  const name = String(workflow?.name || "").trim();
+  if (!name) throw new Error("workflow name is required");
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".json";
+}
+
+async function writeWorkflowFile(filename, workflow, isDraft) {
+  if (!String(workflow?.name || "").trim()) throw new Error("workflow name is required");
+  const workflowDir = await ensureWorkflowDir();
+  await writeFile(join(workflowDir, filename), JSON.stringify(workflow, null, 2));
+  if (!isDraft && filename === getActiveWorkflowFile()) {
+    loadWorkflow(join(workflowDir, filename));
+  }
+  return { filename, name: workflow.name };
 }
 
 // --- AI skill generation ---
@@ -135,60 +145,15 @@ router.delete("/skills/:slug", async (req, res) => {
 router.get("/workflow", async (req, res) => {
   const WORKFLOW = getWorkflow();
   const mobileAccessEnabled = await readMobileAccessEnabled();
+  const aiBackendOverride = await readAiBackendOverride();
   if (!WORKFLOW) {
-    return res.json(buildEmptyWorkflowConfig(mobileAccessEnabled));
-  }
-
-  const PHASE_ORDER = getPhaseOrder();
-  const groups = [];
-  const seenGroups = new Set();
-  const phaseLabels = {};
-  const phaseTypes = {};
-  const phaseInputs = {};
-  const phaseOutputs = {};
-  const phaseBackends = {};
-  const rejectTargets = {};
-
-  for (const p of WORKFLOW.phases) {
-    phaseLabels[p.id] = p.label;
-    phaseTypes[p.id] = p.type;
-    phaseInputs[p.id] = (p.inputs || []).map((input) => ({
-      name: input.name,
-      sourceType: input.sourceType,
-      phaseId: input.phaseId,
-      outputKey: input.outputKey,
-      contextLabel: input.contextLabel,
-      required: input.required,
-    }));
-    phaseOutputs[p.id] = (p.outputs || []).map((output) => ({
-      key: output.key,
-      kind: output.kind,
-      filename: output.filename,
-    }));
-    phaseBackends[p.id] = p.aiBackend || "claude";
-    const targets = p.checkpoint?.rejectTargets || p.rejectTargets;
-    if (targets) rejectTargets[p.id] = targets;
-    if (!seenGroups.has(p.group)) {
-      seenGroups.add(p.group);
-      groups.push({ key: p.group, label: p.groupLabel || p.label, phases: [] });
-    }
-    groups.find((g) => g.key === p.group).phases.push(p.id);
+    return res.json(buildEmptyWorkflowConfig(mobileAccessEnabled, aiBackendOverride));
   }
 
   res.json({
-    name: WORKFLOW.name,
-    activeWorkflow: getActiveWorkflowFile(),
-    phaseOrder: PHASE_ORDER,
-    groups,
-    phaseLabels,
-    phaseTypes,
-    phaseInputs,
-    phaseOutputs,
-    phaseBackends,
-    rejectTargets,
-    contextFields: deriveContextFields(WORKFLOW),
-    worktree: WORKFLOW.worktree || { enabled: false, files: [] },
+    ...getWorkflowConfigShape(WORKFLOW),
     mobileAccessEnabled,
+    aiBackendOverride,
   });
 });
 
@@ -196,63 +161,31 @@ router.put("/settings/mobile-access", async (req, res) => {
   try {
     await saveMobileAccessEnabled(req.body?.enabled);
     const WORKFLOW = getWorkflow();
-    if (!WORKFLOW) {
-      return res.json(buildEmptyWorkflowConfig(await readMobileAccessEnabled()));
-    }
-
-    const PHASE_ORDER = getPhaseOrder();
-    const groups = [];
-    const seenGroups = new Set();
-    const phaseLabels = {};
-    const phaseTypes = {};
-    const phaseInputs = {};
-    const phaseOutputs = {};
-    const phaseBackends = {};
-    const rejectTargets = {};
-
-    for (const p of WORKFLOW.phases) {
-      phaseLabels[p.id] = p.label;
-      phaseTypes[p.id] = p.type;
-      phaseInputs[p.id] = (p.inputs || []).map((input) => ({
-        name: input.name,
-        sourceType: input.sourceType,
-        phaseId: input.phaseId,
-        outputKey: input.outputKey,
-        contextLabel: input.contextLabel,
-        required: input.required,
-      }));
-      phaseOutputs[p.id] = (p.outputs || []).map((output) => ({
-        key: output.key,
-        kind: output.kind,
-        filename: output.filename,
-      }));
-      phaseBackends[p.id] = p.aiBackend || "claude";
-      const targets = p.checkpoint?.rejectTargets || p.rejectTargets;
-      if (targets) rejectTargets[p.id] = targets;
-      if (!seenGroups.has(p.group)) {
-        seenGroups.add(p.group);
-        groups.push({ key: p.group, label: p.groupLabel || p.label, phases: [] });
-      }
-      groups.find((g) => g.key === p.group).phases.push(p.id);
-    }
+    if (!WORKFLOW) return res.json(buildEmptyWorkflowConfig(await readMobileAccessEnabled(), await readAiBackendOverride()));
 
     res.json({
-      name: WORKFLOW.name,
-      activeWorkflow: getActiveWorkflowFile(),
-      phaseOrder: PHASE_ORDER,
-      groups,
-      phaseLabels,
-      phaseTypes,
-      phaseInputs,
-      phaseOutputs,
-      phaseBackends,
-      rejectTargets,
-      contextFields: deriveContextFields(WORKFLOW),
-      worktree: WORKFLOW.worktree || { enabled: false, files: [] },
+      ...getWorkflowConfigShape(WORKFLOW),
       mobileAccessEnabled: await readMobileAccessEnabled(),
+      aiBackendOverride: await readAiBackendOverride(),
     });
   } catch (err) {
     res.status(400).json({ error: err.message || "failed to update mobile access" });
+  }
+});
+
+router.put("/settings/ai-backend", async (req, res) => {
+  try {
+    await saveAiBackendOverride(req.body?.backend);
+    const WORKFLOW = getWorkflow();
+    if (!WORKFLOW) return res.json(buildEmptyWorkflowConfig(await readMobileAccessEnabled(), await readAiBackendOverride()));
+
+    res.json({
+      ...getWorkflowConfigShape(WORKFLOW),
+      mobileAccessEnabled: await readMobileAccessEnabled(),
+      aiBackendOverride: await readAiBackendOverride(),
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "failed to update AI backend" });
   }
 });
 
@@ -270,7 +203,10 @@ router.get("/workflows", async (req, res) => {
         workflows.push({
           filename: f,
           name: raw.name || f,
-          phaseCount: raw.phases?.length || 0,
+          phaseCount: raw.steps?.length || 0,
+          phaseOrder: (raw.steps || []).map((step) => step.id).filter(Boolean),
+          groups: getWorkflowConfigShape(raw).groups,
+          workflowConfig: getWorkflowConfigShape(raw),
           contextFields: deriveContextFields(raw),
           worktree: raw.worktree || { enabled: false, files: [] },
         });
@@ -294,9 +230,19 @@ router.get("/workflows/:filename", async (req, res) => {
 });
 
 router.post("/workflows", async (req, res) => {
-  const workflow = req.body;
-  if (!workflow.name || !workflow.phases) return res.status(400).json({ error: "name and phases required" });
-  const filename = workflow.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".json";
+  const isDraft = req.query.draft === "1";
+  let workflow;
+  try {
+    workflow = isDraft ? req.body : validateWorkflowDsl(req.body);
+  } catch (err) {
+    return res.status(400).json({ error: err.message || "invalid workflow DSL" });
+  }
+  let filename;
+  try {
+    filename = getWorkflowFilename(workflow);
+  } catch (err) {
+    return res.status(400).json({ error: err.message || "invalid workflow DSL" });
+  }
   const workflowDir = await ensureWorkflowDir();
   const filepath = join(workflowDir, filename);
   try {
@@ -304,7 +250,7 @@ router.post("/workflows", async (req, res) => {
     return res.status(409).json({ error: "workflow with this name already exists" });
   } catch {}
   await writeFile(filepath, JSON.stringify(workflow, null, 2));
-  if (!getWorkflow()) {
+  if (!isDraft && !getWorkflow()) {
     loadWorkflow(filepath);
     setActiveWorkflowFile(filename);
     const config = await readConfig();
@@ -317,14 +263,18 @@ router.post("/workflows", async (req, res) => {
 router.put("/workflows/:filename", async (req, res) => {
   const { filename } = req.params;
   if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
-  const workflow = req.body;
-  if (!workflow.name || !workflow.phases) return res.status(400).json({ error: "name and phases required" });
-  const workflowDir = await ensureWorkflowDir();
-  await writeFile(join(workflowDir, filename), JSON.stringify(workflow, null, 2));
-  if (filename === getActiveWorkflowFile()) {
-    loadWorkflow(join(workflowDir, filename));
+  const isDraft = req.query.draft === "1";
+  let workflow;
+  try {
+    workflow = isDraft ? req.body : validateWorkflowDsl(req.body);
+  } catch (err) {
+    return res.status(400).json({ error: err.message || "invalid workflow DSL" });
   }
-  res.json({ filename, name: workflow.name });
+  try {
+    res.json(await writeWorkflowFile(filename, workflow, isDraft));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "invalid workflow DSL" });
+  }
 });
 
 router.delete("/workflows/:filename", async (req, res) => {

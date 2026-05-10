@@ -375,7 +375,7 @@ async function handleCommand(message) {
       if (command === "approve") {
         sendJson(socket, { type: "approve", taskId, runId });
       } else if (command === "reject") {
-        sendJson(socket, { type: "reject", taskId, rejectTo: payload?.rejectTo, runId });
+        sendJson(socket, { type: "reject", taskId, rejectTo: payload?.rejectTo, reason: payload?.reason || "", runId });
       } else if (command === "message") {
         const imagePaths = await normalizeImagePayload(runId, payload?.images || []);
         sendJson(socket, {

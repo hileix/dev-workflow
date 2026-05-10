@@ -1,7 +1,7 @@
 import { join } from "path";
-import { readFile, writeFile, mkdir, appendFile, rm } from "fs/promises";
+import { readFile, writeFile, mkdir, appendFile, rm, rename } from "fs/promises";
 import { getBaseDir, getWorkfoldersFile } from "./config.mjs";
-import { getWorkflow, getPhaseOrder, interpolate } from "./workflow.mjs";
+import { getWorkflow, getPhaseOrder, getWorkflowConfigShape, interpolate } from "./workflow.mjs";
 
 export function assertSafeRunId(runId) {
   const value = String(runId || "").trim();
@@ -104,10 +104,10 @@ export function makeInitialState(taskId, workFolder, baseDir, contextValues, opt
   const runId = options.runId || taskId;
   const artifacts = {};
   const vars = { taskId, runId, ...contextValues };
-  for (const p of WORKFLOW.phases) {
+  for (const p of WORKFLOW.steps) {
     const primaryOutput = Array.isArray(p.outputs) ? p.outputs[0] : null;
     if (primaryOutput?.filename) {
-      artifacts[p.group] = join(baseDir, runId, interpolate(primaryOutput.filename, vars));
+      artifacts[p.id] = join(baseDir, runId, interpolate(primaryOutput.filename, vars));
     }
   }
   return {
@@ -116,13 +116,23 @@ export function makeInitialState(taskId, workFolder, baseDir, contextValues, opt
     workFolder,
     originalWorkFolder: options.originalWorkFolder || workFolder,
     worktree: options.worktree || null,
+    workflowFilename: options.workflowFilename || "",
+    workflowConfig: options.workflowConfig || getWorkflowConfigShape(WORKFLOW),
     created: now,
     updated: now,
     currentPhase: PHASE_ORDER[0],
+    currentStep: PHASE_ORDER[0],
     overallStatus: "in_progress",
     phases: PHASE_ORDER.map((id) => ({ id, status: "pending", updated: null, sessionId: null })),
+    steps: PHASE_ORDER.map((id) => ({ id, status: "pending", updated: null, sessionId: null })),
     artifacts,
     contextValues: contextValues || {},
+    sessionMap: {},
+    stepOutputs: {},
+    stepArtifacts: {},
+    stepDecisions: {},
+    pendingMessages: {},
+    logs: [],
   };
 }
 
@@ -147,8 +157,12 @@ export async function writeState(taskId, state) {
   const runId = assertSafeRunId(state?.runId || await resolveTaskRunId(taskId));
   if (!runId) throw new Error("task not found");
   state.updated = new Date().toISOString();
-  await mkdir(join(baseDir, runId), { recursive: true });
-  await writeFile(join(baseDir, runId, "workflow-state.json"), JSON.stringify(state, null, 2));
+  const dir = join(baseDir, runId);
+  const target = join(dir, "workflow-state.json");
+  const tmp = join(dir, `.workflow-state.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`);
+  await mkdir(dir, { recursive: true });
+  await writeFile(tmp, JSON.stringify(state, null, 2));
+  await rename(tmp, target);
 }
 
 export async function clearTaskData(taskId, runId = "") {
@@ -164,5 +178,13 @@ export function updatePhaseStatus(state, phaseId, status, sessionId) {
     phase.status = status;
     phase.updated = new Date().toISOString();
     if (sessionId !== undefined) phase.sessionId = sessionId;
+  }
+  if (Array.isArray(state.steps)) {
+    const step = state.steps.find((p) => p.id === phaseId);
+    if (step) {
+      step.status = status;
+      step.updated = new Date().toISOString();
+      if (sessionId !== undefined) step.sessionId = sessionId;
+    }
   }
 }

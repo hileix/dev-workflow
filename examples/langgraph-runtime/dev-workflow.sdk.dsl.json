@@ -1,0 +1,76 @@
+{
+  "id": "dev-workflow-sdk-demo",
+  "name": "Dev Workflow SDK Demo",
+  "version": 1,
+  "agents": {
+    "planner": {
+      "backend": "claude",
+      "skill": "plan",
+      "model": "",
+      "workspaceAccess": "read",
+      "contextKey": "plannerMessages"
+    },
+    "coder": {
+      "backend": "codex",
+      "skill": "implement",
+      "model": "",
+      "workspaceAccess": "write",
+      "contextKey": "coderMessages",
+      "options": {
+        "thread": {
+          "modelReasoningEffort": "medium"
+        }
+      }
+    }
+  },
+  "contextGroups": [
+    {
+      "id": "coding",
+      "agent": "coder",
+      "sharedSession": true
+    }
+  ],
+  "steps": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "agent": "planner",
+      "prompt": "Create a short implementation plan for {{task}}.",
+      "output": {
+        "filename": "plan.md"
+      },
+      "next": "review"
+    },
+    {
+      "id": "review",
+      "type": "checkpoint",
+      "question": "Approve this plan?",
+      "approve": "implement",
+      "rejectTo": "plan"
+    },
+    {
+      "id": "implement",
+      "type": "agent",
+      "contextGroup": "coding",
+      "prompt": "Implement the approved plan. Keep the summary concise.",
+      "output": {
+        "filename": "implementation.md"
+      },
+      "next": "verify"
+    },
+    {
+      "id": "verify",
+      "type": "agent",
+      "contextGroup": "coding",
+      "prompt": "Verify the implementation and summarize the result.",
+      "output": {
+        "filename": "verification.md"
+      },
+      "next": "finish"
+    },
+    {
+      "id": "finish",
+      "type": "end"
+    }
+  ]
+}
