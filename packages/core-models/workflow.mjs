@@ -24,6 +24,27 @@ function listWorkflowFilesSync(dir) {
   }
 }
 
+export function assertSafeWorkflowFilename(filename) {
+  const value = String(filename || "").trim();
+  if (
+    !value.endsWith(".json") ||
+    value.includes("/") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    value === ".json" ||
+    value.includes("..")
+  ) {
+    throw new Error("invalid workflow filename");
+  }
+  return value;
+}
+
+export function readWorkflowFileSync(filename) {
+  const safeFilename = assertSafeWorkflowFilename(filename);
+  const raw = JSON.parse(readFileSync(join(getWorkflowDir(), safeFilename), "utf-8"));
+  return validateWorkflowDsl(raw);
+}
+
 function migrateLegacyWorkflowsSync() {
   const workflowDir = getWorkflowDir();
   mkdirSync(workflowDir, { recursive: true });
@@ -51,6 +72,75 @@ function getStepAgent(workflow, step) {
 function getStepBackend(workflow, step) {
   const agentId = getStepAgent(workflow, step);
   return workflow.agents?.[agentId]?.backend || "";
+}
+
+export function getWorkflowStepOrder(workflow = WORKFLOW) {
+  return (workflow?.steps || []).map((step) => step.id);
+}
+
+export function getWorkflowRejectTargets(workflow = WORKFLOW) {
+  const rejectTargets = {};
+  for (const step of workflow?.steps || []) {
+    if (step.type === "checkpoint") rejectTargets[step.id] = step.rejectTargets || [step.rejectTo].filter(Boolean);
+  }
+  return rejectTargets;
+}
+
+export function getWorkflowStepType(workflow = WORKFLOW, stepId) {
+  return workflow?.steps?.find((step) => step.id === stepId)?.type || "";
+}
+
+export function isWorkflowAutoStep(workflow = WORKFLOW, stepId) {
+  const type = getWorkflowStepType(workflow, stepId);
+  return type === "agent" || type === "condition";
+}
+
+export function getWorkflowGraphShape(workflow = WORKFLOW) {
+  const nodes = [];
+  const edges = [];
+  const stepIds = new Set(getWorkflowStepOrder(workflow));
+
+  for (const step of workflow?.steps || []) {
+    nodes.push({
+      id: step.id,
+      label: step.label || step.id,
+      type: step.type,
+      backend: getStepBackend(workflow, step),
+      position: workflow?.ui?.nodePositions?.[step.id] || null,
+    });
+
+    if (step.type === "condition") {
+      if (step.passTo && stepIds.has(step.passTo)) {
+        edges.push({ id: `${step.id}:pass:${step.passTo}`, source: step.id, target: step.passTo, routeKind: "pass", sourceHandle: "pass", label: "pass" });
+      }
+      if (step.failTo && stepIds.has(step.failTo)) {
+        edges.push({ id: `${step.id}:fail:${step.failTo}`, source: step.id, target: step.failTo, routeKind: "fail", sourceHandle: "fail", label: "fail" });
+      }
+      continue;
+    }
+
+    if (step.type === "checkpoint") {
+      if (step.approve && stepIds.has(step.approve)) {
+        edges.push({ id: `${step.id}:approve:${step.approve}`, source: step.id, target: step.approve, routeKind: "approve", sourceHandle: "approve", label: "approve" });
+      }
+      for (const target of step.rejectTargets || [step.rejectTo].filter(Boolean)) {
+        if (stepIds.has(target)) {
+          edges.push({ id: `${step.id}:reject:${target}`, source: step.id, target, routeKind: "reject", sourceHandle: "reject", label: "reject" });
+        }
+      }
+      continue;
+    }
+
+    if (step.next && stepIds.has(step.next)) {
+      edges.push({ id: `${step.id}:next:${step.next}`, source: step.id, target: step.next, routeKind: "next", sourceHandle: "next", label: "" });
+    }
+  }
+
+  return {
+    entry: workflow?.steps?.[0]?.id || "",
+    nodes,
+    edges,
+  };
 }
 
 export function interpolate(template, vars) {
@@ -94,7 +184,7 @@ export function getWorkflowConfigShape(workflow = WORKFLOW) {
     };
   }
 
-  const phaseOrder = workflow.steps.map((step) => step.id);
+  const phaseOrder = getWorkflowStepOrder(workflow);
   const groups = [];
   const seenGroups = new Set();
   const phaseLabels = {};
@@ -137,6 +227,7 @@ export function getWorkflowConfigShape(workflow = WORKFLOW) {
     name: workflow.name,
     activeWorkflow: getActiveWorkflowFile(),
     phaseOrder,
+    graph: getWorkflowGraphShape(workflow),
     groups,
     phaseLabels,
     phaseTypes,
@@ -154,8 +245,8 @@ export function loadWorkflow(path) {
   const raw = JSON.parse(readFileSync(path, "utf-8"));
   const workflow = validateWorkflowDsl(raw);
   WORKFLOW = workflow;
-  STEP_ORDER = workflow.steps.map((step) => step.id);
-  REJECT_TARGETS = {};
+  STEP_ORDER = getWorkflowStepOrder(workflow);
+  REJECT_TARGETS = getWorkflowRejectTargets(workflow);
   STEP_META = {};
 
   for (const step of workflow.steps) {
@@ -166,9 +257,6 @@ export function loadWorkflow(path) {
       groupLabel: workflow.contextGroups.find((group) => group.id === step.contextGroup)?.label || null,
       aiBackend: getStepBackend(workflow, step),
     };
-    if (step.type === "checkpoint") {
-      REJECT_TARGETS[step.id] = step.rejectTargets || [step.rejectTo].filter(Boolean);
-    }
   }
 }
 
@@ -187,8 +275,7 @@ export function unloadWorkflow() {
 }
 
 export function isAutoPhase(stepId) {
-  const meta = STEP_META[stepId];
-  return meta ? meta.type === "auto" || meta.type === "condition" : false;
+  return isWorkflowAutoStep(WORKFLOW, stepId);
 }
 
 export function nextPhase(currentStepId) {

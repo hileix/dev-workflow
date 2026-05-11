@@ -1,7 +1,7 @@
 import { join } from "path";
 import { readFile, writeFile, mkdir, appendFile, rm, rename } from "fs/promises";
 import { getBaseDir, getWorkfoldersFile } from "./config.mjs";
-import { getWorkflow, getPhaseOrder, getWorkflowConfigShape, interpolate } from "./workflow.mjs";
+import { getWorkflow, getWorkflowConfigShape, getWorkflowStepOrder, interpolate } from "./workflow.mjs";
 
 export function assertSafeRunId(runId) {
   const value = String(runId || "").trim();
@@ -98,8 +98,8 @@ export async function readPhaseInteractions(taskId, phase, runId = "") {
 }
 
 export function makeInitialState(taskId, workFolder, baseDir, contextValues, options = {}) {
-  const WORKFLOW = getWorkflow();
-  const PHASE_ORDER = getPhaseOrder();
+  const WORKFLOW = options.workflow || getWorkflow();
+  const PHASE_ORDER = getWorkflowStepOrder(WORKFLOW);
   const now = new Date().toISOString();
   const runId = options.runId || taskId;
   const artifacts = {};
@@ -117,6 +117,7 @@ export function makeInitialState(taskId, workFolder, baseDir, contextValues, opt
     originalWorkFolder: options.originalWorkFolder || workFolder,
     worktree: options.worktree || null,
     workflowFilename: options.workflowFilename || "",
+    workflowDefinition: WORKFLOW,
     workflowConfig: options.workflowConfig || getWorkflowConfigShape(WORKFLOW),
     created: now,
     updated: now,

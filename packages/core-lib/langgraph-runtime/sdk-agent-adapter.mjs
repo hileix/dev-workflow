@@ -44,7 +44,7 @@ function renderStepInputs(step, state) {
     }
 
     if (input.sourceType === "step_output") {
-      const output = stepOutputs[input.stepId];
+      const output = stepOutputs[input.stepId]?.outputs?.[input.outputKey] || stepOutputs[input.stepId];
       parts.push([
         `## ${input.name}`,
         output?.summary ? `Summary: ${output.summary}` : "",
@@ -349,6 +349,14 @@ function resolveOutputPath(taskDir, step, state) {
   return outputPath;
 }
 
+function resolveDeclaredOutputPath(taskDir, output, state) {
+  const filename = renderTemplate(output?.filename || "", state);
+  if (!filename) return "";
+  const outputPath = resolve(taskDir, filename);
+  if (!isPathInside(taskDir, outputPath)) throw new Error(`step output filename escapes taskDir`);
+  return outputPath;
+}
+
 async function writeOutputArtifact(taskDir, step, state, content) {
   const outputPath = resolveOutputPath(taskDir, step, state);
   if (!outputPath || content === undefined) return "";
@@ -421,6 +429,18 @@ export function createSdkAgentAdapter(options = {}) {
       const artifactPath = await writeOutputArtifact(taskDir, step, state, content);
       const summary = createContentSummary(content);
       const contentPreview = createContentPreview(content);
+      const outputs = {};
+      for (const output of step.outputs || []) {
+        const outputPath = resolveDeclaredOutputPath(taskDir, output, state);
+        if (!outputPath) continue;
+        outputs[output.key] = {
+          kind: output.kind || "markdown",
+          summary,
+          contentPreview,
+          artifactPath: outputPath,
+          status: artifactPath && resolve(outputPath) === resolve(artifactPath) ? "ready" : "pending",
+        };
+      }
       if (artifactPath) {
         await onEvent({ type: "artifact_written", step: step.id, phase: step.id, backend, artifactPath, summary, contentPreview });
       }
@@ -431,6 +451,7 @@ export function createSdkAgentAdapter(options = {}) {
         summary,
         contentPreview,
         artifactPath,
+        outputs,
       };
     },
   };

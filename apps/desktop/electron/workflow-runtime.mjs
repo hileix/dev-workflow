@@ -1,8 +1,18 @@
 import { Command, INTERRUPT, isInterrupted } from "@langchain/langgraph";
 import { join } from "path";
-import { getBaseDir, getWorkflowDir, readAiBackendOverrideSync } from "../../../packages/core-models/config.mjs";
+import { getBaseDir, readAiBackendOverrideSync } from "../../../packages/core-models/config.mjs";
 import { readManagedSkillContentSync } from "../../../packages/core-models/skills.mjs";
-import { getActiveWorkflowFile, getPhaseOrder, getRejectTargets, getWorkflow, getWorkflowConfigShape, isAutoPhase, loadWorkflow, setActiveWorkflowFile } from "../../../packages/core-models/workflow.mjs";
+import {
+  assertSafeWorkflowFilename,
+  getActiveWorkflowFile,
+  getWorkflow,
+  getWorkflowConfigShape,
+  getWorkflowRejectTargets,
+  getWorkflowStepOrder,
+  getWorkflowStepType,
+  isWorkflowAutoStep,
+  readWorkflowFileSync,
+} from "../../../packages/core-models/workflow.mjs";
 import {
   appendPhaseInteraction,
   appendToPhaseFile,
@@ -17,7 +27,7 @@ import {
 import { upsertTask } from "../../../packages/core-models/workfolders.mjs";
 import { activeWorkflows, getPhaseContent, normalizeAiBackend, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
 import { prepareWorktree, removeWorktree } from "../../../packages/core-lib/worktree.mjs";
-import { buildWorkflowGraphFromDsl, createAppSdkAgentAdapter, createMemoryCheckpointer, createSdkAgentAdapter } from "../../../packages/core-lib/langgraph-runtime/index.mjs";
+import { buildWorkflowGraphFromDsl, createAppSdkAgentAdapter, createSdkAgentAdapter, FileCheckpointSaver } from "../../../packages/core-lib/langgraph-runtime/index.mjs";
 import { nanoid } from "nanoid";
 
 const DEFAULT_WORKTREE_NAMING_SKILL = `Choose a concise Git branch name for this workflow run.
@@ -31,7 +41,6 @@ Rules:
 - If the task is not English, translate the intent into a short English slug.
 - Do not return generic names like chore/task or task.`;
 
-const graphCheckpointer = createMemoryCheckpointer();
 const activeGraphs = new Map();
 
 function createEmitter(sender) {
@@ -102,9 +111,12 @@ function getThreadId(taskId, runId) {
   return `${taskId}:${runId}`;
 }
 
-function getStepType(stepId) {
-  const step = getWorkflow()?.steps?.find((item) => item.id === stepId);
-  return step?.type || "";
+function getRuntimeWorkflow(wf, state = null) {
+  return wf?.workflow || state?.workflowDefinition || getWorkflow();
+}
+
+function getStepType(workflow, stepId) {
+  return getWorkflowStepType(workflow, stepId);
 }
 
 function createGraphConfig(taskId, runId) {
@@ -138,11 +150,11 @@ function syncStateShape(langState, currentState) {
   return next;
 }
 
-function setRunningStep(state, stepId) {
+function setRunningStep(state, workflow, stepId) {
   if (!stepId || stepId === "completed") return;
   for (const phase of state.phases || []) {
     if (phase.id === stepId) {
-      phase.status = getStepType(stepId) === "checkpoint" ? "awaiting_input" : "in_progress";
+      phase.status = getStepType(workflow, stepId) === "checkpoint" ? "awaiting_input" : "in_progress";
     } else if (phase.status === "in_progress") {
       phase.status = "completed";
     }
@@ -153,8 +165,8 @@ function setRunningStep(state, stepId) {
   }
 }
 
-function markCompletedBeforeCurrent(state) {
-  const order = getPhaseOrder();
+function markCompletedBeforeCurrent(state, workflow) {
+  const order = getWorkflowStepOrder(workflow);
   const currentIndex = order.indexOf(state.currentPhase);
   for (let i = 0; i < order.length; i += 1) {
     const phaseId = order[i];
@@ -166,8 +178,9 @@ function markCompletedBeforeCurrent(state) {
   }
 }
 
-async function persistLangGraphState(taskId, runId, langState) {
+async function persistLangGraphState(taskId, runId, langState, workflow) {
   const state = await readState(taskId, runId);
+  const runtimeWorkflow = workflow || state.workflowDefinition || getWorkflow();
   const next = syncStateShape(langState, state);
 
   if (isInterrupted(langState)) {
@@ -182,8 +195,8 @@ async function persistLangGraphState(taskId, runId, langState) {
     next.currentStep = "completed";
     for (const phase of next.phases) updatePhaseStatus(next, phase.id, "completed", phase.sessionId);
   } else {
-    setRunningStep(next, next.currentPhase);
-    markCompletedBeforeCurrent(next);
+    setRunningStep(next, runtimeWorkflow, next.currentPhase);
+    markCompletedBeforeCurrent(next, runtimeWorkflow);
   }
 
   await writeState(taskId, next);
@@ -277,7 +290,7 @@ function createGraph(taskId, runId, wf, imagePaths = []) {
     abortController: taskRunAbortController,
     aiBackendOverride,
   });
-  return buildWorkflowGraphFromDsl(getWorkflow(), adapter, { checkpointer: graphCheckpointer });
+  return buildWorkflowGraphFromDsl(wf.workflow, adapter, { checkpointer: new FileCheckpointSaver(join(wf.taskRunDir, "checkpoints")) });
 }
 
 function getOrCreateGraph(taskId, runId, wf) {
@@ -297,7 +310,7 @@ async function invokeGraph(taskId, runId, input) {
   const graph = getOrCreateGraph(taskId, runId, wf);
 
   const result = await graph.invoke(input, createGraphConfig(taskId, runId));
-  const state = await persistLangGraphState(taskId, runId, result);
+  const state = await persistLangGraphState(taskId, runId, result, wf.workflow);
   wf.send({ type: "state", state });
 
   if (isInterrupted(result)) return state;
@@ -309,9 +322,10 @@ async function invokeGraph(taskId, runId, input) {
 }
 
 async function ensureCheckpointReady(taskId, runId, state) {
-  if (getStepType(state.currentStep || state.currentPhase) !== "checkpoint") return;
-
   const wf = activeWorkflows.get(taskId);
+  const workflow = getRuntimeWorkflow(wf, state);
+  if (getStepType(workflow, state.currentStep || state.currentPhase) !== "checkpoint") return;
+
   if (!wf) return;
   const graph = getOrCreateGraph(taskId, runId, wf);
   const checkpoint = graph?.getState
@@ -329,18 +343,27 @@ async function ensureCheckpointReady(taskId, runId, state) {
     },
     goto: state.currentStep || state.currentPhase,
   }), createGraphConfig(taskId, runId));
-  await persistLangGraphState(taskId, runId, result);
+  await persistLangGraphState(taskId, runId, result, workflow);
+}
+
+async function markWorkflowFailed(taskId, runId, phase, error, sender) {
+  const state = await readState(taskId, runId);
+  const message = error?.message || "Workflow run failed";
+  updatePhaseStatus(state, phase || state.currentPhase, "failed");
+  state.overallStatus = "failed";
+  state.logs = [...(state.logs || []), `failed:${phase || state.currentPhase}:${message}`];
+  await writeState(taskId, state);
+  await upsertTask(state.originalWorkFolder || state.workFolder, taskId, "failed", state.runId || runId, { create: false }).catch(() => {});
+  sender?.({ type: "phase_failed", phase: phase || state.currentPhase, message });
+  sender?.({ type: "state", state });
+  return state;
 }
 
 export async function startWorkflowSession(taskId, workFolder, contextValues, images, runId, sender, options = {}) {
   if (!taskId || !workFolder) throw new Error("taskId and workFolder required");
   const workflowFilename = String(options?.workflowFilename || "").trim();
-  if (workflowFilename) {
-    if (!workflowFilename.endsWith(".json")) throw new Error("invalid workflow filename");
-    loadWorkflow(join(getWorkflowDir(), workflowFilename));
-    setActiveWorkflowFile(workflowFilename);
-  }
-  if (!getWorkflow() || getPhaseOrder().length === 0) throw new Error("no workflow configured");
+  const workflow = workflowFilename ? readWorkflowFileSync(assertSafeWorkflowFilename(workflowFilename)) : getWorkflow();
+  if (!workflow || getWorkflowStepOrder(workflow).length === 0) throw new Error("no workflow configured");
 
   let existingState = null;
   try {
@@ -354,6 +377,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
       send: createEmitter(sender),
       abortController: null,
       runId: existingState.runId || runId || "",
+      workflow: existingState.workflowDefinition,
     });
     sender({ type: "state", state: existingState });
     await emitExistingTaskFiles(taskId, existingState, createEmitter(sender));
@@ -364,8 +388,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   const finalRunId = runId || nanoid();
   await createTaskRunDir(taskId, finalRunId);
 
-  const workflow = getWorkflow();
-  const activeWorkflowFile = getActiveWorkflowFile();
+  const activeWorkflowFile = workflowFilename || getActiveWorkflowFile();
   sender({ type: "workflow_starting", taskId, runId: finalRunId });
   const requestedWorktreeName = String(options?.worktreeName || "").trim();
   if (workflow.worktree?.enabled && !requestedWorktreeName) sender({ type: "worktree_naming_started" });
@@ -391,6 +414,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   const runtimeWorkFolder = preparedWorktree.workFolder;
   const baseDir = await getBaseDir();
   const state = makeInitialState(taskId, runtimeWorkFolder, baseDir, contextValues, {
+    workflow,
     originalWorkFolder: workFolder,
     runId: finalRunId,
     workflowFilename: activeWorkflowFile,
@@ -407,7 +431,8 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
         }
       : null,
   });
-  updatePhaseStatus(state, getPhaseOrder()[0], "in_progress");
+  const stepOrder = getWorkflowStepOrder(workflow);
+  updatePhaseStatus(state, stepOrder[0], "in_progress");
   await writeState(taskId, state);
 
   const taskRunDir = await taskDir(taskId, finalRunId);
@@ -417,21 +442,27 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
     send: createEmitter(sender),
     abortController: null,
     runId: finalRunId,
+    workflow,
   });
   await upsertTask(workFolder, taskId, "in_progress", finalRunId);
   sender({ type: "state", state });
 
   const graph = createGraph(taskId, finalRunId, activeWorkflows.get(taskId), images || []);
   activeGraphs.set(getThreadId(taskId, finalRunId), graph);
-  await invokeGraph(taskId, finalRunId, {
-    taskId,
-    runId: finalRunId,
-    workFolder: runtimeWorkFolder,
-    taskDir: taskRunDir,
-    currentStep: getPhaseOrder()[0],
-    overallStatus: "in_progress",
-    contextValues: contextValues || {},
-  });
+  try {
+    await invokeGraph(taskId, finalRunId, {
+      taskId,
+      runId: finalRunId,
+      workFolder: runtimeWorkFolder,
+      taskDir: taskRunDir,
+      currentStep: stepOrder[0],
+      overallStatus: "in_progress",
+      contextValues: contextValues || {},
+    });
+  } catch (err) {
+    await markWorkflowFailed(taskId, finalRunId, stepOrder[0], err, createEmitter(sender));
+    throw err;
+  }
 }
 
 export async function approveWorkflow(taskId, sender, runId = "") {
@@ -441,12 +472,17 @@ export async function approveWorkflow(taskId, sender, runId = "") {
   const state = await readState(taskId, runId || wf.runId || "");
   const stateRunId = state.runId || runId || wf.runId || "";
   await ensureCheckpointReady(taskId, stateRunId, state);
-  await invokeGraph(taskId, stateRunId, new Command({
-    resume: {
-      approved: true,
-      notes: "Approved by user.",
-    },
-  }));
+  try {
+    await invokeGraph(taskId, stateRunId, new Command({
+      resume: {
+        approved: true,
+        notes: "Approved by user.",
+      },
+    }));
+  } catch (err) {
+    await markWorkflowFailed(taskId, stateRunId, state.currentPhase, err, wf.send);
+    throw err;
+  }
 }
 
 export async function rejectWorkflow(taskId, rejectTo, reason = "", sender, runId = "") {
@@ -454,7 +490,8 @@ export async function rejectWorkflow(taskId, rejectTo, reason = "", sender, runI
   if (!wf) throw new Error("workflow not found");
   const state = await readState(taskId, runId || wf.runId || "");
   const cur = state.currentPhase;
-  const allowed = getRejectTargets()[cur];
+  const workflow = getRuntimeWorkflow(wf, state);
+  const allowed = getWorkflowRejectTargets(workflow)[cur];
   if (!allowed || !allowed.includes(rejectTo)) throw new Error(`cannot reject from ${cur} to ${rejectTo}`);
   wf.send = createEmitter(sender);
   const stateRunId = state.runId || runId || wf.runId || "";
@@ -469,13 +506,18 @@ export async function rejectWorkflow(taskId, rejectTo, reason = "", sender, runI
   }, stateRunId);
   if (interaction) sender({ type: "phase_interaction", phase: rejectTo, interaction });
   sender({ type: "user_message", phase: rejectTo, text: notes });
-  await invokeGraph(taskId, stateRunId, new Command({
-    resume: {
-      approved: false,
-      rejectTo,
-      notes,
-    },
-  }));
+  try {
+    await invokeGraph(taskId, stateRunId, new Command({
+      resume: {
+        approved: false,
+        rejectTo,
+        notes,
+      },
+    }));
+  } catch (err) {
+    await markWorkflowFailed(taskId, stateRunId, cur, err, wf.send);
+    throw err;
+  }
 }
 
 export async function sendWorkflowMessage(taskId, text, images, sender, runId = "") {
@@ -501,18 +543,24 @@ export async function sendWorkflowMessage(taskId, text, images, sender, runId = 
 export async function restartWorkflowPhase(taskId, phase, sender, runId = "") {
   const wf = activeWorkflows.get(taskId);
   if (!wf) throw new Error("workflow not found");
-  if (!isAutoPhase(phase)) throw new Error(`cannot restart manual phase ${phase}`);
   const state = await readState(taskId, runId || wf.runId || "");
+  const workflow = getRuntimeWorkflow(wf, state);
+  if (!isWorkflowAutoStep(workflow, phase)) throw new Error(`cannot restart manual phase ${phase}`);
   if (state.currentPhase !== phase) throw new Error(`cannot restart ${phase} while current phase is ${state.currentPhase}`);
   updatePhaseStatus(state, phase, "in_progress", null);
   state.overallStatus = "in_progress";
   await writeState(taskId, state);
   sender({ type: "phase_restarted", phase });
   sender({ type: "state", state });
-  await invokeGraph(taskId, state.runId || runId || wf.runId || "", {
-    ...state,
-    currentStep: phase,
-  });
+  try {
+    await invokeGraph(taskId, state.runId || runId || wf.runId || "", {
+      ...state,
+      currentStep: phase,
+    });
+  } catch (err) {
+    await markWorkflowFailed(taskId, state.runId || runId || wf.runId || "", phase, err, wf.send);
+    throw err;
+  }
 }
 
 export async function pauseWorkflowPhase(taskId, phase, sender, runId = "") {

@@ -1,5 +1,5 @@
 import { Annotation, Command, END, MemorySaver, START, StateGraph, interrupt } from "@langchain/langgraph";
-import { createStepOutputMetadata, hasStepOutputResult } from "./artifacts.mjs";
+import { normalizeStepOutputMetadata, hasStepOutputResult } from "./artifacts.mjs";
 
 const WorkflowRuntimeState = Annotation.Root({
   taskId: Annotation({ default: () => "" }),
@@ -24,8 +24,10 @@ function getAgentForStep(dsl, step) {
   return dsl.agents[step.agent];
 }
 
-function getContextSessionKey(step) {
-  return step.contextGroup || step.id;
+function getSessionKey(step, dsl) {
+  if (!step.contextGroup) return step.id;
+  const group = (dsl.contextGroups || []).find((item) => item.id === step.contextGroup);
+  return group?.sharedSession === false ? step.id : step.contextGroup;
 }
 
 function getNextStepId(step) {
@@ -37,7 +39,7 @@ function getNextStepId(step) {
 
 async function runAgentStep(step, dsl, adapters, state) {
   const agent = getAgentForStep(dsl, step);
-  const sessionKey = getContextSessionKey(step);
+  const sessionKey = getSessionKey(step, dsl);
   const currentSessionId = state.sessionMap?.[sessionKey] || "";
   const result = await adapters.runAgent({
     step,
@@ -51,7 +53,7 @@ async function runAgentStep(step, dsl, adapters, state) {
 
   const nextOutputs = { ...(state.stepOutputs || {}) };
   const nextArtifacts = { ...(state.stepArtifacts || {}) };
-  if (hasStepOutputResult(result)) nextOutputs[step.id] = createStepOutputMetadata(result);
+  if (hasStepOutputResult(result)) nextOutputs[step.id] = normalizeStepOutputMetadata(result);
   if (result?.artifactPath) nextArtifacts[step.id] = result.artifactPath;
 
   return {
@@ -202,9 +204,14 @@ function createCheckpointNode(step, adapters) {
 }
 
 function createEndNode(step) {
-  return async () => ({
+  return async (state) => ({
     currentStep: step.id,
     overallStatus: "completed",
+    sessionMap: state.sessionMap || {},
+    stepOutputs: state.stepOutputs || {},
+    stepArtifacts: state.stepArtifacts || {},
+    stepDecisions: state.stepDecisions || {},
+    pendingMessages: state.pendingMessages || {},
     logs: [`end:${step.id}`],
   });
 }

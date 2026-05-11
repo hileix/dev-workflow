@@ -51,6 +51,22 @@ export function createStepOutputMetadata(result = {}) {
   };
 }
 
+export function normalizeStepOutputMetadata(result = {}) {
+  const outputs = result.outputs && typeof result.outputs === "object" && !Array.isArray(result.outputs)
+    ? result.outputs
+    : {};
+  const firstOutput = Object.values(outputs)[0] || null;
+  return {
+    ...createStepOutputMetadata(result),
+    ...(firstOutput && !result.artifactPath ? {
+      summary: firstOutput.summary || "",
+      contentPreview: firstOutput.contentPreview || "",
+      artifactPath: firstOutput.artifactPath || "",
+    } : {}),
+    outputs,
+  };
+}
+
 export function formatStepOutputForPrompt(stepId, output) {
   if (!output) return "";
 
@@ -72,6 +88,16 @@ export function formatStepOutputForPrompt(stepId, output) {
     output.artifactPath ? `Artifact: ${output.artifactPath}` : "",
     output.contentPreview ? ["", "Preview:", output.contentPreview].join("\n") : "",
   ];
+
+  for (const [key, metadata] of Object.entries(output.outputs || {})) {
+    lines.push(
+      "",
+      `### ${key}`,
+      metadata.summary ? `Summary: ${metadata.summary}` : "",
+      metadata.artifactPath ? `Artifact: ${metadata.artifactPath}` : "",
+      metadata.contentPreview ? ["", "Preview:", metadata.contentPreview].join("\n") : "",
+    );
+  }
 
   return lines.filter(Boolean).join("\n");
 }

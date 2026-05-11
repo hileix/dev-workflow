@@ -50,8 +50,12 @@ export function stopActiveWorkflow(taskId, runId = "") {
   activeWorkflows.delete(taskId);
 }
 
-function getStepById(stepId) {
-  return getWorkflow()?.steps?.find((item) => item.id === stepId) || null;
+function getWorkflowForState(state) {
+  return state?.workflowDefinition || getWorkflow();
+}
+
+function getStepById(stepId, workflow = getWorkflow()) {
+  return workflow?.steps?.find((item) => item.id === stepId) || null;
 }
 
 function getOutputByKey(step, outputKey) {
@@ -75,15 +79,23 @@ async function resolveArtifactPath(taskId, filename, contextValues = {}, runId =
 }
 
 export async function readPhaseOutputArtifact(taskId, stepId, outputKey, runId = "") {
-  const step = getStepById(stepId);
+  const state = await readState(taskId, runId).catch(() => null);
+  const stepOutput = state?.stepOutputs?.[stepId]?.outputs?.[outputKey] || null;
+  const artifactPath = stepOutput?.artifactPath || "";
+  if (artifactPath) {
+    try {
+      return await readFile(artifactPath, "utf-8");
+    } catch {}
+  }
+  const step = getStepById(stepId, getWorkflowForState(state));
   const output = getOutputByKey(step, outputKey);
   if (!output?.filename) return "";
-  const state = await readState(taskId, runId).catch(() => null);
   return readArtifactFile(taskId, output.filename, state?.contextValues || {}, state?.runId || runId);
 }
 
 export async function readPhaseOutputArtifacts(taskId, stepId, runId = "") {
-  const step = getStepById(stepId);
+  const state = await readState(taskId, runId).catch(() => null);
+  const step = getStepById(stepId, getWorkflowForState(state));
   const result = {};
   for (const output of step?.outputs || []) {
     if (!output?.key || !output.filename) continue;
@@ -94,10 +106,12 @@ export async function readPhaseOutputArtifacts(taskId, stepId, runId = "") {
 }
 
 export async function getPhaseOutputArtifactPath(taskId, stepId, outputKey, runId = "") {
-  const step = getStepById(stepId);
+  const state = await readState(taskId, runId).catch(() => null);
+  const stepOutput = state?.stepOutputs?.[stepId]?.outputs?.[outputKey] || null;
+  if (stepOutput?.artifactPath) return stepOutput.artifactPath;
+  const step = getStepById(stepId, getWorkflowForState(state));
   const output = getOutputByKey(step, outputKey);
   if (!output?.filename) return "";
-  const state = await readState(taskId, runId).catch(() => null);
   return resolveArtifactPath(taskId, output.filename, state?.contextValues || {}, state?.runId || runId);
 }
 

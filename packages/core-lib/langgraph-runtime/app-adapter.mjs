@@ -1,21 +1,26 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
-import { dirname, join, resolve } from "path";
+import { dirname, relative, resolve } from "path";
 import { readManagedSkillContentSync } from "../../core-models/skills.mjs";
 import { appendPhaseInteraction, appendToPhaseFile, readState, taskDir, updatePhaseStatus, writeState } from "../../core-models/state.mjs";
 import { createSdkAgentAdapter } from "./sdk-agent-adapter.mjs";
 import { createContentPreview, createContentSummary, createStepOutputMetadata } from "./artifacts.mjs";
 
 function getOutputByPath(step, artifactPath) {
+  const normalizedArtifactPath = resolve(artifactPath);
   for (const output of step.outputs || []) {
     if (!output?.filename) continue;
-    if (resolve(output.filename) === resolve(artifactPath)) return output;
+    if (normalizedArtifactPath.endsWith(output.filename)) return output;
   }
   return null;
 }
 
 function resolveOutputPath(taskRunDir, filename, contextValues) {
   const rendered = String(filename || "").replace(/\{\{(\w+)\}\}/g, (_, key) => contextValues?.[key] ?? "");
-  return rendered ? join(taskRunDir, rendered) : "";
+  if (!rendered) return "";
+  const outputPath = resolve(taskRunDir, rendered);
+  const rel = relative(resolve(taskRunDir), outputPath);
+  if (rel === ".." || rel.startsWith("../") || rel.startsWith("..\\")) throw new Error("output filename escapes task directory");
+  return outputPath;
 }
 
 function getSessionKey(step) {
@@ -39,7 +44,8 @@ async function readInputContent(input, state) {
 
   const sourcePath = state.stepOutputs?.[input.stepId]?.outputs?.[input.outputKey]?.artifactPath
     || state.stepOutputs?.[input.stepId]?.artifactPath
-    || state.stepArtifacts?.[input.stepId]
+    || state.stepArtifacts?.[input.stepId]?.[input.outputKey]
+    || (typeof state.stepArtifacts?.[input.stepId] === "string" ? state.stepArtifacts[input.stepId] : "")
     || "";
   if (!sourcePath) return "";
 
@@ -159,8 +165,8 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
       };
     },
 
-    async runAgent({ step, agent, state, sessionId }) {
-      const sessionKey = getSessionKey(step);
+    async runAgent({ step, agent, state, sessionId, sessionKey }) {
+      const runtimeSessionKey = sessionKey || getSessionKey(step);
       const runtimeAgent = aiBackendOverride ? { ...agent, backend: aiBackendOverride, model: "" } : agent;
       send({ type: "backend_selected", phase: step.id, backend: runtimeAgent.backend, mode: aiBackendOverride ? "app" : "workflow" });
       const result = await adapter.runAgent({
@@ -168,7 +174,7 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
         agent: runtimeAgent,
         state,
         sessionId,
-        sessionKey,
+        sessionKey: runtimeSessionKey,
       });
       const artifactPath = result.artifactPath || await ensureOutputArtifact(taskId, runId, step, result.content, state.contextValues);
       if (artifactPath) {
