@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.0.1](https://github.com/hileix/dev-workflow/compare/dev-workflow-v0.0.1...dev-workflow-v0.0.1) (2026-05-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** Existing unfinished runs without a workflowDefinition snapshot may not resume reliably, and workflows with invalid step_output references or unsafe filenames are now rejected.
+
+### Features
+
+* **workflow:** persist run-specific langgraph state ([#7](https://github.com/hileix/dev-workflow/issues/7)) ([9b3756a](https://github.com/hileix/dev-workflow/commit/9b3756a1ddcfd7bbb80f14f53887895cdc89b024))
+
 ## 0.0.1 (2026-05-11)
 
 
