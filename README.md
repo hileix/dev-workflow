@@ -22,6 +22,14 @@ Typical use cases:
 
 In short, the Electron app is a local control center for AI-assisted project work: it stores the workflow, starts the agents, tracks every phase, and keeps the run tied to your actual workspace.
 
+## Download
+
+Download the macOS installer from the latest GitHub release:
+
+https://github.com/hileix/dev-workflow/releases/latest/download/dev-workflow.dmg
+
+Open the DMG, drag Dev Workflow into Applications, then launch it from Applications.
+
 ## Architecture
 
 ```txt

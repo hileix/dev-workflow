@@ -33,9 +33,18 @@ jobs:
       - name: Build macOS package
         run: pnpm make:desktop
 
+      - name: Prepare stable DMG asset
+        run: |
+          dmg_path=$(find out/make -maxdepth 1 -name "*.dmg" -print -quit)
+          if [ -z "$dmg_path" ]; then
+            echo "No DMG artifact found"
+            exit 1
+          fi
+          cp "$dmg_path" out/make/dev-workflow.dmg
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            out/make/*.dmg
+            out/make/dev-workflow.dmg
             out/make/zip/darwin/*/*.zip
