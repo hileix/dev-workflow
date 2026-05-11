@@ -204,12 +204,17 @@ function getPhaseOutputSummary(phaseId, workflowConfig) {
 }
 
 function buildRunNodes({ phases, workflowConfig, selectedPhase, onSelect }) {
+  const nodePositions = Object.fromEntries((workflowConfig?.graph?.nodes || []).map((node, index) => [
+    node.id,
+    node.position || { x: NODE_X, y: 80 + index * NODE_Y_GAP },
+  ]));
   return (phases || []).map((phase, index) => {
     const phaseId = phase.id || phase.name;
+    const position = nodePositions[phaseId] || { x: NODE_X, y: 80 + index * NODE_Y_GAP };
     return {
       id: phaseId,
       type: "runStep",
-      position: { x: NODE_X, y: 80 + index * NODE_Y_GAP },
+      position,
       data: {
         id: phaseId,
         label: workflowConfig?.phaseLabels?.[phaseId] || phaseId,
@@ -231,8 +236,8 @@ function buildRunEdges(phases, workflowConfig) {
   const phaseIndexById = new Map(ids.map((id, index) => [id, index]));
   const edges = [];
 
-  const getBaseEdge = (phaseId, targetId, sourceHandle, label, color, dashed = false) => ({
-    id: `${phaseId}-${sourceHandle}-${targetId}`,
+  const getBaseEdge = (phaseId, targetId, sourceHandle, label, color, dashed = false, edgeId = "") => ({
+    id: edgeId || `${phaseId}-${sourceHandle}-${targetId}`,
     source: phaseId,
     target: targetId,
     sourceHandle,
@@ -251,6 +256,29 @@ function buildRunEdges(phases, workflowConfig) {
       targetIndex: phaseIndexById.get(targetId) ?? 0,
     },
   });
+
+  const graphEdges = workflowConfig?.graph?.edges || [];
+  if (graphEdges.length > 0) {
+    for (const edge of graphEdges) {
+      if (!knownIds.has(edge.source) || !knownIds.has(edge.target)) continue;
+      const routeKind = edge.routeKind || edge.sourceHandle || "next";
+      const color = routeKind === "reject" || routeKind === "fail"
+        ? "#d97706"
+        : routeKind === "approve" || routeKind === "pass"
+          ? "#16a34a"
+          : "#2563eb";
+      edges.push(getBaseEdge(
+        edge.source,
+        edge.target,
+        edge.sourceHandle || routeKind,
+        edge.label || "",
+        color,
+        routeKind === "reject" || routeKind === "fail",
+        edge.id,
+      ));
+    }
+    return edges;
+  }
 
   ids.forEach((phaseId, index) => {
     const nextId = ids[index + 1];

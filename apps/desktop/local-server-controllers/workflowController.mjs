@@ -13,6 +13,7 @@ import {
 } from "../../../packages/core-models/config.mjs";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
 import {
+  assertSafeWorkflowFilename,
   getWorkflow, getActiveWorkflowFile, setActiveWorkflowFile,
   deriveContextFields, getWorkflowConfigShape, loadWorkflow, unloadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
@@ -200,13 +201,14 @@ router.get("/workflows", async (req, res) => {
       if (!f.endsWith(".json")) continue;
       try {
         const raw = JSON.parse(await readFile(join(workflowDir, f), "utf-8"));
+        const workflowConfig = getWorkflowConfigShape(raw);
         workflows.push({
           filename: f,
           name: raw.name || f,
-          phaseCount: raw.steps?.length || 0,
-          phaseOrder: (raw.steps || []).map((step) => step.id).filter(Boolean),
-          groups: getWorkflowConfigShape(raw).groups,
-          workflowConfig: getWorkflowConfigShape(raw),
+          phaseCount: workflowConfig.phaseOrder.length,
+          phaseOrder: workflowConfig.phaseOrder,
+          groups: workflowConfig.groups,
+          workflowConfig,
           contextFields: deriveContextFields(raw),
           worktree: raw.worktree || { enabled: false, files: [] },
         });
@@ -219,13 +221,12 @@ router.get("/workflows", async (req, res) => {
 });
 
 router.get("/workflows/:filename", async (req, res) => {
-  const { filename } = req.params;
-  if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
   try {
+    const filename = assertSafeWorkflowFilename(req.params.filename);
     const raw = await readFile(join(await ensureWorkflowDir(), filename), "utf-8");
     res.json(JSON.parse(raw));
   } catch {
-    res.status(404).json({ error: "workflow not found" });
+    res.status(400).json({ error: "workflow not found" });
   }
 });
 
@@ -261,8 +262,12 @@ router.post("/workflows", async (req, res) => {
 });
 
 router.put("/workflows/:filename", async (req, res) => {
-  const { filename } = req.params;
-  if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
+  let filename;
+  try {
+    filename = assertSafeWorkflowFilename(req.params.filename);
+  } catch {
+    return res.status(400).json({ error: "invalid filename" });
+  }
   const isDraft = req.query.draft === "1";
   let workflow;
   try {
@@ -278,9 +283,8 @@ router.put("/workflows/:filename", async (req, res) => {
 });
 
 router.delete("/workflows/:filename", async (req, res) => {
-  const { filename } = req.params;
-  if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
   try {
+    const filename = assertSafeWorkflowFilename(req.params.filename);
     const workflowDir = await ensureWorkflowDir();
     const files = (await readdir(workflowDir)).filter((file) => file.endsWith(".json"));
     if (!files.includes(filename)) return res.status(404).json({ error: "workflow not found" });
@@ -307,9 +311,8 @@ router.delete("/workflows/:filename", async (req, res) => {
 });
 
 router.put("/workflows/:filename/activate", async (req, res) => {
-  const { filename } = req.params;
-  if (!filename.endsWith(".json")) return res.status(400).json({ error: "invalid filename" });
   try {
+    const filename = assertSafeWorkflowFilename(req.params.filename);
     const workflowDir = await ensureWorkflowDir();
     loadWorkflow(join(workflowDir, filename));
     setActiveWorkflowFile(filename);

@@ -197,7 +197,7 @@ function normalizeStep(rawStep, index, agents, contextGroupsById) {
     outputs: normalizeOptionalObjectArray(rawStep.outputs, `steps.${id}.outputs`, normalizeOutput),
   };
 
-  if (type === "agent" || type === "condition") {
+	  if (type === "agent" || type === "condition") {
     const contextGroup = normalizeOptionalString(rawStep.contextGroup);
     const agent = normalizeOptionalString(rawStep.agent);
     if (!agent && !contextGroup) throw new Error(`steps.${id} must define agent or contextGroup`);
@@ -235,6 +235,7 @@ function normalizeStep(rawStep, index, agents, contextGroupsById) {
   if (type === "condition") {
     step.passTo = normalizeOptionalString(rawStep.passTo);
     step.failTo = normalizeOptionalString(rawStep.failTo);
+    if (!step.passTo && !step.failTo) throw new Error(`steps.${id} must define passTo or failTo`);
   }
 
   if (type === "checkpoint") {
@@ -297,6 +298,15 @@ export function validateWorkflowDsl(input) {
     }
     for (const input of step.inputs || []) {
       assertStepTarget(stepIds, step.id, input.stepId, "inputs.stepId");
+      if (input.sourceType === "step_output") {
+        if (!input.stepId) throw new Error(`steps.${step.id}.inputs.${input.name}.stepId is required for step_output`);
+        if (!input.outputKey) throw new Error(`steps.${step.id}.inputs.${input.name}.outputKey is required for step_output`);
+        const sourceStep = steps.find((item) => item.id === input.stepId);
+        const outputKeys = new Set((sourceStep?.outputs || []).map((output) => output.key));
+        if (!outputKeys.has(input.outputKey)) {
+          throw new Error(`steps.${step.id}.inputs.${input.name}.outputKey references unknown output ${input.stepId}.${input.outputKey}`);
+        }
+      }
     }
   }
 
