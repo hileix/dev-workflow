@@ -91,11 +91,6 @@ function getCurrentBackend(activeBackend, interactions) {
 
 function isWaitingForAssistant(conversation, isRunning, isStreaming) {
   if (!isRunning && !isStreaming) return false;
-  for (let i = conversation.length - 1; i >= 0; i -= 1) {
-    const item = conversation[i];
-    if (item.role === "assistant") return false;
-    if (item.role === "user") return true;
-  }
   return true;
 }
 
