@@ -89,6 +89,7 @@ export async function listWorkflows() {
         workflows.push({
           filename: file,
           name: raw.name || file,
+          visible: raw.visible !== false,
           phaseCount: workflowConfig.phaseOrder.length,
           phaseOrder: workflowConfig.phaseOrder,
           groups: workflowConfig.groups,
@@ -108,6 +109,17 @@ export async function getWorkflowByFilename(filename) {
   const safeFilename = assertSafeWorkflowFilename(filename);
   const raw = await readFile(join(await ensureWorkflowDir(), safeFilename), "utf-8");
   return JSON.parse(raw);
+}
+
+export async function setWorkflowVisible(filename, visible) {
+  const safeFilename = assertSafeWorkflowFilename(filename);
+  const workflowDir = await ensureWorkflowDir();
+  const filepath = join(workflowDir, safeFilename);
+  const raw = JSON.parse(await readFile(filepath, "utf-8"));
+  raw.visible = visible === true;
+  await writeFile(filepath, JSON.stringify(raw, null, 2));
+  if (safeFilename === getActiveWorkflowFile()) loadWorkflow(filepath);
+  return { filename: safeFilename, visible: raw.visible };
 }
 
 export async function createWorkflow(workflow) {

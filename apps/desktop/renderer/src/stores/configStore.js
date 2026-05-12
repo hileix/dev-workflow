@@ -110,6 +110,27 @@ export const useConfigStore = create((set, get) => ({
     } catch {}
   },
 
+  async setWorkflowVisible(filename, visible) {
+    const previousWorkflows = get().workflows;
+    const workflow = previousWorkflows.find((item) => item.filename === filename);
+    if (!workflow) return;
+
+    set({
+      workflows: previousWorkflows.map((item) =>
+        item.filename === filename ? { ...item, visible } : item
+      ),
+    });
+
+    try {
+      await desktopApi.setWorkflowVisible(filename, visible);
+      get().loadWorkflows();
+      get().loadWorkflowConfig();
+    } catch (error) {
+      set({ workflows: previousWorkflows });
+      throw error;
+    }
+  },
+
   async saveSkill(skill) {
     try {
       const data = await desktopApi.saveSkill(skill);

@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   setAiBackendOverride: (backend) => ipcRenderer.invoke("app:set-ai-backend-override", backend),
   listWorkflows: () => ipcRenderer.invoke("app:list-workflows"),
   getWorkflow: (filename) => ipcRenderer.invoke("app:get-workflow", filename),
+  setWorkflowVisible: (filename, visible) => ipcRenderer.invoke("app:set-workflow-visible", filename, visible),
   createWorkflow: (workflow) => ipcRenderer.invoke("app:create-workflow", workflow),
   createWorkflowDraft: (workflow) => ipcRenderer.invoke("app:create-workflow-draft", workflow),
   updateWorkflow: (filename, workflow) => ipcRenderer.invoke("app:update-workflow", filename, workflow),

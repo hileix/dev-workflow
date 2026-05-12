@@ -1,0 +1,239 @@
+{
+  "id": "default_claude_code",
+  "name": "Default Claude Code",
+  "version": 1,
+  "runtime": "langgraph",
+  "ui": {
+    "layout": "vertical",
+    "nodePositions": {
+      "implement": {
+        "x": 120,
+        "y": 80
+      },
+      "code_review": {
+        "x": 120,
+        "y": 310
+      },
+      "risk_gate": {
+        "x": 120,
+        "y": 540
+      },
+      "review": {
+        "x": 120,
+        "y": 770
+      },
+      "commit_and_push": {
+        "x": 120,
+        "y": 1000
+      }
+    }
+  },
+  "worktree": {
+    "enabled": true,
+    "files": [
+      ".env",
+      ".env.local",
+      ".env.development",
+      ".env.production",
+      ".npmrc",
+      ".pnpmrc",
+      ".yarnrc.yml",
+      ".claude/settings.local.json"
+    ],
+    "customFiles": [],
+    "removeOnComplete": false
+  },
+  "agents": {
+    "implementer": {
+      "backend": "claude",
+      "skill": "",
+      "model": "",
+      "workspaceAccess": "write",
+      "options": {}
+    },
+    "code_reviewer": {
+      "backend": "claude",
+      "skill": "",
+      "model": "",
+      "workspaceAccess": "read",
+      "options": {}
+    },
+    "publisher": {
+      "backend": "claude",
+      "skill": "",
+      "model": "",
+      "workspaceAccess": "write",
+      "options": {}
+    }
+  },
+  "contextGroups": [
+    {
+      "id": "implementation_session",
+      "label": "Implementation",
+      "agent": "implementer",
+      "sharedSession": true
+    },
+    {
+      "id": "code_review_session",
+      "label": "Code Review",
+      "agent": "code_reviewer",
+      "sharedSession": false
+    },
+    {
+      "id": "publish_session",
+      "label": "Publish",
+      "agent": "publisher",
+      "sharedSession": false
+    }
+  ],
+  "steps": [
+    {
+      "id": "implement",
+      "type": "agent",
+      "label": "Implement",
+      "agent": "implementer",
+      "contextGroup": "implementation_session",
+      "workspaceAccess": "write",
+      "inputs": [
+        {
+          "name": "task",
+          "sourceType": "workflow_context",
+          "contextLabel": "Task",
+          "contextPlaceholder": "Describe what should be implemented.",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "implementation_summary",
+          "kind": "markdown",
+          "filename": "01-implementation-summary.md"
+        }
+      ],
+      "prompt": "Implement the requested task.\n\nTask:\n{{task}}\n\nIf this step is rerunning after a failed risk gate, read {{taskDir}}/02-code-review.md and {{taskDir}}/03-risk-decision.md, then fix the high-risk issues before updating the summary.\n\nRules:\n- Keep the change surgical and preserve existing behavior unless the task requires changing it.\n- Match the existing project structure and style.\n- Avoid speculative abstractions or extra features.\n- Run the most relevant verification you can.\n- Save a concise summary to {{taskDir}}/01-implementation-summary.md.\n\nSummary format:\n# Implementation Summary\n\n## Changes Made\n## Files Changed\n## Verification\n## Risks Or Follow-ups",
+      "next": "code_review"
+    },
+    {
+      "id": "code_review",
+      "type": "agent",
+      "label": "Code Review",
+      "agent": "code_reviewer",
+      "contextGroup": "code_review_session",
+      "workspaceAccess": "read",
+      "inputs": [
+        {
+          "name": "implementation",
+          "sourceType": "step_output",
+          "stepId": "implement",
+          "outputKey": "implementation_summary",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "code_review",
+          "kind": "markdown",
+          "filename": "02-code-review.md"
+        }
+      ],
+      "prompt": "Review the implementation.\n\nRead {{taskDir}}/01-implementation-summary.md and inspect the current git diff.\n\nFocus on:\n- Bugs, regressions, data loss, race conditions, and security issues.\n- Missing or weak verification.\n- Unrelated changes or overcomplication.\n\nSave the review to {{taskDir}}/02-code-review.md.\n\nLead with findings by severity. If there are no findings, say: No code review findings.",
+      "next": "risk_gate"
+    },
+    {
+      "id": "risk_gate",
+      "type": "condition",
+      "label": "Risk Gate",
+      "agent": "code_reviewer",
+      "contextGroup": "code_review_session",
+      "workspaceAccess": "read",
+      "inputs": [
+        {
+          "name": "code_review",
+          "sourceType": "step_output",
+          "stepId": "code_review",
+          "outputKey": "code_review",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "risk_decision",
+          "kind": "markdown",
+          "filename": "03-risk-decision.md"
+        }
+      ],
+      "prompt": "Decide whether the code review contains any high-risk finding.\n\nRead {{taskDir}}/02-code-review.md.\n\nPass only when there are no high-risk findings that must be fixed before manual review.\nFail when the review contains a high-risk bug, regression, data-loss risk, race condition, security issue, or missing critical verification.\n\nSave a brief decision note to {{taskDir}}/03-risk-decision.md.\n\nReturn only JSON:\n{\"passed\": true, \"reason\": \"No high-risk findings.\"}\n\nIf there is high risk, return:\n{\"passed\": false, \"reason\": \"Briefly name the high-risk issue to fix.\"}",
+      "passTo": "review",
+      "failTo": "implement"
+    },
+    {
+      "id": "review",
+      "type": "checkpoint",
+      "label": "Review",
+      "question": "Approve this implementation?",
+      "inputs": [
+        {
+          "name": "code_review",
+          "sourceType": "step_output",
+          "stepId": "code_review",
+          "outputKey": "code_review",
+          "required": true
+        },
+        {
+          "name": "risk_decision",
+          "sourceType": "step_output",
+          "stepId": "risk_gate",
+          "outputKey": "risk_decision",
+          "required": true
+        }
+      ],
+      "outputs": [],
+      "approve": "commit_and_push",
+      "rejectTo": "implement",
+      "rejectTargets": [
+        "implement"
+      ],
+      "publish": []
+    },
+    {
+      "id": "commit_and_push",
+      "type": "agent",
+      "label": "Commit And Push",
+      "agent": "publisher",
+      "contextGroup": "publish_session",
+      "workspaceAccess": "write",
+      "inputs": [
+        {
+          "name": "implementation",
+          "sourceType": "step_output",
+          "stepId": "implement",
+          "outputKey": "implementation_summary",
+          "required": true
+        },
+        {
+          "name": "code_review",
+          "sourceType": "step_output",
+          "stepId": "code_review",
+          "outputKey": "code_review",
+          "required": true
+        },
+        {
+          "name": "risk_decision",
+          "sourceType": "step_output",
+          "stepId": "risk_gate",
+          "outputKey": "risk_decision",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "commit_push_summary",
+          "kind": "markdown",
+          "filename": "04-commit-and-push.md"
+        }
+      ],
+      "prompt": "The user approved the implementation. Commit the changes and push the current branch to GitHub.\n\nRead:\n- {{taskDir}}/01-implementation-summary.md\n- {{taskDir}}/02-code-review.md\n- {{taskDir}}/03-risk-decision.md\n\nSteps:\n- Inspect git status and the current branch.\n- Stage only the files that belong to this workflow task.\n- Create one focused commit with a short imperative subject.\n- Push the current branch to origin. If the branch has no upstream, set it with git push -u origin HEAD.\n- Do not force push.\n- If there is nothing to commit or the push fails, report the exact reason.\n- Save the result to {{taskDir}}/04-commit-and-push.md.\n\nSummary format:\n# Commit And Push Summary\n\n## Commit\n## Push\n## Final Git Status",
+      "next": ""
+    }
+  ]
+}

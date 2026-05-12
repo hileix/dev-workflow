@@ -58,6 +58,14 @@ function appendDebugEvent(set, payload, source = "workflow") {
   });
 }
 
+function matchesWorkflowEvent(msg, taskId, runId = "") {
+  const eventTaskId = msg?.taskId || msg?.state?.taskId || "";
+  const eventRunId = msg?.runId || msg?.state?.runId || "";
+  if (eventTaskId !== taskId) return false;
+  if (runId && eventRunId !== runId) return false;
+  return true;
+}
+
 function appendPhaseInteraction(set, phase, interaction) {
   if (!phase || !interaction) return;
   set((state) => ({
@@ -111,6 +119,7 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
   if (unsubscribeWorkflowEvents) unsubscribeWorkflowEvents();
   unsubscribeWorkflowEvents = desktopApi.onWorkflowEvent((msg) => {
     if (!msg) return;
+    if (!matchesWorkflowEvent(msg, taskId, runId)) return;
     appendDebugEvent(set, msg);
 
     if (msg.type === "phase_artifact") {
@@ -227,7 +236,7 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
   });
 
   return () => {
-    appendDebugEvent(set, { type: "client_detach", taskId }, "client");
+    appendDebugEvent(set, { type: "client_detach", taskId, runId }, "client");
     if (taskId) desktopApi.detachWorkflow(taskId, runId);
     if (unsubscribeWorkflowEvents) {
       unsubscribeWorkflowEvents();
