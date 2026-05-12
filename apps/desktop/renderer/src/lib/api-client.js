@@ -62,6 +62,7 @@ function createWebApi() {
     setAiBackendOverride: async (backend) => request("/api/settings/ai-backend", { method: "PUT", body: JSON.stringify({ backend }) }),
     listWorkflows: async () => request("/api/workflows"),
     getWorkflow: async (filename) => request(`/api/workflows/${filename}`),
+    setWorkflowVisible: async (filename, visible) => request(`/api/workflows/${filename}/visibility`, { method: "PUT", body: JSON.stringify({ visible }) }),
     createWorkflow: async (workflow) => request("/api/workflows", { method: "POST", body: JSON.stringify(workflow) }),
     createWorkflowDraft: async (workflow) => request("/api/workflows?draft=1", { method: "POST", body: JSON.stringify(workflow) }),
     updateWorkflow: async (filename, workflow) => request(`/api/workflows/${filename}`, { method: "PUT", body: JSON.stringify(workflow) }),

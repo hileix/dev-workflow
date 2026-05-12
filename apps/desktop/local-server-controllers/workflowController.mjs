@@ -205,6 +205,7 @@ router.get("/workflows", async (req, res) => {
         workflows.push({
           filename: f,
           name: raw.name || f,
+          visible: raw.visible !== false,
           phaseCount: workflowConfig.phaseOrder.length,
           phaseOrder: workflowConfig.phaseOrder,
           groups: workflowConfig.groups,
@@ -225,6 +226,21 @@ router.get("/workflows/:filename", async (req, res) => {
     const filename = assertSafeWorkflowFilename(req.params.filename);
     const raw = await readFile(join(await ensureWorkflowDir(), filename), "utf-8");
     res.json(JSON.parse(raw));
+  } catch {
+    res.status(400).json({ error: "workflow not found" });
+  }
+});
+
+router.put("/workflows/:filename/visibility", async (req, res) => {
+  try {
+    const filename = assertSafeWorkflowFilename(req.params.filename);
+    const workflowDir = await ensureWorkflowDir();
+    const filepath = join(workflowDir, filename);
+    const workflow = JSON.parse(await readFile(filepath, "utf-8"));
+    workflow.visible = req.body?.visible === true;
+    await writeFile(filepath, JSON.stringify(workflow, null, 2));
+    if (filename === getActiveWorkflowFile()) loadWorkflow(filepath);
+    res.json({ filename, visible: workflow.visible });
   } catch {
     res.status(400).json({ error: "workflow not found" });
   }

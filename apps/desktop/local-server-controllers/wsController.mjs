@@ -37,7 +37,7 @@ export function setupWebSocket(server) {
           await pauseWorkflowPhase(msg.taskId, msg.phase, send, msg.runId);
         }
       } catch (err) {
-        send({ type: "error", message: err.message || "workflow error" });
+        send({ type: "error", taskId: msg.taskId, runId: msg.runId || "", message: err.message || "workflow error" });
       }
     });
 

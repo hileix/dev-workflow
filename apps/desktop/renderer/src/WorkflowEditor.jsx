@@ -206,6 +206,7 @@ function createDefaultWorkflow({ includeStartStep = true } = {}) {
   return {
     id: "dev_workflow",
     name: "",
+    visible: true,
     version: 1,
     runtime: "langgraph",
     ui: {

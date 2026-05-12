@@ -43,8 +43,12 @@ Rules:
 
 const activeGraphs = new Map();
 
-function createEmitter(sender) {
-  return (event) => sender(event);
+function createEmitter(sender, taskId, runId = "") {
+  return (event = {}) => sender?.({
+    ...event,
+    taskId,
+    runId,
+  });
 }
 
 function cleanGeneratedWorktreeName(value) {
@@ -371,16 +375,18 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   } catch {}
 
   if (existingState && existingState.overallStatus !== "completed") {
+    const existingRunId = existingState.runId || runId || "";
+    const send = createEmitter(sender, taskId, existingRunId);
     activeWorkflows.set(taskId, {
       workFolder: existingState.workFolder,
-      taskRunDir: await taskDir(taskId, existingState.runId || runId || ""),
-      send: createEmitter(sender),
+      taskRunDir: await taskDir(taskId, existingRunId),
+      send,
       abortController: null,
-      runId: existingState.runId || runId || "",
+      runId: existingRunId,
       workflow: existingState.workflowDefinition,
     });
-    sender({ type: "state", state: existingState });
-    await emitExistingTaskFiles(taskId, existingState, createEmitter(sender));
+    send({ type: "state", state: existingState });
+    await emitExistingTaskFiles(taskId, existingState, send);
     return;
   }
 
@@ -389,14 +395,15 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   await createTaskRunDir(taskId, finalRunId);
 
   const activeWorkflowFile = workflowFilename || getActiveWorkflowFile();
-  sender({ type: "workflow_starting", taskId, runId: finalRunId });
+  const send = createEmitter(sender, taskId, finalRunId);
+  send({ type: "workflow_starting" });
   const requestedWorktreeName = String(options?.worktreeName || "").trim();
-  if (workflow.worktree?.enabled && !requestedWorktreeName) sender({ type: "worktree_naming_started" });
+  if (workflow.worktree?.enabled && !requestedWorktreeName) send({ type: "worktree_naming_started" });
   const worktreeName = workflow.worktree?.enabled
     ? requestedWorktreeName || await generateWorktreeName({ taskId, workFolder, contextValues, workflow })
     : "";
-  if (workflow.worktree?.enabled && !requestedWorktreeName) sender({ type: "worktree_naming_completed", name: worktreeName });
-  if (workflow.worktree?.enabled) sender({ type: "worktree_preparing", name: worktreeName });
+  if (workflow.worktree?.enabled && !requestedWorktreeName) send({ type: "worktree_naming_completed", name: worktreeName });
+  if (workflow.worktree?.enabled) send({ type: "worktree_preparing", name: worktreeName });
   const preparedWorktree = await prepareWorktree({
     repoRoot: workFolder,
     taskId,
@@ -404,7 +411,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
     worktreeName,
   });
   if (preparedWorktree.enabled) {
-    sender({
+    send({
       type: "worktree_ready",
       branchName: preparedWorktree.branchName,
       rootPath: preparedWorktree.rootPath,
@@ -439,13 +446,13 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   activeWorkflows.set(taskId, {
     workFolder: runtimeWorkFolder,
     taskRunDir,
-    send: createEmitter(sender),
+    send,
     abortController: null,
     runId: finalRunId,
     workflow,
   });
   await upsertTask(workFolder, taskId, "in_progress", finalRunId);
-  sender({ type: "state", state });
+  send({ type: "state", state });
 
   const graph = createGraph(taskId, finalRunId, activeWorkflows.get(taskId), images || []);
   activeGraphs.set(getThreadId(taskId, finalRunId), graph);
@@ -460,7 +467,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
       contextValues: contextValues || {},
     });
   } catch (err) {
-    await markWorkflowFailed(taskId, finalRunId, stepOrder[0], err, createEmitter(sender));
+    await markWorkflowFailed(taskId, finalRunId, stepOrder[0], err, send);
     throw err;
   }
 }
@@ -468,9 +475,9 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
 export async function approveWorkflow(taskId, sender, runId = "") {
   const wf = activeWorkflows.get(taskId);
   if (!wf) throw new Error("workflow not found");
-  wf.send = createEmitter(sender);
   const state = await readState(taskId, runId || wf.runId || "");
   const stateRunId = state.runId || runId || wf.runId || "";
+  wf.send = createEmitter(sender, taskId, stateRunId);
   await ensureCheckpointReady(taskId, stateRunId, state);
   try {
     await invokeGraph(taskId, stateRunId, new Command({
@@ -493,8 +500,9 @@ export async function rejectWorkflow(taskId, rejectTo, reason = "", sender, runI
   const workflow = getRuntimeWorkflow(wf, state);
   const allowed = getWorkflowRejectTargets(workflow)[cur];
   if (!allowed || !allowed.includes(rejectTo)) throw new Error(`cannot reject from ${cur} to ${rejectTo}`);
-  wf.send = createEmitter(sender);
   const stateRunId = state.runId || runId || wf.runId || "";
+  const send = createEmitter(sender, taskId, stateRunId);
+  wf.send = send;
   await ensureCheckpointReady(taskId, stateRunId, state);
   const notes = String(reason || "").trim();
   if (!notes) throw new Error("reject reason is required");
@@ -504,8 +512,8 @@ export async function rejectWorkflow(taskId, rejectTo, reason = "", sender, runI
     type: "user_message",
     text: notes,
   }, stateRunId);
-  if (interaction) sender({ type: "phase_interaction", phase: rejectTo, interaction });
-  sender({ type: "user_message", phase: rejectTo, text: notes });
+  if (interaction) send({ type: "phase_interaction", phase: rejectTo, interaction });
+  send({ type: "user_message", phase: rejectTo, text: notes });
   try {
     await invokeGraph(taskId, stateRunId, new Command({
       resume: {
@@ -527,6 +535,7 @@ export async function sendWorkflowMessage(taskId, text, images, sender, runId = 
   const state = await readState(taskId, runId || wf.runId || "");
   const phase = state.currentPhase;
   const stateRunId = state.runId || runId || wf.runId || "";
+  const send = createEmitter(sender, taskId, stateRunId);
 
   const userBlock = `\n\n---\n\n**You:** ${text}\n\n`;
   await appendToPhaseFile(taskId, phase, userBlock, stateRunId);
@@ -536,8 +545,8 @@ export async function sendWorkflowMessage(taskId, text, images, sender, runId = 
     text,
     imageCount: images?.length || 0,
   }, stateRunId);
-  if (interaction) sender({ type: "phase_interaction", phase, interaction });
-  sender({ type: "user_message", phase, text });
+  if (interaction) send({ type: "phase_interaction", phase, interaction });
+  send({ type: "user_message", phase, text });
 }
 
 export async function restartWorkflowPhase(taskId, phase, sender, runId = "") {
@@ -547,18 +556,20 @@ export async function restartWorkflowPhase(taskId, phase, sender, runId = "") {
   const workflow = getRuntimeWorkflow(wf, state);
   if (!isWorkflowAutoStep(workflow, phase)) throw new Error(`cannot restart manual phase ${phase}`);
   if (state.currentPhase !== phase) throw new Error(`cannot restart ${phase} while current phase is ${state.currentPhase}`);
+  const stateRunId = state.runId || runId || wf.runId || "";
+  wf.send = createEmitter(sender, taskId, stateRunId);
   updatePhaseStatus(state, phase, "in_progress", null);
   state.overallStatus = "in_progress";
   await writeState(taskId, state);
-  sender({ type: "phase_restarted", phase });
-  sender({ type: "state", state });
+  wf.send({ type: "phase_restarted", phase });
+  wf.send({ type: "state", state });
   try {
-    await invokeGraph(taskId, state.runId || runId || wf.runId || "", {
+    await invokeGraph(taskId, stateRunId, {
       ...state,
       currentStep: phase,
     });
   } catch (err) {
-    await markWorkflowFailed(taskId, state.runId || runId || wf.runId || "", phase, err, wf.send);
+    await markWorkflowFailed(taskId, stateRunId, phase, err, wf.send);
     throw err;
   }
 }
@@ -566,6 +577,8 @@ export async function restartWorkflowPhase(taskId, phase, sender, runId = "") {
 export async function pauseWorkflowPhase(taskId, phase, sender, runId = "") {
   const wf = activeWorkflows.get(taskId);
   const state = await readState(taskId, runId || wf?.runId || "");
+  const stateRunId = state.runId || runId || wf?.runId || "";
+  const send = createEmitter(sender, taskId, stateRunId);
   if (state.currentPhase !== phase) throw new Error(`cannot pause ${phase} while current phase is ${state.currentPhase}`);
   if (wf?.abortController) {
     try { wf.abortController.abort(); } catch {}
@@ -574,9 +587,9 @@ export async function pauseWorkflowPhase(taskId, phase, sender, runId = "") {
   updatePhaseStatus(state, phase, "awaiting_input");
   state.overallStatus = "awaiting_input";
   await writeState(taskId, state);
-  await upsertTask(state.originalWorkFolder || state.workFolder, taskId, "awaiting_input", state.runId || "", { create: false }).catch(() => {});
-  sender({ type: "phase_paused", phase });
-  sender({ type: "state", state });
+  await upsertTask(state.originalWorkFolder || state.workFolder, taskId, "awaiting_input", stateRunId, { create: false }).catch(() => {});
+  send({ type: "phase_paused", phase });
+  send({ type: "state", state });
 }
 
 export function detachWorkflowSender(taskId, runId = "") {

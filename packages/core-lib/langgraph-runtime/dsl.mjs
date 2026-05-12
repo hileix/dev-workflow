@@ -262,6 +262,7 @@ export function validateWorkflowDsl(input) {
 
   const id = assertNonEmptyString(input.id, "id");
   const name = assertNonEmptyString(input.name || input.id, "name");
+  const visible = input.visible !== false;
   const version = Number.isInteger(input.version) ? input.version : 1;
   const runtime = normalizeOptionalString(input.runtime) || "langgraph";
   if (runtime !== "langgraph") throw new Error("runtime must be langgraph");
@@ -317,6 +318,7 @@ export function validateWorkflowDsl(input) {
   return {
     id,
     name,
+    visible,
     version,
     runtime,
     ui,

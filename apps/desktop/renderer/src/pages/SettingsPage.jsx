@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Eye, EyeOff, Trash2 } from "lucide-react";
 import WorkflowEditor from "../WorkflowEditor";
 import { BackButton } from "../components/back-button";
 import { useI18n } from "../components/i18n-provider";
@@ -31,6 +31,7 @@ export default function SettingsPage() {
   const setMobileAccessEnabled = useConfigStore((s) => s.setMobileAccessEnabled);
   const setAiBackendOverride = useConfigStore((s) => s.setAiBackendOverride);
   const deleteWorkflow = useConfigStore((s) => s.deleteWorkflow);
+  const setWorkflowVisible = useConfigStore((s) => s.setWorkflowVisible);
   const addFolder = useConfigStore((s) => s.addFolder);
   const removeFolder = useConfigStore((s) => s.removeFolder);
   const saveSkill = useConfigStore((s) => s.saveSkill);
@@ -207,16 +208,38 @@ export default function SettingsPage() {
                   </div>
                 ) : (
                   <ul className="list-none divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
-                    {workflows.map((wf) => (
+                    {workflows.map((wf) => {
+                      const visible = wf.visible !== false;
+                      return (
                       <li
                         key={wf.filename}
-                        className="flex items-center justify-between px-4 py-3.5 transition-colors hover:bg-accent/70"
+                        className={cn(
+                          "flex items-center justify-between px-4 py-3.5 transition-colors hover:bg-accent/70",
+                          !visible && "bg-muted/35"
+                        )}
                       >
                         <div className="flex min-w-0 items-center gap-3">
-                          <span className="text-sm font-semibold text-foreground">{wf.name}</span>
+                          <span className={cn("text-sm font-semibold", visible ? "text-foreground" : "text-muted-foreground")}>{wf.name}</span>
                           <span className="text-xs text-muted-foreground">{t("settings.workflowPhases", { count: wf.phaseCount })}</span>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            className={cn(
+                              "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                              visible && "text-foreground"
+                            )}
+                            aria-label={visible ? t("settings.hideWorkflow") : t("settings.showWorkflow")}
+                            title={visible ? t("settings.hideWorkflow") : t("settings.showWorkflow")}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setWorkflowVisible(wf.filename, !visible).catch(() => {
+                                showToast(t("settings.workflowVisibilitySaveFailed"));
+                              });
+                            }}
+                          >
+                            {visible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                          </button>
                           <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(wf.filename); setShowEditor(true); }}>
                             {t("settings.edit")}
                           </Button>
@@ -232,7 +255,8 @@ export default function SettingsPage() {
                           </button>
                         </div>
                       </li>
-                    ))}
+                      );
+                    })}
                   </ul>
                 )}
               </div>

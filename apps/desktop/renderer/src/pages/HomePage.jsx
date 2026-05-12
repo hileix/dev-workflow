@@ -329,6 +329,7 @@ export default function HomePage() {
   const workflowState = useWorkflowStore((s) => s.workflowState);
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow);
   const loadTicket = useWorkflowStore((s) => s.loadTicket);
+  const visibleWorkflows = workflows.filter((workflow) => workflow.visible !== false);
 
   useEffect(() => { loadWorkFolders(); }, []);
   const tasks = workFolders.flatMap((folder) =>
@@ -339,7 +340,14 @@ export default function HomePage() {
       workFolderName: folder.name,
     }))
   ).map((task) => {
-    if (workflowState && task.taskId === workflowState.taskId && workflowState.overallStatus !== "completed") {
+    const stateRunId = workflowState?.runId || "";
+    const taskRunId = task.runId || "";
+    if (
+      workflowState &&
+      task.taskId === workflowState.taskId &&
+      taskRunId === stateRunId &&
+      workflowState.overallStatus !== "completed"
+    ) {
       return {
         ...task,
         status: workflowState.overallStatus,
@@ -350,7 +358,7 @@ export default function HomePage() {
     return task;
   });
 
-  const canStartWorkflow = workflows.length > 0;
+  const canStartWorkflow = visibleWorkflows.length > 0;
 
   function handleStartWorkflow(id, folderPath, contextValues, images, runId, worktreeName, workflowFilename) {
     startWorkflow(id, folderPath, contextValues, images, runId, worktreeName, workflowFilename);
@@ -418,7 +426,7 @@ export default function HomePage() {
 
       {showStartModal && (
         <StartWorkflowModal
-          workflows={workflows}
+          workflows={visibleWorkflows}
           workFolders={workFolders}
           defaultFolder={selectedFolder}
           defaultWorkflow={activeWorkflowFile}

@@ -11,6 +11,7 @@ import {
   setAiBackendOverride,
   listWorkflows,
   getWorkflowByFilename,
+  setWorkflowVisible,
   createWorkflow,
   createWorkflowDraft,
   updateWorkflow,
@@ -132,6 +133,7 @@ function registerIpcHandlers() {
   ipcMain.handle("app:set-ai-backend-override", (_event, backend) => setAiBackendOverride(backend));
   ipcMain.handle("app:list-workflows", () => listWorkflows());
   ipcMain.handle("app:get-workflow", (_event, filename) => getWorkflowByFilename(filename));
+  ipcMain.handle("app:set-workflow-visible", (_event, filename, visible) => setWorkflowVisible(filename, visible));
   ipcMain.handle("app:create-workflow", (_event, workflow) => createWorkflow(workflow));
   ipcMain.handle("app:create-workflow-draft", (_event, workflow) => createWorkflowDraft(workflow));
   ipcMain.handle("app:update-workflow", (_event, filename, workflow) => updateWorkflow(filename, workflow));
