@@ -127,7 +127,10 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, defaultWork
   const displayContextFields = contextFields.length > 0 ? contextFields : defaultContextFields;
 
   const firstKey = displayContextFields[0]?.key;
-  const allFilled = displayContextFields.every((field) => (contextValues[field.key] || "").trim());
+  const allFilled = displayContextFields.every((field, index) => {
+    const hasText = (contextValues[field.key] || "").trim();
+    return hasText || (index === 0 && images.length > 0);
+  });
   const runId = `run-${Date.now()}`;
 
   function addImageFiles(files) {
@@ -166,9 +169,10 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, defaultWork
     e.preventDefault();
     if (!allFilled || !selectedFolder || !selectedWorkflow || submitting) return;
     const descriptionValue = (contextValues.task || contextValues[firstKey] || "").trim();
-    const id = displayContextFields.length === 1 && firstKey === "taskId"
+    const derivedId = displayContextFields.length === 1 && firstKey === "taskId"
       ? `task-${Date.now()}`
       : (contextValues[firstKey] || descriptionValue).trim();
+    const id = derivedId || `task-${Date.now()}`;
 
     setSubmitting(true);
     try {

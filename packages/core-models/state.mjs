@@ -133,6 +133,7 @@ export function makeInitialState(taskId, workFolder, baseDir, contextValues, opt
     stepArtifacts: {},
     stepDecisions: {},
     pendingMessages: {},
+    pendingImagePaths: {},
     logs: [],
   };
 }

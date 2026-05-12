@@ -16,6 +16,11 @@ function formatTime(value) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function getAttachmentName(path) {
+  const value = String(path || "").split(/[\\/]/).filter(Boolean);
+  return value[value.length - 1] || String(path || "");
+}
+
 function normalizeConversation(interactions) {
   const items = [];
   let activeAssistant = null;
@@ -173,8 +178,17 @@ function ConversationItem({ item, t }) {
           </div>
         )}
         {item.imageCount > 0 && (
-          <div className="mt-2 text-[11px] text-muted-foreground">
-            {t("stepDetail.attachments", { count: item.imageCount })}
+          <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
+            <div>{t("stepDetail.attachments", { count: item.imageCount })}</div>
+            {Array.isArray(item.imagePaths) && item.imagePaths.length > 0 && (
+              <div className="space-y-1">
+                {item.imagePaths.map((imagePath, index) => (
+                  <div key={`${imagePath}-${index}`} className="truncate font-mono text-[10px]">
+                    {getAttachmentName(imagePath)}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {!isSystem && item.at && (

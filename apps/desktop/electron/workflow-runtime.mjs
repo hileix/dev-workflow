@@ -1,5 +1,6 @@
 import { Command, INTERRUPT, isInterrupted } from "@langchain/langgraph";
-import { join } from "path";
+import { realpath, stat } from "fs/promises";
+import { join, relative, resolve } from "path";
 import { getBaseDir, readAiBackendOverrideSync } from "../../../packages/core-models/config.mjs";
 import { readManagedSkillContentSync } from "../../../packages/core-models/skills.mjs";
 import {
@@ -42,6 +43,30 @@ Rules:
 - Do not return generic names like chore/task or task.`;
 
 const activeGraphs = new Map();
+
+function isPathInside(parent, child) {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === "" || (rel && !rel.startsWith("..") && !rel.startsWith("/"));
+}
+
+async function getSafeRunImagePaths(taskId, runId, images = []) {
+  if (!Array.isArray(images) || images.length === 0) return [];
+  const uploadDir = resolve(await taskDir(taskId, runId), "uploads");
+  const realUploadDir = await realpath(uploadDir).catch(() => "");
+  if (!realUploadDir) return [];
+  const safePaths = [];
+
+  for (const imagePath of images) {
+    const resolvedPath = resolve(String(imagePath || ""));
+    if (!isPathInside(uploadDir, resolvedPath)) continue;
+    const fileStat = await stat(resolvedPath).catch(() => null);
+    if (!fileStat?.isFile()) continue;
+    const realImagePath = await realpath(resolvedPath).catch(() => "");
+    if (realImagePath && isPathInside(realUploadDir, realImagePath)) safePaths.push(realImagePath);
+  }
+
+  return safePaths;
+}
 
 function createEmitter(sender, taskId, runId = "") {
   return (event = {}) => sender?.({
@@ -142,6 +167,7 @@ function syncStateShape(langState, currentState) {
     stepArtifacts: langState.stepArtifacts || currentState.stepArtifacts || {},
     stepDecisions: langState.stepDecisions || currentState.stepDecisions || {},
     pendingMessages: langState.pendingMessages || currentState.pendingMessages || {},
+    pendingImagePaths: langState.pendingImagePaths || currentState.pendingImagePaths || {},
     logs: langState.logs || currentState.logs || [],
   };
 
@@ -454,7 +480,8 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   await upsertTask(workFolder, taskId, "in_progress", finalRunId);
   send({ type: "state", state });
 
-  const graph = createGraph(taskId, finalRunId, activeWorkflows.get(taskId), images || []);
+  const safeImages = await getSafeRunImagePaths(taskId, finalRunId, images);
+  const graph = createGraph(taskId, finalRunId, activeWorkflows.get(taskId), safeImages);
   activeGraphs.set(getThreadId(taskId, finalRunId), graph);
   try {
     await invokeGraph(taskId, finalRunId, {
@@ -536,15 +563,36 @@ export async function sendWorkflowMessage(taskId, text, images, sender, runId = 
   const phase = state.currentPhase;
   const stateRunId = state.runId || runId || wf.runId || "";
   const send = createEmitter(sender, taskId, stateRunId);
+  const safeImages = await getSafeRunImagePaths(taskId, stateRunId, images);
 
   const userBlock = `\n\n---\n\n**You:** ${text}\n\n`;
   await appendToPhaseFile(taskId, phase, userBlock, stateRunId);
+  if (safeImages.length) {
+    const attachmentBlock = safeImages.map((imagePath) => `- ${imagePath}`).join("\n");
+    await appendToPhaseFile(taskId, phase, `**Attached images:**\n${attachmentBlock}\n\n`, stateRunId);
+  }
   const interaction = await appendPhaseInteraction(taskId, phase, {
     role: "user",
     type: "user_message",
     text,
-    imageCount: images?.length || 0,
+    imageCount: safeImages.length,
+    imagePaths: safeImages,
   }, stateRunId);
+  const notes = String(text || "").trim();
+  state.pendingMessages = {
+    ...(state.pendingMessages || {}),
+    [phase]: notes
+      ? [state.pendingMessages?.[phase], notes].filter(Boolean).join("\n\n")
+      : (state.pendingMessages?.[phase] || ""),
+  };
+  state.pendingImagePaths = {
+    ...(state.pendingImagePaths || {}),
+    [phase]: [
+      ...((state.pendingImagePaths?.[phase] || []).filter(Boolean)),
+      ...safeImages,
+    ],
+  };
+  await writeState(taskId, state);
   if (interaction) send({ type: "phase_interaction", phase, interaction });
   send({ type: "user_message", phase, text });
 }

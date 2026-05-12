@@ -14,6 +14,7 @@ const WorkflowRuntimeState = Annotation.Root({
   stepArtifacts: Annotation({ default: () => ({}) }),
   stepDecisions: Annotation({ default: () => ({}) }),
   pendingMessages: Annotation({ default: () => ({}) }),
+  pendingImagePaths: Annotation({ default: () => ({}) }),
   logs: Annotation({
     reducer: (left, right) => left.concat(right),
     default: () => [],
@@ -55,6 +56,10 @@ async function runAgentStep(step, dsl, adapters, state) {
   const nextArtifacts = { ...(state.stepArtifacts || {}) };
   if (hasStepOutputResult(result)) nextOutputs[step.id] = normalizeStepOutputMetadata(result);
   if (result?.artifactPath) nextArtifacts[step.id] = result.artifactPath;
+  const nextPendingMessages = { ...(state.pendingMessages || {}) };
+  const nextPendingImagePaths = { ...(state.pendingImagePaths || {}) };
+  nextPendingMessages[step.id] = "";
+  nextPendingImagePaths[step.id] = [];
 
   return {
     result,
@@ -64,10 +69,8 @@ async function runAgentStep(step, dsl, adapters, state) {
       sessionMap: nextSessionMap,
       stepOutputs: nextOutputs,
       stepArtifacts: nextArtifacts,
-      pendingMessages: {
-        ...(state.pendingMessages || {}),
-        [step.id]: "",
-      },
+      pendingMessages: nextPendingMessages,
+      pendingImagePaths: nextPendingImagePaths,
       logs: [`agent:${step.id}:${agent.backend}`],
     },
   };
@@ -154,6 +157,7 @@ function createCheckpointNode(step, adapters) {
     const requestedRejectTo = decision?.rejectTo || step.rejectTo;
     const rejectTo = (step.rejectTargets || []).includes(requestedRejectTo) ? requestedRejectTo : step.rejectTo;
     const pendingMessages = { ...(state.pendingMessages || {}) };
+    const pendingImagePaths = { ...(state.pendingImagePaths || {}) };
     if (!approved && decision?.notes) pendingMessages[rejectTo] = decision.notes;
     const published = adapters.publishCheckpoint
       ? await adapters.publishCheckpoint({
@@ -177,6 +181,7 @@ function createCheckpointNode(step, adapters) {
       stepOutputs: nextOutputs,
       stepArtifacts: nextArtifacts,
       pendingMessages,
+      pendingImagePaths,
       stepDecisions: {
         ...(state.stepDecisions || {}),
         [step.id]: {
@@ -212,6 +217,7 @@ function createEndNode(step) {
     stepArtifacts: state.stepArtifacts || {},
     stepDecisions: state.stepDecisions || {},
     pendingMessages: state.pendingMessages || {},
+    pendingImagePaths: state.pendingImagePaths || {},
     logs: [`end:${step.id}`],
   });
 }

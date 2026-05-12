@@ -60,11 +60,16 @@ function renderStepInputs(step, state) {
 function buildPrompt({ step, agent, state, readSkillContentSync }) {
   const parts = [];
   const pendingMessage = String(state.pendingMessages?.[step.id] || "").trim();
+  const pendingImageCount = state.pendingImagePaths?.[step.id]?.length || 0;
   const agentSkill = agent.skill ? readSkillContent(agent.skill, readSkillContentSync) : "";
   if (agentSkill) parts.push(agentSkill);
 
   if (pendingMessage) {
     parts.push(["# User feedback", "", pendingMessage].join("\n"));
+  }
+
+  if (pendingImageCount > 0) {
+    parts.push(["# Attached images", "", `The user attached ${pendingImageCount} image${pendingImageCount === 1 ? "" : "s"} for this step.`].join("\n"));
   }
 
   if (step.instructions) parts.push(renderTemplate(step.instructions, state));
@@ -374,7 +379,10 @@ export function createSdkAgentAdapter(options = {}) {
       const backend = String(agent.backend || "").trim();
       const workFolder = state.workFolder || options.workFolder || process.cwd();
       const taskDir = state.taskDir || options.taskDir || workFolder;
-      const imagePaths = options.imagePaths || state.imagePaths || [];
+      const imagePaths = [
+        ...(options.imagePaths || []),
+        ...(state.pendingImagePaths?.[step.id] || []),
+      ];
       const abortController = options.abortController || new AbortController();
       const workspaceWrite = canWriteWorkspace(step, agent);
       const prompt = buildPrompt({ step, agent, state, readSkillContentSync });
