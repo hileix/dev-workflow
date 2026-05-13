@@ -2,8 +2,8 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Codex } from "@openai/codex-sdk";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, extname, join, relative, resolve } from "path";
-import { readManagedSkillContentSync } from "../../core-models/skills.mjs";
-import { createContentPreview, createContentSummary, formatStepOutputForPrompt } from "./artifacts.mjs";
+import { readManagedSkillContentSync } from "../../core-models/skills";
+import { createContentPreview, createContentSummary, formatStepOutputForPrompt } from "./artifacts";
 
 const SDK_BACKENDS = {
   CLAUDE: "claude",

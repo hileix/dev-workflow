@@ -11,7 +11,7 @@ import {
   readMobileAccessEnabled,
   saveAiBackendOverride,
   saveMobileAccessEnabled,
-} from "../../../packages/core-models/config.mjs";
+} from "../../../packages/core-models/config";
 import {
   assertSafeWorkflowFilename,
   getWorkflow,
@@ -21,12 +21,12 @@ import {
   getWorkflowConfigShape,
   loadWorkflow,
   unloadWorkflow,
-} from "../../../packages/core-models/workflow.mjs";
-import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index.mjs";
-import { readWorkfolders, saveWorkfolders, deleteTask, removeTaskWorktree } from "../../../packages/core-models/workfolders.mjs";
-import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
-import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
-import { getPhaseContent, getPhaseOutputArtifactPath, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
+} from "../../../packages/core-models/workflow";
+import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index";
+import { readWorkfolders, saveWorkfolders, deleteTask, removeTaskWorktree } from "../../../packages/core-models/workfolders";
+import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state";
+import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills";
+import { getPhaseContent, getPhaseOutputArtifactPath, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude";
 
 function buildEmptyWorkflowConfig(mobileAccessEnabled, aiBackendOverride = "") {
   return {

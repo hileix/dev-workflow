@@ -1,7 +1,7 @@
 import { basename, join } from "path";
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "fs/promises";
 import { existsSync, readFileSync } from "fs";
-import { getSkillsDir } from "./config.mjs";
+import { getSkillsDir } from "./config";
 
 function slugify(name) {
   return String(name || "")

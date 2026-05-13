@@ -1,5 +1,5 @@
 import { WebSocketServer } from "ws";
-import { wsSend } from "../../../packages/core-lib/claude.mjs";
+import { wsSend } from "../../../packages/core-lib/claude";
 import {
   approveWorkflow,
   pauseWorkflowPhase,
@@ -7,7 +7,7 @@ import {
   restartWorkflowPhase,
   sendWorkflowMessage,
   startWorkflowSession,
-} from "../electron/workflow-runtime.mjs";
+} from "../electron/workflow-runtime";
 
 export function setupWebSocket(server) {
   const wss = new WebSocketServer({ server, path: "/ws" });

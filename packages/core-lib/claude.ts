@@ -1,7 +1,7 @@
 import { join } from "path";
 import { readFile } from "fs/promises";
-import { getWorkflow, interpolate } from "../core-models/workflow.mjs";
-import { readState, readPhaseMessages, taskDir } from "../core-models/state.mjs";
+import { getWorkflow, interpolate } from "../core-models/workflow";
+import { readState, readPhaseMessages, taskDir } from "../core-models/state";
 
 export const AI_BACKENDS = {
   CLAUDE: "claude",

@@ -1,6 +1,6 @@
 import { basename } from "path";
 import WebSocket from "ws";
-import { readMobileAccessEnabled } from "../../../../packages/core-models/config.mjs";
+import { readMobileAccessEnabled } from "../../../../packages/core-models/config";
 
 const backendUrl = process.env.CLOUD_BACKEND_WS_URL || "ws://127.0.0.1:8787/ws/desktop";
 const localWsUrl = process.env.LOCAL_WORKFLOW_WS_URL || "ws://127.0.0.1:3000/ws";

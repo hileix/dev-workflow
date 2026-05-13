@@ -10,14 +10,14 @@ import {
   readMobileAccessEnabled,
   saveAiBackendOverride,
   saveMobileAccessEnabled,
-} from "../../../packages/core-models/config.mjs";
-import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
+} from "../../../packages/core-models/config";
+import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills";
 import {
   assertSafeWorkflowFilename,
   getWorkflow, getActiveWorkflowFile, setActiveWorkflowFile,
   deriveContextFields, getWorkflowConfigShape, loadWorkflow, unloadWorkflow,
-} from "../../../packages/core-models/workflow.mjs";
-import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index.mjs";
+} from "../../../packages/core-models/workflow";
+import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index";
 
 const router = Router();
 
