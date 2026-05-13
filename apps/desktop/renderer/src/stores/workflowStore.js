@@ -69,6 +69,26 @@ function mergeWorkflowStates(baseState, overrideState) {
   };
 }
 
+function getWorkflowStateTimestamp(state) {
+  const stateTime = Date.parse(state?.updated || "");
+  if (Number.isFinite(stateTime)) return stateTime;
+  return Math.max(
+    0,
+    ...(state?.phases || []).map((phase) => {
+      const phaseTime = Date.parse(phase.updated || "");
+      return Number.isFinite(phaseTime) ? phaseTime : 0;
+    })
+  );
+}
+
+function getLatestWorkflowState(fetchedState, cachedState) {
+  if (!cachedState) return fetchedState;
+  const fetchedTime = getWorkflowStateTimestamp(fetchedState);
+  const cachedTime = getWorkflowStateTimestamp(cachedState);
+  if (cachedTime > fetchedTime) return mergeWorkflowStates(fetchedState, cachedState);
+  return fetchedState;
+}
+
 function createDebugEvent(payload, source = "workflow") {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -373,20 +393,17 @@ export const useWorkflowStore = create((set, get) => ({
 
       const { state, messages, outputArtifacts, interactions } = await desktopApi.getTaskState(taskId, runId);
       const currentState = get().workflowStatesByRun[stateKey];
-      const displayState = mergeWorkflowStates(state, currentState);
+      const displayState = getLatestWorkflowState(state, currentState);
       const selectedPhase = displayState.currentPhase && displayState.currentPhase !== "completed"
         ? displayState.currentPhase
         : displayState.phases?.[0]?.id || null;
-      const fetchedSelectedPhase = state.currentPhase && state.currentPhase !== "completed"
-        ? state.currentPhase
-        : state.phases?.[0]?.id || null;
       set({
         activeTicket: taskId,
         workflowState: displayState,
         phaseMessages: messages || {},
         phaseOutputArtifacts: outputArtifacts || {},
         phaseInteractions: interactions || {},
-        selectedPhase: currentState ? selectedPhase : fetchedSelectedPhase,
+        selectedPhase,
         isStreaming: false,
         streamingPhase: null,
         connectionState: displayState.overallStatus === "completed" ? "disconnected" : "connecting",

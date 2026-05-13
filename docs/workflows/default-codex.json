@@ -210,7 +210,7 @@
     {
       "id": "commit_and_push",
       "type": "agent",
-      "label": "Commit And Push",
+      "label": "Commit, Push, And PR",
       "agent": "publisher",
       "contextGroup": "publish_session",
       "workspaceAccess": "write",
@@ -244,7 +244,7 @@
           "filename": "04-commit-and-push.md"
         }
       ],
-      "prompt": "The user approved the implementation. Commit the changes and push the current branch to GitHub.\n\nRead:\n- {{taskDir}}/01-implementation-summary.md\n- {{taskDir}}/02-code-review.md\n- {{taskDir}}/03-risk-decision.md\n\nSteps:\n- Inspect git status and the current branch.\n- Stage only the files that belong to this workflow task.\n- Create one focused commit with a short imperative subject.\n- Push the current branch to origin. If the branch has no upstream, set it with git push -u origin HEAD.\n- Do not force push.\n- If there is nothing to commit or the push fails, report the exact reason.\n- Save the result to {{taskDir}}/04-commit-and-push.md.\n\nSummary format:\n# Commit And Push Summary\n\n## Commit\n## Push\n## Final Git Status",
+      "prompt": "The user approved the implementation. Commit the changes, push the current branch to GitHub, and create a pull request.\n\nRead:\n- {{taskDir}}/01-implementation-summary.md\n- {{taskDir}}/02-code-review.md\n- {{taskDir}}/03-risk-decision.md\n\nSteps:\n- Inspect git status and the current branch.\n- Stage only the files that belong to this workflow task.\n- Create one focused commit with a short imperative subject when there are staged task changes.\n- Push the current branch to origin. If the branch has no upstream, set it with git push -u origin HEAD.\n- Do not force push.\n- Check whether a pull request already exists for the current branch. If it exists, report its URL instead of creating a duplicate.\n- If no pull request exists, create one with gh pr create. Prefer gh pr create --fill; if that cannot infer a good PR, provide a concise title and body from the implementation summary and code review.\n- If there is nothing new to commit, still push and create or report the pull request for the current branch.\n- If the push or pull request creation fails, report the exact reason.\n- Save the result to {{taskDir}}/04-commit-and-push.md.\n\nSummary format:\n# Commit, Push, And PR Summary\n\n## Commit\n## Push\n## Pull Request\n## Final Git Status",
       "next": ""
     }
   ]
