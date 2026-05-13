@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   openInCode: (targetPath) => ipcRenderer.invoke("app:open-in-code", targetPath),
   openTaskOutputInCode: (taskId, runId, phaseId, outputKey) => ipcRenderer.invoke("app:open-task-output-in-code", taskId, runId, phaseId, outputKey),
   removeTask: (taskId, runId, options) => ipcRenderer.invoke("app:remove-task", taskId, runId, options),
+  removeTaskWorktree: (taskId, runId) => ipcRenderer.invoke("app:remove-task-worktree", taskId, runId),
   saveTaskUploads: (taskId, filePaths) => ipcRenderer.invoke("app:save-task-uploads", taskId, filePaths),
   startWorkflow: (payload) => ipcRenderer.invoke("app:start-workflow", payload),
   approveWorkflow: (taskId, runId) => ipcRenderer.invoke("app:approve-workflow", taskId, runId),

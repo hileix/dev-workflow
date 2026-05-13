@@ -1,7 +1,7 @@
 import { dirname, join } from "path";
 import { readFile, writeFile, mkdir, rm } from "fs/promises";
 import { getBaseDir, getWorkfoldersFile } from "./config.mjs";
-import { assertSafeRunId, readState, getTaskRunId } from "./state.mjs";
+import { assertSafeRunId, readState, getTaskRunId, writeState } from "./state.mjs";
 import { removeWorktree } from "../core-lib/worktree.mjs";
 
 function getStoredTaskId(task) {
@@ -90,4 +90,23 @@ export async function deleteTask(taskId, runId = "", options = {}) {
   if (targetRunId) {
     await rm(join(baseDir, targetRunId), { recursive: true, force: true });
   }
+}
+
+export async function removeTaskWorktree(taskId, runId = "") {
+  const requestedRunId = assertSafeRunId(runId);
+  const state = await readState(taskId, requestedRunId);
+  if (!state?.worktree?.enabled) return { ok: true, removed: false, state };
+
+  await removeWorktree(state.worktree, { force: true });
+  const nextState = {
+    ...state,
+    worktree: {
+      ...state.worktree,
+      enabled: false,
+      cleaned: true,
+      cleanedAt: new Date().toISOString(),
+    },
+  };
+  await writeState(taskId, nextState);
+  return { ok: true, removed: true, state: nextState };
 }

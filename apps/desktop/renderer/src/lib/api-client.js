@@ -97,6 +97,9 @@ function createWebApi() {
       const query = params.toString() ? `?${params.toString()}` : "";
       return request(`/api/tasks/${encodeURIComponent(taskId)}${query}`, { method: "DELETE" });
     },
+    removeTaskWorktree: async () => {
+      throw new Error("Removing a Git worktree is only available in the desktop app");
+    },
     saveTaskUploads: async (taskId, filePaths) => {
       if (!Array.isArray(filePaths) || filePaths.length === 0) return { paths: [] };
       const form = new FormData();

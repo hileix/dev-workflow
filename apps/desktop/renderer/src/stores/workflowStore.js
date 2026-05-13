@@ -83,6 +83,9 @@ function getWorkflowStateTimestamp(state) {
 
 function getLatestWorkflowState(fetchedState, cachedState) {
   if (!cachedState) return fetchedState;
+  if (!fetchedState?.worktree && cachedState?.worktree?.cleaned) {
+    return mergeWorkflowStates(fetchedState, cachedState);
+  }
   const fetchedTime = getWorkflowStateTimestamp(fetchedState);
   const cachedTime = getWorkflowStateTimestamp(cachedState);
   if (cachedTime > fetchedTime) return mergeWorkflowStates(fetchedState, cachedState);
@@ -614,6 +617,39 @@ export const useWorkflowStore = create((set, get) => ({
       return true;
     } catch (err) {
       appendDebugEvent(set, { type: "error", message: err?.message || "Delete task failed" }, "client");
+      return false;
+    }
+  },
+
+  async removeTaskWorktree(taskId, runId) {
+    const { activeTicket, workflowState } = get();
+    const targetTaskId = taskId || activeTicket;
+    const targetRunId = runId || workflowState?.runId || "";
+    if (!targetTaskId) return false;
+    try {
+      const result = await desktopApi.removeTaskWorktree(targetTaskId, targetRunId);
+      const nextState = result?.state || (workflowState ? {
+        ...workflowState,
+        worktree: {
+          ...(workflowState.worktree || {}),
+          enabled: false,
+          cleaned: true,
+        },
+      } : null);
+      const stateKey = getWorkflowStateKey(targetTaskId, targetRunId || nextState?.runId);
+      set((state) => ({
+        workflowState: state.workflowState?.taskId === targetTaskId ? nextState : state.workflowState,
+        workflowStatesByRun: nextState
+          ? {
+              ...state.workflowStatesByRun,
+              [stateKey]: nextState,
+            }
+          : state.workflowStatesByRun,
+      }));
+      await useConfigStore.getState().loadWorkFolders();
+      return true;
+    } catch (err) {
+      appendDebugEvent(set, { type: "error", message: err?.message || "Remove worktree failed" }, "client");
       return false;
     }
   },
