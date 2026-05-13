@@ -24,7 +24,7 @@
     "make:desktop": "pnpm build:desktop && electron-forge make",
     "publish:desktop": "pnpm build:desktop && electron-forge publish",
     "start:desktop": "pnpm run prepare:electron && NODE_OPTIONS='--import tsx' electron .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "pnpm --dir apps/desktop/renderer test"
   },
   "keywords": [],
   "author": "",

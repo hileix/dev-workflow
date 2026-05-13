@@ -23,6 +23,7 @@ import { WindowChrome } from "./components/window-chrome";
 import { cn } from "./lib/utils";
 import { getAppApi } from "./lib/api-client";
 import { useConfigStore } from "./stores/configStore";
+import { getWorkflowEditorKey, useWorkflowEditorStore } from "./stores/workflowEditorStore";
 import { useWorkflowStore } from "./stores/workflowStore";
 
 const desktopApi = getAppApi();
@@ -557,12 +558,21 @@ function getReasoningLabel(value) {
 
 export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const { t } = useI18n();
-  const [workflow, setWorkflow] = useState(() => createDefaultWorkflow({ includeStartStep: !filename }));
-  const [currentFilename, setCurrentFilename] = useState(filename || null);
-  const [selectedIdx, setSelectedIdx] = useState(filename ? null : 0);
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const editorKey = useWorkflowEditorStore((s) => s.editorKey);
+  const storedWorkflow = useWorkflowEditorStore((s) => s.workflow);
+  const currentFilename = useWorkflowEditorStore((s) => s.currentFilename);
+  const selectedIdx = useWorkflowEditorStore((s) => s.selectedIdx);
+  const dirty = useWorkflowEditorStore((s) => s.dirty);
+  const saving = useWorkflowEditorStore((s) => s.saving);
+  const error = useWorkflowEditorStore((s) => s.error);
+  const initializeEditor = useWorkflowEditorStore((s) => s.initializeEditor);
+  const setWorkflow = useWorkflowEditorStore((s) => s.setWorkflow);
+  const setCurrentFilename = useWorkflowEditorStore((s) => s.setCurrentFilename);
+  const setSelectedIdx = useWorkflowEditorStore((s) => s.setSelectedIdx);
+  const setDirty = useWorkflowEditorStore((s) => s.setDirty);
+  const setSaving = useWorkflowEditorStore((s) => s.setSaving);
+  const setError = useWorkflowEditorStore((s) => s.setError);
+  const resetEditor = useWorkflowEditorStore((s) => s.resetEditor);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [confirmRemoveIdx, setConfirmRemoveIdx] = useState(null);
   const [newCustomWorktreeFile, setNewCustomWorktreeFile] = useState("");
@@ -573,6 +583,8 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const loadWorkflowConfig = useConfigStore((s) => s.loadWorkflowConfig);
   const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
   const showToast = useWorkflowStore((s) => s.showToast);
+  const fallbackWorkflow = useMemo(() => createDefaultWorkflow({ includeStartStep: !filename }), [filename]);
+  const workflow = storedWorkflow || fallbackWorkflow;
   const isNew = !currentFilename;
   const selected = selectedIdx !== null ? workflow.steps[selectedIdx] : null;
   const worktreeFiles = Array.isArray(workflow.worktree?.files) ? workflow.worktree.files : [];
@@ -590,9 +602,10 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const selectedNodePanelRef = useRef(null);
   const [flowInstance, setFlowInstance] = useState(null);
 
-  useEffect(() => {
-    setCurrentFilename(filename || null);
-  }, [filename]);
+  function closeEditor() {
+    resetEditor();
+    onClose();
+  }
 
   useEffect(() => {
     setLiveNodes((currentNodes) => {
@@ -634,23 +647,30 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   }, [flowInstance, selected?.id]);
 
   useEffect(() => {
+    const nextEditorKey = getWorkflowEditorKey(filename);
+    if (editorKey === nextEditorKey && storedWorkflow) return;
+
     if (!filename) {
       const next = createDefaultWorkflow();
-      setWorkflow(next);
-      setSelectedIdx(next.steps.length > 0 ? 0 : null);
-      setDirty(false);
+      initializeEditor({
+        filename: null,
+        workflow: next,
+        selectedIdx: next.steps.length > 0 ? 0 : null,
+      });
       return;
     }
 
     desktopApi.getWorkflow(filename)
       .then((data) => {
         const next = normalizeWorkflow(data);
-        setWorkflow(next);
-        setSelectedIdx(next.steps.length > 0 ? 0 : null);
-        setDirty(false);
+        initializeEditor({
+          filename,
+          workflow: next,
+          selectedIdx: next.steps.length > 0 ? 0 : null,
+        });
       })
       .catch(() => setError(t("editor.loadWorkflowFailed")));
-  }, [filename]);
+  }, [filename, editorKey, storedWorkflow, initializeEditor, setError, t]);
 
   function updateWorkflow(patch) {
     setWorkflow((prev) => relinkSteps({ ...prev, ...patch }));
@@ -1158,7 +1178,10 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
       showToast(t(draft ? "settings.workflowDraftSaved" : "settings.workflowSaved"));
       loadWorkflowConfig();
       loadWorkflows();
-      if (shouldClose) onSaved(savedFilename);
+      if (shouldClose) {
+        resetEditor();
+        onSaved(savedFilename);
+      }
     } catch (err) {
       setError(err.message || t("editor.saveWorkflowFailed"));
     } finally {
@@ -1170,7 +1193,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
     <div className="flex h-full flex-col">
       <WindowChrome />
       <div className="flex items-center gap-4 border-b border-border/70 bg-background/55 px-8 py-5">
-        <BackButton onClick={() => dirty ? setShowBackConfirm(true) : onClose()} label={t("editor.back")} className="-ml-2" />
+        <BackButton onClick={() => dirty ? setShowBackConfirm(true) : closeEditor()} label={t("editor.back")} className="-ml-2" />
         <Input
           value={workflow.name}
           onChange={(event) => {
@@ -1180,10 +1203,6 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
           placeholder={t("editor.workflowName")}
           className="no-drag max-w-xs"
         />
-        <Badge variant="outline" className="gap-1.5">
-          <Braces className="h-3.5 w-3.5" />
-          LangGraph DSL
-        </Badge>
         <Button type="button" className="no-drag" size="sm" variant="outline" onClick={() => setShowWorkflowSetup(true)}>
           Workflow Setup
         </Button>
@@ -1906,7 +1925,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
             <p className="mb-4 text-sm text-muted-foreground">{t("editor.unsavedChangesConfirm")}</p>
             <div className="flex justify-end gap-3">
               <Button variant="outline" size="sm" onClick={() => setShowBackConfirm(false)}>{t("common.cancel")}</Button>
-              <Button variant="destructive" size="sm" onClick={() => { setShowBackConfirm(false); onClose(); }}>{t("editor.discard")}</Button>
+              <Button variant="destructive" size="sm" onClick={() => { setShowBackConfirm(false); closeEditor(); }}>{t("editor.discard")}</Button>
             </div>
           </div>
         </div>

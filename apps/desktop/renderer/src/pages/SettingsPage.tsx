@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Eye, EyeOff, Trash2 } from "lucide-react";
 import WorkflowEditor from "../WorkflowEditor";
 import { BackButton } from "../components/back-button";
@@ -13,9 +14,10 @@ import { useWorkflowStore } from "../stores/workflowStore";
 
 export default function SettingsPage() {
   const { t } = useI18n();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { filename } = useParams();
   const [activeTab, setActiveTab] = useState("workflows");
-  const [editingWorkflow, setEditingWorkflow] = useState(null);
-  const [showEditor, setShowEditor] = useState(false);
   const [savingMobileAccess, setSavingMobileAccess] = useState(false);
   const [savingAiBackend, setSavingAiBackend] = useState(false);
   const [confirmRemoveWorkflow, setConfirmRemoveWorkflow] = useState(null);
@@ -57,14 +59,19 @@ export default function SettingsPage() {
     loadWorkFolders();
   }, []);
 
-  if (showEditor) {
+  const isCreatingWorkflow = location.pathname === "/settings/workflows/new";
+  const isEditingWorkflow = Boolean(filename);
+
+  if (isCreatingWorkflow || isEditingWorkflow) {
     return (
       <WorkflowEditor
-        filename={editingWorkflow}
-        onClose={() => { setShowEditor(false); setEditingWorkflow(null); loadWorkflows(); }}
+        filename={filename || null}
+        onClose={() => {
+          loadWorkflows();
+          navigate("/settings");
+        }}
         onSaved={() => {
-          setShowEditor(false);
-          setEditingWorkflow(null);
+          navigate("/settings");
         }}
       />
     );
@@ -200,7 +207,7 @@ export default function SettingsPage() {
               <div>
                 <div className="mb-4 flex items-center justify-between">
                   <h3 className="text-[15px] font-semibold text-foreground">{t("settings.workflows")}</h3>
-                  <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(null); setShowEditor(true); }}>{t("settings.newWorkflow")}</Button>
+                  <Button variant="outline" size="sm" onClick={() => navigate("/settings/workflows/new")}>{t("settings.newWorkflow")}</Button>
                 </div>
                 {workflows.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-border bg-card/50 p-6 text-center text-sm text-muted-foreground">
@@ -240,7 +247,7 @@ export default function SettingsPage() {
                           >
                             {visible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
                           </button>
-                          <Button variant="outline" size="sm" onClick={() => { setEditingWorkflow(wf.filename); setShowEditor(true); }}>
+                          <Button variant="outline" size="sm" onClick={() => navigate(`/settings/workflows/${encodeURIComponent(wf.filename)}/edit`)}>
                             {t("settings.edit")}
                           </Button>
                           <button
