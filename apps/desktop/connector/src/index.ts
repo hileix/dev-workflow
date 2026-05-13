@@ -235,7 +235,7 @@ function attachLocalTask(taskId, workFolder, options = {}) {
       type: "start",
       taskId,
       workFolder,
-      contextValues: options.contextValues || {},
+      taskInputs: options.taskInputs || {},
       images: options.images || [],
       runId: options.runId || "",
     });
@@ -318,7 +318,7 @@ async function handleCommand(message) {
         await activateWorkflow(workflowFilename);
       }
       const socket = attachLocalTask(taskId, workFolder, {
-        contextValues: payload?.contextValues || {},
+        taskInputs: payload?.taskInputs || {},
         images: imagePaths,
         runId,
       });

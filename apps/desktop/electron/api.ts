@@ -17,7 +17,7 @@ import {
   getWorkflow,
   getActiveWorkflowFile,
   setActiveWorkflowFile,
-  deriveContextFields,
+  deriveTaskInputFields,
   getWorkflowConfigShape,
   loadWorkflow,
   unloadWorkflow,
@@ -94,7 +94,7 @@ export async function listWorkflows() {
           phaseOrder: workflowConfig.phaseOrder,
           groups: workflowConfig.groups,
           workflowConfig,
-          contextFields: deriveContextFields(raw),
+          taskInputFields: deriveTaskInputFields(raw),
           worktree: raw.worktree || { enabled: false, files: [] },
         });
       } catch {}

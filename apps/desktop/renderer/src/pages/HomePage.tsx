@@ -116,20 +116,21 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, defaultWork
     : workflows[0]?.filename || null;
   const [selectedWorkflow, setSelectedWorkflow] = useState(initialWorkflow);
   const [selectedFolder, setSelectedFolder] = useState(defaultFolder);
-  const [contextValues, setContextValues] = useState({});
+  const [taskInputs, setTaskInputs] = useState({});
   const [worktreeName, setWorktreeName] = useState("");
   const [images, setImages] = useState([]);
   const [submitting, setSubmitting] = useState(false);
 
   const activeWf = workflows.find((wf) => wf.filename === selectedWorkflow);
-  const contextFields = activeWf?.contextFields || [];
+  const taskInputFields = activeWf?.taskInputFields || [];
   const worktreeConfig = activeWf?.worktree || { enabled: false, files: [] };
-  const defaultContextFields = [{ key: "taskId", label: t("home.instanceId"), placeholder: t("home.instanceIdPlaceholder") }];
-  const displayContextFields = contextFields.length > 0 ? contextFields : defaultContextFields;
+  const defaultTaskInputFields = [{ key: "taskId", label: t("home.instanceId"), placeholder: t("home.instanceIdPlaceholder") }];
+  const displayTaskInputFields = taskInputFields.length > 0 ? taskInputFields : defaultTaskInputFields;
 
-  const firstKey = displayContextFields[0]?.key;
-  const allFilled = displayContextFields.every((field, index) => {
-    const hasText = (contextValues[field.key] || "").trim();
+  const firstKey = displayTaskInputFields[0]?.key;
+  const allFilled = displayTaskInputFields.every((field, index) => {
+    const hasText = (taskInputs[field.key] || "").trim();
+    if (field.required === false) return true;
     return hasText || (index === 0 && images.length > 0);
   });
   const runId = `run-${Date.now()}`;
@@ -169,10 +170,10 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, defaultWork
   async function handleSubmit(e) {
     e.preventDefault();
     if (!allFilled || !selectedFolder || !selectedWorkflow || submitting) return;
-    const descriptionValue = (contextValues.task || contextValues[firstKey] || "").trim();
-    const derivedId = displayContextFields.length === 1 && firstKey === "taskId"
+    const descriptionValue = (taskInputs.task || taskInputs[firstKey] || "").trim();
+    const derivedId = displayTaskInputFields.length === 1 && firstKey === "taskId"
       ? `task-${Date.now()}`
-      : (contextValues[firstKey] || descriptionValue).trim();
+      : (taskInputs[firstKey] || descriptionValue).trim();
     const id = derivedId || `task-${Date.now()}`;
 
     setSubmitting(true);
@@ -187,7 +188,7 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, defaultWork
         uploadedPaths = data.paths || [];
       }
 
-      onStart(id, selectedFolder, contextValues, uploadedPaths.length > 0 ? uploadedPaths : undefined, runId, worktreeName.trim(), selectedWorkflow);
+      onStart(id, selectedFolder, taskInputs, uploadedPaths.length > 0 ? uploadedPaths : undefined, runId, worktreeName.trim(), selectedWorkflow);
     } finally {
       setSubmitting(false);
     }
@@ -277,12 +278,12 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, defaultWork
             </div>
           )}
           <form className="space-y-3" onSubmit={handleSubmit}>
-            {displayContextFields.map((field, i) => (
+            {displayTaskInputFields.map((field, i) => (
               <div key={field.key} className="space-y-2">
                 <span className="text-xs font-semibold text-muted-foreground">{field.label}</span>
                 <textarea
-                  value={contextValues[field.key] || ""}
-                  onChange={(e) => setContextValues((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                  value={taskInputs[field.key] || ""}
+                  onChange={(e) => setTaskInputs((prev) => ({ ...prev, [field.key]: e.target.value }))}
                   onPaste={handlePaste}
                   placeholder={field.placeholder || ""}
                   autoFocus={i === 0}
@@ -373,8 +374,8 @@ export default function HomePage() {
 
   const canStartWorkflow = visibleWorkflows.length > 0;
 
-  function handleStartWorkflow(id, folderPath, contextValues, images, runId, worktreeName, workflowFilename) {
-    startWorkflow(id, folderPath, contextValues, images, runId, worktreeName, workflowFilename);
+  function handleStartWorkflow(id, folderPath, taskInputs, images, runId, worktreeName, workflowFilename) {
+    startWorkflow(id, folderPath, taskInputs, images, runId, worktreeName, workflowFilename);
     setShowStartModal(false);
     const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
     navigate(`/ticket/${encodeURIComponent(id)}${query}`);

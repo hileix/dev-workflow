@@ -21,7 +21,7 @@ export function setupWebSocket(server) {
 
       try {
         if (msg.type === "start") {
-          await startWorkflowSession(msg.taskId, msg.workFolder, msg.contextValues, msg.images, msg.runId, send, {
+          await startWorkflowSession(msg.taskId, msg.workFolder, msg.taskInputs, msg.images, msg.runId, send, {
             worktreeName: msg.worktreeName,
             workflowFilename: msg.workflowFilename,
           });

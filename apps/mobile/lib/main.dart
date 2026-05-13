@@ -531,7 +531,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
     required String runId,
     required String workFolder,
     required String workflowFilename,
-    required Map<String, String> contextValues,
+    required Map<String, String> taskInputs,
     required List<Map<String, dynamic>> images,
   }) async {
     try {
@@ -543,7 +543,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
             "runId": runId,
             "workFolder": workFolder,
             "workflowFilename": workflowFilename,
-            "contextValues": contextValues,
+            "taskInputs": taskInputs,
             "images": images,
           },
         },
@@ -609,7 +609,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
         runId: result.runId,
         workFolder: result.workFolder,
         workflowFilename: result.workflowFilename,
-        contextValues: result.contextValues,
+        taskInputs: result.taskInputs,
         images: result.images.map((image) => image.toPayload()).toList(),
       );
     } finally {
@@ -1167,7 +1167,7 @@ class _StartWorkflowResult {
     required this.runId,
     required this.workFolder,
     required this.workflowFilename,
-    required this.contextValues,
+    required this.taskInputs,
     required this.images,
   });
 
@@ -1175,7 +1175,7 @@ class _StartWorkflowResult {
   final String runId;
   final String workFolder;
   final String workflowFilename;
-  final Map<String, String> contextValues;
+  final Map<String, String> taskInputs;
   final List<_SelectedImage> images;
 }
 
@@ -1322,19 +1322,19 @@ class _StartWorkflowSheetState extends State<_StartWorkflowSheet> {
     );
   }
 
-  List<Map<String, dynamic>> get _displayContextFields {
+  List<Map<String, dynamic>> get _displayTaskInputFields {
     final selected = widget.workflows.cast<Map<String, dynamic>?>().firstWhere(
           (workflow) => workflow?["filename"]?.toString() == _selectedWorkflow,
           orElse: () => widget.workflows.first,
         );
-    return ((selected?["contextFields"] as List?) ?? const [])
+    return ((selected?["taskInputFields"] as List?) ?? const [])
         .whereType<Map>()
         .map((entry) => Map<String, dynamic>.from(entry))
         .toList();
   }
 
   void _syncPromptControllers() {
-    final nextKeys = _displayContextFields
+    final nextKeys = _displayTaskInputFields
         .map((field) => field["key"]?.toString() ?? "")
         .where((key) => key.isNotEmpty)
         .toSet();
@@ -1352,19 +1352,25 @@ class _StartWorkflowSheetState extends State<_StartWorkflowSheet> {
   }
 
   void _submit() {
-    final contextValues = <String, String>{};
-    for (final field in _displayContextFields) {
+    final taskInputs = <String, String>{};
+    for (final field in _displayTaskInputFields) {
       final key = field["key"]?.toString() ?? "";
-      contextValues[key] = _controllers[key]?.text.trim() ?? "";
+      taskInputs[key] = _controllers[key]?.text.trim() ?? "";
     }
-    if (contextValues.values.any((value) => value.isEmpty)) return;
+    final hasMissingRequiredField = _displayTaskInputFields.any((field) {
+      final key = field["key"]?.toString() ?? "";
+      final required = field["required"] != false;
+      if (!required) return false;
+      return (taskInputs[key] ?? "").isEmpty;
+    });
+    if (hasMissingRequiredField) return;
 
-    final firstKey = _displayContextFields.isNotEmpty
-        ? _displayContextFields.first["key"]?.toString() ?? ""
+    final firstKey = _displayTaskInputFields.isNotEmpty
+        ? _displayTaskInputFields.first["key"]?.toString() ?? ""
         : "";
     final taskId = firstKey.isNotEmpty &&
-            (contextValues[firstKey]?.trim().isNotEmpty ?? false)
-        ? contextValues[firstKey]!.trim()
+            (taskInputs[firstKey]?.trim().isNotEmpty ?? false)
+        ? taskInputs[firstKey]!.trim()
         : "task-${DateTime.now().millisecondsSinceEpoch}";
     final runId = "run-${DateTime.now().millisecondsSinceEpoch}";
 
@@ -1374,7 +1380,7 @@ class _StartWorkflowSheetState extends State<_StartWorkflowSheet> {
         runId: runId,
         workFolder: _selectedFolder,
         workflowFilename: _selectedWorkflow,
-        contextValues: contextValues,
+        taskInputs: taskInputs,
         images: _images,
       ),
     );
@@ -1465,7 +1471,7 @@ class _StartWorkflowSheetState extends State<_StartWorkflowSheet> {
                       onTap: _pickFolder,
                     ),
                     const SizedBox(height: 12),
-                    ..._displayContextFields.map((field) {
+                    ..._displayTaskInputFields.map((field) {
                       final key = field["key"]?.toString() ?? "";
                       final label = field["label"]?.toString() ?? key;
                       final placeholder =

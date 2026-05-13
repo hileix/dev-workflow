@@ -161,7 +161,7 @@ function registerIpcHandlers() {
     startWorkflowSession(
       payload.taskId,
       payload.workFolder,
-      payload.contextValues,
+      payload.taskInputs,
       payload.images,
       payload.runId,
       (message) => event.sender.send("workflow:event", message),

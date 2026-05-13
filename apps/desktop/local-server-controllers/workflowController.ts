@@ -15,7 +15,7 @@ import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManaged
 import {
   assertSafeWorkflowFilename,
   getWorkflow, getActiveWorkflowFile, setActiveWorkflowFile,
-  deriveContextFields, getWorkflowConfigShape, loadWorkflow, unloadWorkflow,
+  deriveTaskInputFields, getWorkflowConfigShape, loadWorkflow, unloadWorkflow,
 } from "../../../packages/core-models/workflow";
 import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index";
 
@@ -210,7 +210,7 @@ router.get("/workflows", async (req, res) => {
           phaseOrder: workflowConfig.phaseOrder,
           groups: workflowConfig.groups,
           workflowConfig,
-          contextFields: deriveContextFields(raw),
+          taskInputFields: deriveTaskInputFields(raw),
           worktree: raw.worktree || { enabled: false, files: [] },
         });
       } catch {}

@@ -91,10 +91,10 @@ function addUniqueToken(tokens, value) {
   if (token && !tokens.includes(token)) tokens.push(token);
 }
 
-function buildLocalWorktreeNameFallback(taskId, contextValues = {}) {
+function buildLocalWorktreeNameFallback(taskId, taskInputs = {}) {
   const text = [
     taskId,
-    ...Object.values(contextValues || {}).filter((value) => typeof value === "string"),
+    ...Object.values(taskInputs || {}).filter((value) => typeof value === "string"),
   ].join(" ").toLowerCase();
   const tokens = [];
   let prefix = "chore";
@@ -233,15 +233,15 @@ async function persistLangGraphState(taskId, runId, langState, workflow) {
   return next;
 }
 
-async function generateWorktreeName({ taskId, workFolder, contextValues, workflow }) {
+async function generateWorktreeName({ taskId, workFolder, taskInputs, workflow }) {
   const skill = readManagedSkillContentSync("worktree-naming") || DEFAULT_WORKTREE_NAMING_SKILL;
   const backend = normalizeAiBackend(readAiBackendOverrideSync());
-  const localFallback = buildLocalWorktreeNameFallback(taskId, contextValues);
+  const localFallback = buildLocalWorktreeNameFallback(taskId, taskInputs);
   const context = [
     `Task ID: ${taskId}`,
     `Workflow: ${workflow?.name || ""}`,
     `Work folder: ${workFolder}`,
-    `Task context: ${JSON.stringify(contextValues || {})}`,
+    `Task inputs: ${JSON.stringify(taskInputs || {})}`,
     localFallback ? `Fallback name if needed: ${localFallback}` : "",
   ].join("\n");
 
@@ -257,7 +257,6 @@ ${context}`;
     const adapter = createSdkAgentAdapter({
       workFolder,
       taskDir: workFolder,
-      readSkillContentSync: readManagedSkillContentSync,
     });
     const result = await adapter.runAgent({
       step: {
@@ -275,7 +274,7 @@ ${context}`;
         runId: "",
         workFolder,
         taskDir: workFolder,
-        contextValues,
+        taskInputs,
       },
       sessionId: "",
       sessionKey: "worktree-naming",
@@ -389,7 +388,7 @@ async function markWorkflowFailed(taskId, runId, phase, error, sender) {
   return state;
 }
 
-export async function startWorkflowSession(taskId, workFolder, contextValues, images, runId, sender, options = {}) {
+export async function startWorkflowSession(taskId, workFolder, taskInputs, images, runId, sender, options = {}) {
   if (!taskId || !workFolder) throw new Error("taskId and workFolder required");
   const workflowFilename = String(options?.workflowFilename || "").trim();
   const workflow = workflowFilename ? readWorkflowFileSync(assertSafeWorkflowFilename(workflowFilename)) : getWorkflow();
@@ -426,7 +425,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
   const requestedWorktreeName = String(options?.worktreeName || "").trim();
   if (workflow.worktree?.enabled && !requestedWorktreeName) send({ type: "worktree_naming_started" });
   const worktreeName = workflow.worktree?.enabled
-    ? requestedWorktreeName || await generateWorktreeName({ taskId, workFolder, contextValues, workflow })
+    ? requestedWorktreeName || await generateWorktreeName({ taskId, workFolder, taskInputs, workflow })
     : "";
   if (workflow.worktree?.enabled && !requestedWorktreeName) send({ type: "worktree_naming_completed", name: worktreeName });
   if (workflow.worktree?.enabled) send({ type: "worktree_preparing", name: worktreeName });
@@ -446,7 +445,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
 
   const runtimeWorkFolder = preparedWorktree.workFolder;
   const baseDir = await getBaseDir();
-  const state = makeInitialState(taskId, runtimeWorkFolder, baseDir, contextValues, {
+  const state = makeInitialState(taskId, runtimeWorkFolder, baseDir, taskInputs, {
     workflow,
     originalWorkFolder: workFolder,
     runId: finalRunId,
@@ -491,7 +490,7 @@ export async function startWorkflowSession(taskId, workFolder, contextValues, im
       taskDir: taskRunDir,
       currentStep: stepOrder[0],
       overallStatus: "in_progress",
-      contextValues: contextValues || {},
+      taskInputs: taskInputs || {},
     });
   } catch (err) {
     await markWorkflowFailed(taskId, finalRunId, stepOrder[0], err, send);

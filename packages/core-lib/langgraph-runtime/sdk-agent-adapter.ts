@@ -2,7 +2,6 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { Codex } from "@openai/codex-sdk";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, extname, join, relative, resolve } from "path";
-import { readManagedSkillContentSync } from "../../core-models/skills";
 import { createContentPreview, createContentSummary, formatStepOutputForPrompt } from "./artifacts";
 
 const SDK_BACKENDS = {
@@ -16,30 +15,25 @@ function isPathInside(parent, child) {
 }
 
 function renderTemplate(template, state) {
-  const contextValues = state.contextValues || {};
+  const taskInputs = state.taskInputs || {};
   const vars = {
     taskId: state.taskId || "",
     runId: state.runId || "",
     workFolder: state.workFolder || "",
     taskDir: state.taskDir || "",
-    ...contextValues,
+    ...taskInputs,
   };
   return String(template || "").replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? "");
 }
 
-function readSkillContent(ref, readSkillContentSync) {
-  const content = readSkillContentSync(ref);
-  return content ? String(content).trim() : "";
-}
-
 function renderStepInputs(step, state) {
   const parts = [];
-  const contextValues = state.contextValues || {};
+  const taskInputs = state.taskInputs || {};
   const stepOutputs = state.stepOutputs || {};
 
   for (const input of step.inputs || []) {
-    if (input.sourceType === "workflow_context") {
-      parts.push(`## ${input.name}\n\n${contextValues[input.name] || ""}`);
+    if (input.sourceType === "task_input") {
+      parts.push(`## ${input.name}\n\n${taskInputs[input.name] || ""}`);
       continue;
     }
 
@@ -57,12 +51,10 @@ function renderStepInputs(step, state) {
   return parts.filter(Boolean).join("\n\n");
 }
 
-function buildPrompt({ step, agent, state, readSkillContentSync }) {
+function buildPrompt({ step, state }) {
   const parts = [];
   const pendingMessage = String(state.pendingMessages?.[step.id] || "").trim();
   const pendingImageCount = state.pendingImagePaths?.[step.id]?.length || 0;
-  const agentSkill = agent.skill ? readSkillContent(agent.skill, readSkillContentSync) : "";
-  if (agentSkill) parts.push(agentSkill);
 
   if (pendingMessage) {
     parts.push(["# User feedback", "", pendingMessage].join("\n"));
@@ -73,9 +65,6 @@ function buildPrompt({ step, agent, state, readSkillContentSync }) {
   }
 
   if (step.instructions) parts.push(renderTemplate(step.instructions, state));
-
-  const stepSkill = step.skill ? readSkillContent(step.skill, readSkillContentSync) : "";
-  if (stepSkill) parts.push(stepSkill);
 
   if (step.prompt) parts.push(renderTemplate(step.prompt, state));
 
@@ -95,9 +84,9 @@ function buildPrompt({ step, agent, state, readSkillContentSync }) {
     `Current step: ${step.id}`,
     `Task directory: ${state.taskDir || ""}`,
     "",
-    "## Workflow context",
+    "## Task inputs",
     "",
-    JSON.stringify(state.contextValues || {}, null, 2),
+    JSON.stringify(state.taskInputs || {}, null, 2),
     previousOutputs ? `\n## Previous step outputs\n\n${previousOutputs}` : "",
   ].filter(Boolean).join("\n"));
 
@@ -371,7 +360,6 @@ async function writeOutputArtifact(taskDir, step, state, content) {
 }
 
 export function createSdkAgentAdapter(options = {}) {
-  const readSkillContentSync = options.readSkillContentSync || readManagedSkillContentSync;
   const onEvent = options.onEvent || (() => {});
 
   return {
@@ -385,7 +373,7 @@ export function createSdkAgentAdapter(options = {}) {
       ];
       const abortController = options.abortController || new AbortController();
       const workspaceWrite = canWriteWorkspace(step, agent);
-      const prompt = buildPrompt({ step, agent, state, readSkillContentSync });
+      const prompt = buildPrompt({ step, state });
       let content = "";
       let nextSessionId = sessionId || "";
 
@@ -400,7 +388,7 @@ export function createSdkAgentAdapter(options = {}) {
         onSession: async (value) => {
           if (!value) return;
           nextSessionId = value;
-          await onEvent({ type: "session_attached", step: step.id, phase: step.id, sessionKey: sessionKey || step.contextGroup || step.id, backend, sessionId: value });
+          await onEvent({ type: "session_attached", step: step.id, phase: step.id, sessionKey: sessionKey || step.id, backend, sessionId: value });
         },
       };
 

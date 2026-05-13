@@ -97,13 +97,13 @@ export async function readPhaseInteractions(taskId, phase, runId = "") {
   }
 }
 
-export function makeInitialState(taskId, workFolder, baseDir, contextValues, options = {}) {
+export function makeInitialState(taskId, workFolder, baseDir, taskInputs, options = {}) {
   const WORKFLOW = options.workflow || getWorkflow();
   const PHASE_ORDER = getWorkflowStepOrder(WORKFLOW);
   const now = new Date().toISOString();
   const runId = options.runId || taskId;
   const artifacts = {};
-  const vars = { taskId, runId, ...contextValues };
+  const vars = { taskId, runId, ...taskInputs };
   for (const p of WORKFLOW.steps) {
     const primaryOutput = Array.isArray(p.outputs) ? p.outputs[0] : null;
     if (primaryOutput?.filename) {
@@ -127,7 +127,7 @@ export function makeInitialState(taskId, workFolder, baseDir, contextValues, opt
     phases: PHASE_ORDER.map((id) => ({ id, status: "pending", updated: null, sessionId: null })),
     steps: PHASE_ORDER.map((id) => ({ id, status: "pending", updated: null, sessionId: null })),
     artifacts,
-    contextValues: contextValues || {},
+    taskInputs: taskInputs || {},
     sessionMap: {},
     stepOutputs: {},
     stepArtifacts: {},

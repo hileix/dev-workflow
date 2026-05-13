@@ -2,21 +2,60 @@
   "id": "superpowers_development_workflow",
   "name": "Superpowers Development Workflow",
   "version": 1,
-  "runtime": "langgraph",
+  "runtime": {
+    "engine": "langgraph",
+    "backend": "claude",
+    "model": "",
+    "workspaceAccess": "read",
+    "options": {}
+  },
   "ui": {
     "layout": "vertical",
     "nodePositions": {
-      "explore_context": { "x": 120, "y": 80 },
-      "draft_design": { "x": 120, "y": 310 },
-      "design_review": { "x": 120, "y": 540 },
-      "write_plan": { "x": 120, "y": 770 },
-      "plan_review": { "x": 120, "y": 1000 },
-      "implement_with_tdd": { "x": 120, "y": 1230 },
-      "review_spec_compliance": { "x": 120, "y": 1460 },
-      "review_code_quality": { "x": 120, "y": 1690 },
-      "review_gate": { "x": 120, "y": 1920 },
-      "verify_and_finish": { "x": 120, "y": 2150 },
-      "completion_review": { "x": 120, "y": 2380 }
+      "explore_context": {
+        "x": 120,
+        "y": 80
+      },
+      "draft_design": {
+        "x": 120,
+        "y": 310
+      },
+      "design_review": {
+        "x": 120,
+        "y": 540
+      },
+      "write_plan": {
+        "x": 120,
+        "y": 770
+      },
+      "plan_review": {
+        "x": 120,
+        "y": 1000
+      },
+      "implement_with_tdd": {
+        "x": 120,
+        "y": 1230
+      },
+      "review_spec_compliance": {
+        "x": 120,
+        "y": 1460
+      },
+      "review_code_quality": {
+        "x": 120,
+        "y": 1690
+      },
+      "review_gate": {
+        "x": 120,
+        "y": 1920
+      },
+      "verify_and_finish": {
+        "x": 120,
+        "y": 2150
+      },
+      "completion_review": {
+        "x": 120,
+        "y": 2380
+      }
     }
   },
   "worktree": {
@@ -34,96 +73,25 @@
     "customFiles": [],
     "removeOnComplete": false
   },
-  "agents": {
-    "designer": {
-      "backend": "claude",
-      "skill": "",
-      "model": "",
-      "workspaceAccess": "read",
-      "options": {}
-    },
-    "planner": {
-      "backend": "claude",
-      "skill": "",
-      "model": "",
-      "workspaceAccess": "read",
-      "options": {}
-    },
-    "coder": {
-      "backend": "codex",
-      "skill": "",
-      "model": "gpt-5.5",
-      "workspaceAccess": "write",
-      "options": {
-        "thread": {
-          "modelReasoningEffort": "high"
-        }
-      }
-    },
-    "reviewer": {
-      "backend": "codex",
-      "skill": "",
-      "model": "gpt-5.5",
-      "workspaceAccess": "read",
-      "options": {
-        "thread": {
-          "modelReasoningEffort": "high"
-        }
-      }
-    },
-    "finisher": {
-      "backend": "codex",
-      "skill": "",
-      "model": "gpt-5.4",
-      "workspaceAccess": "write",
-      "options": {
-        "thread": {
-          "modelReasoningEffort": "medium"
-        }
-      }
-    }
-  },
-  "contextGroups": [
-    {
-      "id": "design_session",
-      "label": "Design Session",
-      "agent": "designer",
-      "sharedSession": true
-    },
-    {
-      "id": "coding_session",
-      "label": "Coding Session",
-      "agent": "coder",
-      "sharedSession": true
-    },
-    {
-      "id": "review_session",
-      "label": "Review Session",
-      "agent": "reviewer",
-      "sharedSession": false
-    }
-  ],
   "steps": [
     {
       "id": "explore_context",
       "type": "agent",
       "label": "Explore Context",
-      "agent": "designer",
-      "contextGroup": "design_session",
       "workspaceAccess": "read",
       "inputs": [
         {
           "name": "task",
-          "sourceType": "workflow_context",
-          "contextLabel": "Task Description",
-          "contextPlaceholder": "Describe the feature, bug, or product change you want to build.",
+          "sourceType": "task_input",
+          "inputLabel": "Task Description",
+          "inputPlaceholder": "Describe the feature, bug, or product change you want to build.",
           "required": true
         },
         {
           "name": "constraints",
-          "sourceType": "workflow_context",
-          "contextLabel": "Constraints",
-          "contextPlaceholder": "Optional constraints, out-of-scope items, preferred files, or verification commands.",
+          "sourceType": "task_input",
+          "inputLabel": "Constraints",
+          "inputPlaceholder": "Optional constraints, out-of-scope items, preferred files, or verification commands.",
           "required": false
         }
       ],
@@ -141,8 +109,6 @@
       "id": "draft_design",
       "type": "agent",
       "label": "Draft Design",
-      "agent": "designer",
-      "contextGroup": "design_session",
       "workspaceAccess": "read",
       "inputs": [
         {
@@ -203,7 +169,6 @@
       "id": "write_plan",
       "type": "agent",
       "label": "Write Plan",
-      "agent": "planner",
       "workspaceAccess": "read",
       "inputs": [
         {
@@ -264,8 +229,6 @@
       "id": "implement_with_tdd",
       "type": "agent",
       "label": "Implement With TDD",
-      "agent": "coder",
-      "contextGroup": "coding_session",
       "workspaceAccess": "write",
       "inputs": [
         {
@@ -284,14 +247,19 @@
         }
       ],
       "prompt": "Execute the approved plan using the Superpowers implementation principles.\n\nRead {{taskDir}}/05-plan-approved.md first.\n\nRules:\n- Work in the current workflow worktree.\n- Keep changes surgical and preserve existing behavior unless the plan requires changing it.\n- Use RED-GREEN-REFACTOR when a meaningful automated test path exists: write the failing test, verify it fails, implement the minimal fix, verify it passes.\n- If no automated test path exists, explain the manual/build verification used.\n- Do not add speculative abstractions or compatibility work that was not requested.\n- Save a summary to {{taskDir}}/06-implementation-summary.md.\n\nSummary format:\n# Implementation Summary\n\n## Changes Made\n## Files Changed\n## Verification Run\n## Known Follow-ups Or Risks",
-      "next": "review_spec_compliance"
+      "next": "review_spec_compliance",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "options": {
+        "thread": {
+          "modelReasoningEffort": "high"
+        }
+      }
     },
     {
       "id": "review_spec_compliance",
       "type": "agent",
       "label": "Spec Compliance Review",
-      "agent": "reviewer",
-      "contextGroup": "review_session",
       "workspaceAccess": "read",
       "inputs": [
         {
@@ -324,14 +292,19 @@
         }
       ],
       "prompt": "Review the implementation for spec compliance only.\n\nRead:\n- {{taskDir}}/03-design-approved.md\n- {{taskDir}}/05-plan-approved.md\n- {{taskDir}}/06-implementation-summary.md\n\nCheck:\n- Required behavior was implemented.\n- No requested behavior was missed.\n- No unrelated behavior was added.\n- Verification matches the plan.\n\nSave the review to {{taskDir}}/07-spec-compliance-review.md.\n\nLead with findings by severity. If there are no findings, say: No spec compliance findings.",
-      "next": "review_code_quality"
+      "next": "review_code_quality",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "options": {
+        "thread": {
+          "modelReasoningEffort": "high"
+        }
+      }
     },
     {
       "id": "review_code_quality",
       "type": "agent",
       "label": "Code Quality Review",
-      "agent": "reviewer",
-      "contextGroup": "review_session",
       "workspaceAccess": "read",
       "inputs": [
         {
@@ -350,7 +323,14 @@
         }
       ],
       "prompt": "Review the implementation for code quality and regression risk.\n\nRead {{taskDir}}/07-spec-compliance-review.md and inspect the current git diff.\n\nFocus on:\n- Bugs, behavioral regressions, race conditions, data loss, and security issues.\n- Missing or weak verification.\n- Overcomplication relative to the approved plan.\n- Unrelated file churn.\n\nSave the review to {{taskDir}}/08-code-quality-review.md.\n\nLead with findings by severity. If there are no findings, say: No code quality findings.",
-      "next": "review_gate"
+      "next": "review_gate",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "options": {
+        "thread": {
+          "modelReasoningEffort": "high"
+        }
+      }
     },
     {
       "id": "review_gate",
@@ -387,7 +367,6 @@
       "id": "verify_and_finish",
       "type": "agent",
       "label": "Verify And Finish",
-      "agent": "finisher",
       "workspaceAccess": "write",
       "inputs": [
         {
@@ -413,7 +392,14 @@
         }
       ],
       "prompt": "Prepare the branch completion report using Superpowers' finishing-a-development-branch pattern.\n\nRead:\n- {{taskDir}}/06-implementation-summary.md\n- {{taskDir}}/08-code-quality-review.md\n\nDo:\n- Run the final verification command from the approved plan when possible.\n- Inspect git status and summarize changed files.\n- Do not merge, push, discard, or delete the worktree automatically.\n- Present concrete next options: merge locally, push/create PR, keep branch/worktree, or discard after confirmation.\n- Save the report to {{taskDir}}/09-completion-report.md.\n\nOutput format:\n# Completion Report\n\n## Final Verification\n## Git Status\n## Changed Files\n## Recommended Next Step\n## Available Completion Options",
-      "next": "completion_review"
+      "next": "completion_review",
+      "backend": "codex",
+      "model": "gpt-5.4",
+      "options": {
+        "thread": {
+          "modelReasoningEffort": "medium"
+        }
+      }
     },
     {
       "id": "completion_review",

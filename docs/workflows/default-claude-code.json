@@ -2,7 +2,13 @@
   "id": "default_claude_code",
   "name": "Default Claude Code",
   "version": 1,
-  "runtime": "langgraph",
+  "runtime": {
+    "engine": "langgraph",
+    "backend": "claude",
+    "model": "",
+    "workspaceAccess": "write",
+    "options": {}
+  },
   "ui": {
     "layout": "vertical",
     "nodePositions": {
@@ -43,63 +49,18 @@
     "customFiles": [],
     "removeOnComplete": false
   },
-  "agents": {
-    "implementer": {
-      "backend": "claude",
-      "skill": "",
-      "model": "",
-      "workspaceAccess": "write",
-      "options": {}
-    },
-    "code_reviewer": {
-      "backend": "claude",
-      "skill": "",
-      "model": "",
-      "workspaceAccess": "read",
-      "options": {}
-    },
-    "publisher": {
-      "backend": "claude",
-      "skill": "",
-      "model": "",
-      "workspaceAccess": "write",
-      "options": {}
-    }
-  },
-  "contextGroups": [
-    {
-      "id": "implementation_session",
-      "label": "Implementation",
-      "agent": "implementer",
-      "sharedSession": true
-    },
-    {
-      "id": "code_review_session",
-      "label": "Code Review",
-      "agent": "code_reviewer",
-      "sharedSession": false
-    },
-    {
-      "id": "publish_session",
-      "label": "Publish",
-      "agent": "publisher",
-      "sharedSession": false
-    }
-  ],
   "steps": [
     {
       "id": "implement",
       "type": "agent",
       "label": "Implement",
-      "agent": "implementer",
-      "contextGroup": "implementation_session",
       "workspaceAccess": "write",
       "inputs": [
         {
           "name": "task",
-          "sourceType": "workflow_context",
-          "contextLabel": "Task",
-          "contextPlaceholder": "Describe what should be implemented.",
+          "sourceType": "task_input",
+          "inputLabel": "Task",
+          "inputPlaceholder": "Describe what should be implemented.",
           "required": true
         }
       ],
@@ -117,8 +78,6 @@
       "id": "code_review",
       "type": "agent",
       "label": "Code Review",
-      "agent": "code_reviewer",
-      "contextGroup": "code_review_session",
       "workspaceAccess": "read",
       "inputs": [
         {
@@ -143,8 +102,6 @@
       "id": "risk_gate",
       "type": "condition",
       "label": "Risk Gate",
-      "agent": "code_reviewer",
-      "contextGroup": "code_review_session",
       "workspaceAccess": "read",
       "inputs": [
         {
@@ -199,8 +156,6 @@
       "id": "commit_and_push",
       "type": "agent",
       "label": "Commit And Push",
-      "agent": "publisher",
-      "contextGroup": "publish_session",
       "workspaceAccess": "write",
       "inputs": [
         {
