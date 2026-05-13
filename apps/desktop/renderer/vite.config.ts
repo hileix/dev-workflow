@@ -2,6 +2,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
+const localServerPort = process.env.LOCAL_SERVER_PORT || process.env.PORT || "3000";
+const localServerUrl = `http://localhost:${localServerPort}`;
+
 export default defineConfig({
   base: "./",
   plugins: [react(), tailwindcss()],
@@ -11,9 +14,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": "http://localhost:3000",
+      "/api": localServerUrl,
       "/ws": {
-        target: "http://localhost:3000",
+        target: localServerUrl,
         ws: true,
       },
     },

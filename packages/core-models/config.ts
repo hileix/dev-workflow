@@ -11,6 +11,10 @@ let runtimeStorageDir = "";
 export const LEGACY_WORKFLOW_DIR = join(PROJECT_ROOT, "workflows");
 
 function getDefaultDesktopUserDataDir() {
+  if (process.env.DEV_WORKFLOW_USER_DATA_DIR) {
+    return process.env.DEV_WORKFLOW_USER_DATA_DIR;
+  }
+
   switch (process.platform) {
     case "darwin":
       return join(os.homedir(), "Library", "Application Support", "dev-Workflow");

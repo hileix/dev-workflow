@@ -171,7 +171,7 @@ export function getWorkflowConfigShape(workflow = WORKFLOW) {
       rejectTargets: {},
       conditionRoutes: {},
       taskInputFields: [],
-      worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false },
+      worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false, useCustomSetupScript: false, setupScript: "" },
     };
   }
 
@@ -228,7 +228,7 @@ export function getWorkflowConfigShape(workflow = WORKFLOW) {
     rejectTargets,
     conditionRoutes,
     taskInputFields: deriveTaskInputFields(workflow),
-    worktree: workflow.worktree || { enabled: false, files: [], customFiles: [], removeOnComplete: false },
+    worktree: workflow.worktree || { enabled: false, files: [], customFiles: [], removeOnComplete: false, useCustomSetupScript: false, setupScript: "" },
   };
 }
 

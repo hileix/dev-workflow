@@ -15,6 +15,19 @@ function execGit(args, cwd) {
   });
 }
 
+function execShell(command, cwd) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    execFile(process.env.SHELL || "/bin/sh", ["-lc", command], { cwd }, (error, stdout, stderr) => {
+      if (error) {
+        const message = stderr?.trim() || stdout?.trim() || error.message;
+        rejectPromise(new Error(message));
+        return;
+      }
+      resolvePromise((stdout || "").trim());
+    });
+  });
+}
+
 function sanitizeNamePart(value, fallback) {
   const normalized = String(value || "")
     .toLowerCase()
@@ -121,7 +134,12 @@ export function normalizeWorktreeConfig(worktree) {
   const files = normalizeMigrationFiles(worktree?.files);
   const customFiles = normalizeMigrationFiles(worktree?.customFiles);
   const removeOnComplete = worktree?.removeOnComplete !== undefined ? Boolean(worktree.removeOnComplete) : false;
-  return { enabled, files, customFiles, removeOnComplete };
+  const useCustomSetupScript = worktree?.useCustomSetupScript === true;
+  const setupScript = useCustomSetupScript && typeof worktree?.setupScript === "string" ? worktree.setupScript.trim() : "";
+  if (useCustomSetupScript && !setupScript) {
+    throw new Error("git worktree custom setup script is required");
+  }
+  return { enabled, files, customFiles, removeOnComplete, useCustomSetupScript, setupScript };
 }
 
 export async function prepareWorktree({ repoRoot, taskId, worktree, worktreeName }) {
@@ -154,24 +172,28 @@ export async function prepareWorktree({ repoRoot, taskId, worktree, worktreeName
   const skippedFiles = [];
 
   try {
-    for (const configuredPath of worktreeConfig.files) {
-      const { normalizedPath, sourcePath } = assertSafeRelativePath(sourceRoot, configuredPath);
-      const exists = await pathExists(sourcePath);
-      if (!exists) {
-        skippedFiles.push(normalizedPath);
-        continue;
-      }
+    if (worktreeConfig.setupScript) {
+      await execShell(worktreeConfig.setupScript, worktreePath);
+    } else {
+      for (const configuredPath of worktreeConfig.files) {
+        const { normalizedPath, sourcePath } = assertSafeRelativePath(sourceRoot, configuredPath);
+        const exists = await pathExists(sourcePath);
+        if (!exists) {
+          skippedFiles.push(normalizedPath);
+          continue;
+        }
 
-      const sourceStat = await stat(sourcePath);
-      const targetPath = join(worktreePath, normalizedPath);
-      if (sourceStat.isDirectory()) {
-        await mkdir(dirname(targetPath), { recursive: true });
-        await cp(sourcePath, targetPath, { recursive: true, errorOnExist: false, force: true });
-      } else {
-        await mkdir(dirname(targetPath), { recursive: true });
-        await cp(sourcePath, targetPath, { errorOnExist: false, force: true });
+        const sourceStat = await stat(sourcePath);
+        const targetPath = join(worktreePath, normalizedPath);
+        if (sourceStat.isDirectory()) {
+          await mkdir(dirname(targetPath), { recursive: true });
+          await cp(sourcePath, targetPath, { recursive: true, errorOnExist: false, force: true });
+        } else {
+          await mkdir(dirname(targetPath), { recursive: true });
+          await cp(sourcePath, targetPath, { errorOnExist: false, force: true });
+        }
+        migratedFiles.push(normalizedPath);
       }
-      migratedFiles.push(normalizedPath);
     }
   } catch (err) {
     await removeWorktree({ enabled: true, sourceRoot, rootPath: worktreePath, branchName }, { force: true });
@@ -187,6 +209,7 @@ export async function prepareWorktree({ repoRoot, taskId, worktree, worktreeName
     migratedFiles,
     skippedFiles,
     removeOnComplete: worktreeConfig.removeOnComplete,
+    setupScript: worktreeConfig.setupScript,
   };
 }
 

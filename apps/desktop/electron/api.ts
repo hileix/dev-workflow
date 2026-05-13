@@ -95,7 +95,7 @@ export async function listWorkflows() {
           groups: workflowConfig.groups,
           workflowConfig,
           taskInputFields: deriveTaskInputFields(raw),
-          worktree: raw.worktree || { enabled: false, files: [] },
+          worktree: raw.worktree || { enabled: false, files: [], customFiles: [], removeOnComplete: false, useCustomSetupScript: false, setupScript: "" },
         });
       } catch {}
     }
