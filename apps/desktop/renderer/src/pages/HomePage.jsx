@@ -62,7 +62,7 @@ function TaskCard({ task, onClick, t }) {
 
   return (
     <div
-      className={`inline-block min-w-[18rem] overflow-hidden rounded-2xl border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset] cursor-pointer transition-colors hover:bg-accent/65 ${
+      className={`w-52 max-w-full flex-none overflow-hidden rounded-2xl border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset] cursor-pointer transition-colors hover:bg-accent/65 ${
         task.status === "failed"
           ? "border-2 border-destructive"
           : task.status === "awaiting_input"
@@ -71,9 +71,10 @@ function TaskCard({ task, onClick, t }) {
       }`}
       onClick={onClick}
     >
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-        <span className="text-sm font-semibold text-foreground">{taskId}</span>
+      <div className="flex min-w-0 items-center gap-3 px-4 py-3 border-b border-border">
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground" title={taskId}>{taskId}</span>
         <Badge
+          className="shrink-0"
           variant={
             task.status === "completed" ? "success" :
             task.status === "awaiting_input" ? "warning" :
@@ -99,7 +100,7 @@ function TaskCard({ task, onClick, t }) {
             return (
               <div key={g.key} className="flex items-center gap-2.5">
                 <StepCheckbox status={groupStatus} />
-                <span className="text-sm text-foreground">{g.label}</span>
+                <span className="min-w-0 truncate text-sm text-foreground">{g.label}</span>
               </div>
             );
           })}

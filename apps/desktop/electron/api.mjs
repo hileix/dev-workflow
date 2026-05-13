@@ -23,7 +23,7 @@ import {
   unloadWorkflow,
 } from "../../../packages/core-models/workflow.mjs";
 import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index.mjs";
-import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
+import { readWorkfolders, saveWorkfolders, deleteTask, removeTaskWorktree } from "../../../packages/core-models/workfolders.mjs";
 import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills.mjs";
 import { getPhaseContent, getPhaseOutputArtifactPath, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
@@ -357,6 +357,13 @@ export async function removeTask(taskId, runId = "", options = {}) {
   stopActiveWorkflow(taskId, safeRunId);
   await deleteTask(taskId, safeRunId, { removeWorktree: Boolean(options?.removeWorktree) });
   return { ok: true };
+}
+
+export async function removeTaskWorktreeOnly(taskId, runId = "") {
+  if (!taskId) throw new Error("taskId required");
+  const safeRunId = assertSafeRunId(runId);
+  stopActiveWorkflow(taskId, safeRunId);
+  return removeTaskWorktree(taskId, safeRunId);
 }
 
 export async function saveTaskUploads(runId, filePaths) {

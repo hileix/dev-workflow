@@ -1,14 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
-import {
-  Background,
-  BaseEdge,
-  Controls,
-  Handle,
-  MarkerType,
-  Position,
-  ReactFlow,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
+import { useState, useEffect } from "react";
 import { CheckCircle2, Circle, Loader2, RotateCcw, Square, Trash2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import StepDetail from "../StepDetail";
@@ -25,8 +15,6 @@ import { useWorkflowStore } from "../stores/workflowStore";
 import { useConfigStore } from "../stores/configStore";
 
 const appApi = getAppApi();
-const NODE_X = 24;
-const NODE_Y_GAP = 190;
 
 function getStatusTone(status) {
   if (status === "completed") return "success";
@@ -44,130 +32,8 @@ function getStatusLabel(status) {
   return "pending";
 }
 
-function RunStepNode({ data }) {
-  const tone = getStatusTone(data.status);
-  const isCheckpoint = data.type === "checkpoint";
-  const isCondition = data.type === "condition";
-
-  return (
-    <button
-      type="button"
-      className={cn(
-        "w-[270px] rounded-lg border bg-card px-4 py-3 text-left shadow-sm transition-colors",
-        data.selected ? "border-ring ring-2 ring-ring/25" : "border-border hover:border-ring/60",
-        tone === "success" && "border-success/60",
-        tone === "warning" && "border-warning/70",
-        tone === "info" && "border-info/70",
-        tone === "destructive" && "border-destructive/70"
-      )}
-      onClick={(event) => {
-        event.stopPropagation();
-        data.onSelect();
-      }}
-    >
-      <Handle type="target" position={Position.Top} className="!h-3 !w-3 !border-2 !border-card !bg-muted-foreground" />
-      <Handle id="return" type="target" position={Position.Right} isConnectable={false} className="!top-1/2 !h-3 !w-3 !border-0 !bg-transparent" />
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-foreground">{data.label}</div>
-          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{data.id}</div>
-        </div>
-        <Badge
-          variant={
-            tone === "success" ? "success" :
-              tone === "warning" ? "warning" :
-                tone === "info" ? "info" :
-                  tone === "destructive" ? "destructive" : "outline"
-          }
-          className={cn("shrink-0 text-[10px]", tone === "info" && "animate-pulse-subtle")}
-        >
-          {getStatusLabel(data.status)}
-        </Badge>
-      </div>
-      <div className="mt-3 flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
-        <span>{isCheckpoint ? "checkpoint" : isCondition ? "conditional gate" : data.backend || "agent"}</span>
-        {data.updated && <span className="font-mono">{data.updated}</span>}
-      </div>
-      <div className="mt-1 truncate text-[10px] text-muted-foreground">outputs: {data.outputs}</div>
-      {isCheckpoint ? (
-        <>
-          <Handle id="approve" type="source" position={Position.Bottom} className="!left-1/2 !h-3 !w-3 !-translate-x-1/2 !border-2 !border-card !bg-success" />
-          <Handle id="reject" type="source" position={Position.Right} className="!top-1/2 !h-3 !w-3 !-translate-y-1/2 !border-2 !border-card !bg-warning" />
-        </>
-      ) : isCondition ? (
-        <>
-          <Handle id="pass" type="source" position={Position.Bottom} className="!left-1/2 !h-3 !w-3 !-translate-x-1/2 !border-2 !border-card !bg-success" />
-          <Handle id="fail" type="source" position={Position.Right} className="!top-1/2 !h-3 !w-3 !-translate-y-1/2 !border-2 !border-card !bg-warning" />
-        </>
-      ) : (
-        <Handle id="next" type="source" position={Position.Bottom} className="!h-3 !w-3 !border-2 !border-card !bg-primary" />
-      )}
-    </button>
-  );
-}
-
-const runNodeTypes = {
-  runStep: RunStepNode,
-};
-
-function RunRouteEdge({
-  id,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  markerEnd,
-  style,
-  label,
-  labelStyle,
-  labelBgPadding,
-  labelBgBorderRadius,
-  data,
-}) {
-  const isBackRoute = data?.sourceIndex >= data?.targetIndex;
-  const isRejectRoute = data?.routeKind === "reject" || data?.routeKind === "fail";
-  const isReturnRoute = isBackRoute || isRejectRoute;
-  const routeSpan = Math.max(0, (data?.sourceIndex ?? 0) - (data?.targetIndex ?? 0));
-  const sideGap = isRejectRoute ? 28 + routeSpan * 14 : 32;
-  let path;
-  let labelX;
-  let labelY;
-
-  if (isReturnRoute) {
-    const laneX = Math.max(sourceX, targetX) + sideGap;
-    path = `M ${sourceX},${sourceY} H ${laneX} V ${targetY} H ${targetX}`;
-    labelX = laneX;
-    labelY = sourceY + (targetY - sourceY) / 2;
-  } else {
-    const laneY = sourceY + (targetY - sourceY) / 2;
-    path = `M ${sourceX},${sourceY} V ${laneY} H ${targetX} V ${targetY}`;
-    labelX = sourceX + (targetX - sourceX) / 2;
-    labelY = laneY;
-  }
-
-  return (
-    <BaseEdge
-      id={id}
-      path={path}
-      markerEnd={markerEnd}
-      style={style}
-      label={label}
-      labelX={labelX}
-      labelY={labelY}
-      labelStyle={labelStyle}
-      labelBgPadding={labelBgPadding}
-      labelBgBorderRadius={labelBgBorderRadius}
-      interactionWidth={28}
-    />
-  );
-}
-
-const runEdgeTypes = {
-  runRoute: RunRouteEdge,
-};
-
 function getWorktreeDisplayName(worktree) {
-  if (!worktree?.enabled) return "";
+  if (!worktree || (!worktree.enabled && !worktree.cleaned)) return "";
   if (worktree.branchName) return worktree.branchName;
   if (worktree.rootPath) {
     const parts = String(worktree.rootPath).split(/[/\\]/).filter(Boolean);
@@ -203,110 +69,117 @@ function getPhaseOutputSummary(phaseId, workflowConfig) {
   return outputs.map((output) => output.key || output.filename).filter(Boolean).join(", ") || "none";
 }
 
-function buildRunNodes({ phases, workflowConfig, selectedPhase, onSelect }) {
-  const nodePositions = Object.fromEntries((workflowConfig?.graph?.nodes || []).map((node, index) => [
-    node.id,
-    node.position || { x: NODE_X, y: 80 + index * NODE_Y_GAP },
-  ]));
-  return (phases || []).map((phase, index) => {
-    const phaseId = phase.id || phase.name;
-    const position = nodePositions[phaseId] || { x: NODE_X, y: 80 + index * NODE_Y_GAP };
-    return {
-      id: phaseId,
-      type: "runStep",
-      position,
-      data: {
-        id: phaseId,
-        label: workflowConfig?.phaseLabels?.[phaseId] || phaseId,
-        type: workflowConfig?.phaseTypes?.[phaseId] || "auto",
-        backend: workflowConfig?.phaseBackends?.[phaseId] || "",
-        status: phase.status || "pending",
-        updated: formatNodeUpdated(phase.updated),
-        outputs: getPhaseOutputSummary(phaseId, workflowConfig),
-        selected: phaseId === selectedPhase,
-        onSelect: () => onSelect(phaseId),
-      },
-    };
-  });
-}
+function getPhaseRouteLabels(phaseId, workflowConfig) {
+  const phaseType = workflowConfig?.phaseTypes?.[phaseId] || "auto";
+  const labels = [];
 
-function buildRunEdges(phases, workflowConfig) {
-  const ids = (phases || []).map((phase) => phase.id || phase.name).filter(Boolean);
-  const knownIds = new Set(ids);
-  const phaseIndexById = new Map(ids.map((id, index) => [id, index]));
-  const edges = [];
-
-  const getBaseEdge = (phaseId, targetId, sourceHandle, label, color, dashed = false, edgeId = "") => ({
-    id: edgeId || `${phaseId}-${sourceHandle}-${targetId}`,
-    source: phaseId,
-    target: targetId,
-    sourceHandle,
-    targetHandle: sourceHandle === "reject" || sourceHandle === "fail" ? "return" : undefined,
-    label,
-    type: "runRoute",
-    animated: dashed,
-    markerEnd: { type: MarkerType.ArrowClosed, color },
-    style: { stroke: color, strokeWidth: 1.8, ...(dashed ? { strokeDasharray: "5 4" } : {}) },
-    labelStyle: { fill: color, fontSize: 11, fontWeight: 700 },
-    labelBgPadding: [6, 3],
-    labelBgBorderRadius: 4,
-    data: {
-      routeKind: sourceHandle,
-      sourceIndex: phaseIndexById.get(phaseId) ?? 0,
-      targetIndex: phaseIndexById.get(targetId) ?? 0,
-    },
-  });
-
-  const graphEdges = workflowConfig?.graph?.edges || [];
-  if (graphEdges.length > 0) {
-    for (const edge of graphEdges) {
-      if (!knownIds.has(edge.source) || !knownIds.has(edge.target)) continue;
-      const routeKind = edge.routeKind || edge.sourceHandle || "next";
-      const color = routeKind === "reject" || routeKind === "fail"
-        ? "#d97706"
-        : routeKind === "approve" || routeKind === "pass"
-          ? "#16a34a"
-          : "#2563eb";
-      edges.push(getBaseEdge(
-        edge.source,
-        edge.target,
-        edge.sourceHandle || routeKind,
-        edge.label || "",
-        color,
-        routeKind === "reject" || routeKind === "fail",
-        edge.id,
-      ));
-    }
-    return edges;
+  if (phaseType === "condition") {
+    const conditionRoutes = workflowConfig?.conditionRoutes?.[phaseId] || {};
+    if (conditionRoutes.passTo) labels.push(`pass -> ${conditionRoutes.passTo}`);
+    if (conditionRoutes.failTo) labels.push(`fail -> ${conditionRoutes.failTo}`);
   }
 
-  ids.forEach((phaseId, index) => {
-    const nextId = ids[index + 1];
-    const phaseType = workflowConfig?.phaseTypes?.[phaseId] || "auto";
-    const conditionRoutes = workflowConfig?.conditionRoutes?.[phaseId] || {};
+  if (phaseType === "checkpoint") {
+    labels.push("approve -> next");
+  }
 
-    if (phaseType === "condition") {
-      if (conditionRoutes.passTo && knownIds.has(conditionRoutes.passTo)) {
-        edges.push(getBaseEdge(phaseId, conditionRoutes.passTo, "pass", "pass", "#16a34a"));
-      }
-      if (conditionRoutes.failTo && knownIds.has(conditionRoutes.failTo)) {
-        edges.push(getBaseEdge(phaseId, conditionRoutes.failTo, "fail", "fail", "#d97706", true));
-      }
-      return;
-    }
-
-    if (nextId) {
-      edges.push(getBaseEdge(phaseId, nextId, "next", "", "#2563eb"));
-    }
-
-    const rejectTargets = workflowConfig?.rejectTargets?.[phaseId] || [];
-    rejectTargets.forEach((targetId) => {
-      if (!knownIds.has(targetId)) return;
-      edges.push(getBaseEdge(phaseId, targetId, "reject", "reject", "#d97706", true));
-    });
+  const rejectTargets = workflowConfig?.rejectTargets?.[phaseId] || [];
+  rejectTargets.forEach((targetId) => {
+    labels.push(`reject -> ${targetId}`);
   });
 
-  return edges;
+  return labels;
+}
+
+function RunStepList({ phases, workflowConfig, selectedPhase, onSelect }) {
+  if (!phases.length) {
+    return (
+      <div className="px-4 py-6 text-sm text-muted-foreground">
+        No workflow steps yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 p-4">
+      {phases.map((phase, index) => {
+        const phaseId = phase.id || phase.name;
+        const tone = getStatusTone(phase.status);
+        const phaseType = workflowConfig?.phaseTypes?.[phaseId] || "auto";
+        const routes = getPhaseRouteLabels(phaseId, workflowConfig);
+        const selected = phaseId === selectedPhase;
+
+        return (
+          <button
+            key={phaseId}
+            type="button"
+            className={cn(
+              "group w-full rounded-lg border bg-card px-3.5 py-3 text-left shadow-sm transition-colors",
+              selected ? "border-ring ring-2 ring-ring/20" : "border-border hover:border-ring/60 hover:bg-accent/45",
+              tone === "success" && "border-success/60",
+              tone === "warning" && "border-warning/70",
+              tone === "info" && "border-info/70",
+              tone === "destructive" && "border-destructive/70"
+            )}
+            onClick={() => onSelect(phaseId)}
+          >
+            <div className="flex min-w-0 items-start gap-3">
+              <span className={cn(
+                "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold",
+                selected ? "border-ring bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground"
+              )}>
+                {index + 1}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex min-w-0 items-start justify-between gap-2">
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-foreground">
+                      {workflowConfig?.phaseLabels?.[phaseId] || phaseId}
+                    </span>
+                    <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">
+                      {phaseId}
+                    </span>
+                  </span>
+                  <Badge
+                    variant={
+                      tone === "success" ? "success" :
+                        tone === "warning" ? "warning" :
+                          tone === "info" ? "info" :
+                            tone === "destructive" ? "destructive" : "outline"
+                    }
+                    className={cn("shrink-0 text-[10px]", tone === "info" && "animate-pulse-subtle")}
+                  >
+                    {getStatusLabel(phase.status)}
+                  </Badge>
+                </span>
+                <span className="mt-3 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                  <span className="rounded-md bg-muted px-1.5 py-0.5">{phaseType === "condition" ? "conditional gate" : phaseType}</span>
+                  {workflowConfig?.phaseBackends?.[phaseId] && (
+                    <span className="rounded-md bg-muted px-1.5 py-0.5">{workflowConfig.phaseBackends[phaseId]}</span>
+                  )}
+                  {phase.updated && (
+                    <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono">{formatNodeUpdated(phase.updated)}</span>
+                  )}
+                </span>
+                <span className="mt-2 block truncate text-[11px] text-muted-foreground">
+                  outputs: {getPhaseOutputSummary(phaseId, workflowConfig)}
+                </span>
+                {routes.length > 0 && (
+                  <span className="mt-2 flex flex-wrap gap-1.5">
+                    {routes.map((route) => (
+                      <span key={route} className="rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                        {route}
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </span>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function getCheckpointInputDocument(phaseId, workflowConfig, phaseOutputArtifacts, contextValues) {
@@ -480,6 +353,8 @@ export default function TicketPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteWorktree, setDeleteWorktree] = useState(false);
   const [isDeletingTask, setIsDeletingTask] = useState(false);
+  const [showRemoveWorktreeConfirm, setShowRemoveWorktreeConfirm] = useState(false);
+  const [isRemovingWorktree, setIsRemovingWorktree] = useState(false);
   const navigate = useNavigate();
   const { id: urlTicketId } = useParams();
   const [searchParams] = useSearchParams();
@@ -513,12 +388,17 @@ export default function TicketPage() {
   const restartPhase = useWorkflowStore((s) => s.restartPhase);
   const pausePhase = useWorkflowStore((s) => s.pausePhase);
   const deleteTask = useWorkflowStore((s) => s.deleteTask);
+  const removeTaskWorktree = useWorkflowStore((s) => s.removeTaskWorktree);
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
   const runWorkflowConfig = workflowState?.workflowConfig || workflowConfig;
 
   const taskId = urlTicketId || activeTicket;
-  const worktreeDisplayName = getWorktreeDisplayName(workflowState?.worktree);
-  const hasWorktree = Boolean(workflowState?.worktree?.enabled);
+  const [cleanedWorktree, setCleanedWorktree] = useState(null);
+  const visibleWorktree = workflowState?.worktree || cleanedWorktree;
+  const worktreeDisplayName = getWorktreeDisplayName(visibleWorktree);
+  const hasWorktreeRecord = Boolean(visibleWorktree?.enabled || visibleWorktree?.cleaned);
+  const isWorktreeCleaned = Boolean(visibleWorktree?.cleaned);
+  const hasWorktree = Boolean(visibleWorktree?.enabled);
   const currentPhase = workflowState?.currentPhase;
   const phases = workflowState?.phases || [];
   const selectedRunPhase = selectedPhase;
@@ -571,13 +451,12 @@ export default function TicketPage() {
     workflowConfig: runWorkflowConfig,
     connectionState,
   });
-  const runNodes = useMemo(() => buildRunNodes({
-    phases,
-    workflowConfig: runWorkflowConfig,
-    selectedPhase: detailPhase,
-    onSelect: setSelectedPhase,
-  }), [phases, runWorkflowConfig, detailPhase, setSelectedPhase]);
-  const runEdges = useMemo(() => buildRunEdges(phases, runWorkflowConfig), [phases, runWorkflowConfig]);
+
+  useEffect(() => {
+    if (workflowState?.worktree?.enabled) {
+      setCleanedWorktree(null);
+    }
+  }, [workflowState?.worktree?.enabled]);
 
   async function handleDelete() {
     if (isDeletingTask) return;
@@ -624,6 +503,23 @@ export default function TicketPage() {
     }
   }
 
+  async function handleRemoveWorktree() {
+    if (!taskId || isRemovingWorktree) return;
+    const previousWorktree = visibleWorktree;
+    setIsRemovingWorktree(true);
+    const removed = await removeTaskWorktree(taskId, workflowState?.runId || urlRunId);
+    setIsRemovingWorktree(false);
+    if (removed) {
+      setCleanedWorktree({
+        ...(previousWorktree || {}),
+        enabled: false,
+        cleaned: true,
+      });
+      setShowRemoveWorktreeConfirm(false);
+    }
+    if (!removed) showToast(t("ticket.removeWorktreeFailed"));
+  }
+
   async function handleOpenDocument() {
     if (!taskId || !documentOpenTarget) return;
     try {
@@ -658,19 +554,39 @@ export default function TicketPage() {
             <h1 className="truncate text-[18px] font-semibold text-foreground">{taskId}</h1>
           </div>
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2.5">
-            {workflowState?.worktree?.enabled && (
-              <Badge
-                as="button"
-                type="button"
-                variant="secondary"
-                className="cursor-pointer border border-transparent hover:border-border/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                title={workflowState.worktree.rootPath || worktreeDisplayName}
-                onClick={handleOpenWorktree}
-              >
-                {worktreeDisplayName
-                  ? t("ticket.gitWorktreeNamed", { name: worktreeDisplayName })
-                  : t("ticket.gitWorktree")}
-              </Badge>
+            {hasWorktreeRecord && (
+              <div className="flex items-center gap-1.5 rounded-full bg-secondary/70 p-0.5">
+                <Badge
+                  as="button"
+                  type="button"
+                  variant="secondary"
+                  className={cn(
+                    "border border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                    isWorktreeCleaned
+                      ? "cursor-not-allowed opacity-60"
+                      : "cursor-pointer hover:border-border/80"
+                  )}
+                  title={isWorktreeCleaned ? t("ticket.gitWorktreeCleaned") : visibleWorktree.rootPath || worktreeDisplayName}
+                  onClick={handleOpenWorktree}
+                  disabled={isWorktreeCleaned}
+                >
+                  {worktreeDisplayName
+                    ? t("ticket.gitWorktreeNamed", { name: worktreeDisplayName })
+                    : t("ticket.gitWorktree")}
+                </Badge>
+                {!isWorktreeCleaned && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                  size="sm"
+                  className="h-6 rounded-full px-2 text-xs text-muted-foreground hover:text-destructive"
+                  onClick={() => setShowRemoveWorktreeConfirm(true)}
+                  disabled={isRemovingWorktree}
+                >
+                    {isRemovingWorktree ? <Loader2 className="h-3 w-3 animate-spin" /> : t("ticket.removeWorktree")}
+                  </Button>
+                )}
+              </div>
             )}
             {isStreaming && (
               <Badge variant="info" className="animate-pulse-subtle">{t("ticket.working")}</Badge>
@@ -701,34 +617,21 @@ export default function TicketPage() {
             />
           </div>
         </div>
-        <div className="grid flex-1 min-h-0 grid-cols-[320px_minmax(0,1fr)] bg-background/55">
+        <div className="grid flex-1 min-h-0 grid-cols-[340px_minmax(0,1fr)] bg-background/55">
           <aside className="flex min-h-0 flex-col overflow-hidden border-r border-border bg-card/70">
             <div className="border-b border-border px-4 py-3">
               <div className="min-w-0">
-                <h2 className="text-sm font-semibold text-foreground">Task Run Graph</h2>
+                <h2 className="text-sm font-semibold text-foreground">Task Steps</h2>
                 <p className="text-xs text-muted-foreground">Workflow execution order.</p>
               </div>
             </div>
-            <div className="min-h-0 flex-1">
-              <ReactFlow
-                nodes={runNodes}
-                edges={runEdges}
-                nodeTypes={runNodeTypes}
-                edgeTypes={runEdgeTypes}
-                onNodeClick={(event, node) => {
-                  event.stopPropagation();
-                  setSelectedPhase(node.id);
-                }}
-                defaultViewport={{ x: 16, y: 36, zoom: 0.92 }}
-                nodesDraggable={false}
-                nodesConnectable={false}
-                elementsSelectable
-                deleteKeyCode={null}
-                proOptions={{ hideAttribution: true }}
-              >
-                <Background color="var(--border-color)" gap={18} />
-                <Controls showInteractive={false} />
-              </ReactFlow>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <RunStepList
+                phases={phases}
+                workflowConfig={runWorkflowConfig}
+                selectedPhase={detailPhase}
+                onSelect={setSelectedPhase}
+              />
             </div>
           </aside>
 
@@ -783,6 +686,35 @@ export default function TicketPage() {
       </div>
 
       <StartupProgressModal steps={startupSteps} t={t} />
+
+      {showRemoveWorktreeConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => {
+            if (!isRemovingWorktree) setShowRemoveWorktreeConfirm(false);
+          }}
+        >
+          <div className="bg-card border border-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-foreground mb-2">{t("ticket.removeWorktreeConfirmTitle")}</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              {t("ticket.removeWorktreeConfirm", { name: worktreeDisplayName || taskId })}
+            </p>
+            <div className="flex justify-end gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowRemoveWorktreeConfirm(false)}
+                disabled={isRemovingWorktree}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button variant="destructive" size="sm" onClick={handleRemoveWorktree} disabled={isRemovingWorktree}>
+                {isRemovingWorktree ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("ticket.removeWorktree")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showDeleteConfirm && (
         <div

@@ -29,6 +29,7 @@ import {
   getTaskState,
   getTaskOutputPath,
   removeTask,
+  removeTaskWorktreeOnly,
   saveTaskUploads,
 } from "./api.mjs";
 import {
@@ -154,6 +155,7 @@ function registerIpcHandlers() {
     openInCode(await getTaskOutputPath(taskId, runId, phaseId, outputKey))
   );
   ipcMain.handle("app:remove-task", (_event, taskId, runId, options) => removeTask(taskId, runId, options));
+  ipcMain.handle("app:remove-task-worktree", (_event, taskId, runId) => removeTaskWorktreeOnly(taskId, runId));
   ipcMain.handle("app:save-task-uploads", (_event, taskId, filePaths) => saveTaskUploads(taskId, filePaths));
   ipcMain.handle("app:start-workflow", (event, payload) =>
     startWorkflowSession(
