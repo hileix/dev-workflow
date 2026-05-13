@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Settings2, X } from "lucide-react";
 import { Button } from "../components/ui/button";
@@ -327,32 +327,40 @@ export default function HomePage() {
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
   const loadWorkFolders = useConfigStore((s) => s.loadWorkFolders);
   const workflowState = useWorkflowStore((s) => s.workflowState);
+  const workflowStatesByRun = useWorkflowStore((s) => s.workflowStatesByRun);
+  const syncTaskSummaries = useWorkflowStore((s) => s.syncTaskSummaries);
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow);
   const loadTicket = useWorkflowStore((s) => s.loadTicket);
   const visibleWorkflows = workflows.filter((workflow) => workflow.visible !== false);
 
   useEffect(() => { loadWorkFolders(); }, []);
-  const tasks = workFolders.flatMap((folder) =>
+  const taskSummaries = useMemo(() => workFolders.flatMap((folder) =>
     (folder.tasks || []).map((task) => ({
       ...task,
       taskId: task.taskId || task.ticketId || "",
       workFolderPath: folder.path,
       workFolderName: folder.name,
     }))
-  ).map((task) => {
-    const stateRunId = workflowState?.runId || "";
-    const taskRunId = task.runId || "";
+  ), [workFolders]);
+  useEffect(() => {
+    syncTaskSummaries(taskSummaries);
+  }, [taskSummaries, syncTaskSummaries]);
+  const tasks = taskSummaries.map((task) => {
+    const taskRunId = task.runId || task.taskId || "";
+    const sharedState = workflowStatesByRun[`${task.taskId}:${taskRunId}`];
+    const state = sharedState || workflowState;
+    const stateRunId = state?.runId || "";
     if (
-      workflowState &&
-      task.taskId === workflowState.taskId &&
+      state &&
+      task.taskId === state.taskId &&
       taskRunId === stateRunId &&
-      workflowState.overallStatus !== "completed"
+      state.overallStatus !== "completed"
     ) {
       return {
         ...task,
-        status: workflowState.overallStatus,
-        phases: workflowState.phases,
-        workflowConfig: workflowState.workflowConfig || task.workflowConfig,
+        status: state.overallStatus,
+        phases: state.phases,
+        workflowConfig: state.workflowConfig || task.workflowConfig,
       };
     }
     return task;

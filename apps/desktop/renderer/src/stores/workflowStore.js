@@ -24,6 +24,51 @@ function playNotificationSound() {
 let prevStatusRef = {};
 let unsubscribeWorkflowEvents = null;
 
+function getWorkflowStateKey(taskId, runId = "") {
+  const id = taskId || "";
+  const run = runId || taskId || "";
+  return `${id}:${run}`;
+}
+
+function getCurrentPhaseFromTask(task) {
+  if (task.status === "completed") return "completed";
+  const activePhase = (task.phases || []).find((phase) =>
+    phase.status === "in_progress" || phase.status === "awaiting_input" || phase.status === "failed"
+  );
+  return activePhase?.id || activePhase?.name || task.phases?.[0]?.id || null;
+}
+
+function getWorkflowStateFromTask(task) {
+  const taskId = task.taskId || task.ticketId || "";
+  if (!taskId) return null;
+  const runId = task.runId || taskId;
+  return {
+    taskId,
+    runId,
+    workFolder: task.workFolderPath || "",
+    currentPhase: getCurrentPhaseFromTask(task),
+    overallStatus: task.status || "pending",
+    workflowConfig: task.workflowConfig || null,
+    phases: task.phases || [],
+  };
+}
+
+function mergeWorkflowStates(baseState, overrideState) {
+  if (!baseState) return overrideState;
+  if (!overrideState) return baseState;
+  return {
+    ...baseState,
+    ...overrideState,
+    workFolder: overrideState.workFolder || baseState.workFolder,
+    workflowFilename: overrideState.workflowFilename || baseState.workflowFilename,
+    workflowConfig: overrideState.workflowConfig || baseState.workflowConfig,
+    workflowDefinition: overrideState.workflowDefinition || baseState.workflowDefinition,
+    contextValues: overrideState.contextValues || baseState.contextValues,
+    worktree: overrideState.worktree || baseState.worktree,
+    phases: overrideState.phases?.length > 0 ? overrideState.phases : baseState.phases || [],
+  };
+}
+
 function createDebugEvent(payload, source = "workflow") {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -80,20 +125,26 @@ function markPhaseRunning(set, phaseId) {
   if (!phaseId) return;
   set((state) => {
     if (!state.workflowState) return {};
+    const workflowState = {
+      ...state.workflowState,
+      currentPhase: phaseId,
+      overallStatus: "in_progress",
+      phases: (state.workflowState.phases || []).map((phase) => ({
+        ...phase,
+        status: phase.id === phaseId
+          ? "in_progress"
+          : phase.status === "in_progress"
+            ? "completed"
+            : phase.status,
+      })),
+    };
+    const stateKey = getWorkflowStateKey(workflowState.taskId, workflowState.runId);
     return {
       selectedPhase: phaseId,
-      workflowState: {
-        ...state.workflowState,
-        currentPhase: phaseId,
-        overallStatus: "in_progress",
-        phases: (state.workflowState.phases || []).map((phase) => ({
-          ...phase,
-          status: phase.id === phaseId
-            ? "in_progress"
-            : phase.status === "in_progress"
-              ? "completed"
-              : phase.status,
-        })),
+      workflowState,
+      workflowStatesByRun: {
+        ...state.workflowStatesByRun,
+        [stateKey]: workflowState,
       },
     };
   });
@@ -156,7 +207,14 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
       }));
     } else if (msg.type === "state") {
       const state = msg.state;
-      set({ workflowState: state });
+      const stateKey = getWorkflowStateKey(state.taskId, state.runId);
+      set((current) => ({
+        workflowState: state,
+        workflowStatesByRun: {
+          ...current.workflowStatesByRun,
+          [stateKey]: state,
+        },
+      }));
 
       const prevPhase = prevStatusRef._currentPhase;
 
@@ -249,6 +307,7 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
 export const useWorkflowStore = create((set, get) => ({
   activeTicket: null,
   workflowState: null,
+  workflowStatesByRun: {},
   selectedPhase: null,
   phaseMessages: {},
   phaseOutputArtifacts: {},
@@ -270,29 +329,78 @@ export const useWorkflowStore = create((set, get) => ({
     setTimeout(() => set({ toast: null }), duration);
   },
 
+  syncTaskSummaries(tasks) {
+    if (!Array.isArray(tasks) || tasks.length === 0) return;
+    set((state) => {
+      const workflowStatesByRun = { ...state.workflowStatesByRun };
+      let changed = false;
+
+      for (const task of tasks) {
+        const summaryState = getWorkflowStateFromTask(task);
+        if (!summaryState) continue;
+        const stateKey = getWorkflowStateKey(summaryState.taskId, summaryState.runId);
+        const existingState = workflowStatesByRun[stateKey];
+        if (existingState?.overallStatus === "completed") continue;
+        workflowStatesByRun[stateKey] = mergeWorkflowStates(existingState, summaryState);
+        changed = true;
+      }
+
+      if (!changed) return {};
+      const activeState = state.workflowState;
+      const activeKey = getWorkflowStateKey(activeState?.taskId, activeState?.runId);
+      return {
+        workflowStatesByRun,
+        workflowState: workflowStatesByRun[activeKey] || activeState,
+      };
+    });
+  },
+
   async loadTicket(taskId, runId) {
     try {
+      const stateKey = getWorkflowStateKey(taskId, runId);
+      const cachedState = get().workflowStatesByRun[stateKey];
+      if (cachedState) {
+        const selectedPhase = cachedState.currentPhase && cachedState.currentPhase !== "completed"
+          ? cachedState.currentPhase
+          : cachedState.phases?.[0]?.id || null;
+        set({
+          activeTicket: taskId,
+          workflowState: cachedState,
+          selectedPhase,
+          connectionState: cachedState.overallStatus === "completed" ? "disconnected" : get().connectionState,
+        });
+      }
+
       const { state, messages, outputArtifacts, interactions } = await desktopApi.getTaskState(taskId, runId);
-      const selectedPhase = state.currentPhase && state.currentPhase !== "completed"
+      const currentState = get().workflowStatesByRun[stateKey];
+      const displayState = mergeWorkflowStates(state, currentState);
+      const selectedPhase = displayState.currentPhase && displayState.currentPhase !== "completed"
+        ? displayState.currentPhase
+        : displayState.phases?.[0]?.id || null;
+      const fetchedSelectedPhase = state.currentPhase && state.currentPhase !== "completed"
         ? state.currentPhase
         : state.phases?.[0]?.id || null;
       set({
         activeTicket: taskId,
-        workflowState: state,
+        workflowState: displayState,
         phaseMessages: messages || {},
         phaseOutputArtifacts: outputArtifacts || {},
         phaseInteractions: interactions || {},
-        selectedPhase,
+        selectedPhase: currentState ? selectedPhase : fetchedSelectedPhase,
         isStreaming: false,
         streamingPhase: null,
-        connectionState: state.overallStatus === "completed" ? "disconnected" : "connecting",
+        connectionState: displayState.overallStatus === "completed" ? "disconnected" : "connecting",
         debugEvents: [],
         lastEventAt: null,
         lastError: null,
+        workflowStatesByRun: {
+          ...get().workflowStatesByRun,
+          [stateKey]: displayState,
+        },
       });
 
-      if (state.workFolder && state.overallStatus !== "completed") {
-        get().connectWorkflow(taskId, state.workFolder, undefined, undefined, state.runId || runId || "", "", state.workflowFilename || "");
+      if (displayState.workFolder && displayState.overallStatus !== "completed") {
+        get().connectWorkflow(taskId, displayState.workFolder, undefined, undefined, displayState.runId || runId || "", "", displayState.workflowFilename || "");
       }
     } catch {}
   },
@@ -321,25 +429,32 @@ export const useWorkflowStore = create((set, get) => ({
     const phaseOrder = runWorkflowConfig?.phaseOrder || [];
     const firstPhase = phaseOrder[0] || null;
 
+    const workflowState = {
+      taskId: id,
+      runId: runId || id,
+      currentPhase: null,
+      overallStatus: "loading",
+      workflowFilename: workflowFilename || runWorkflowConfig?.activeWorkflow || "",
+      workflowConfig: runWorkflowConfig,
+      phases: phaseOrder.map((pid) => ({
+        id: pid,
+        name: pid,
+        status: "pending",
+        updated: null,
+      })),
+    };
+    const stateKey = getWorkflowStateKey(id, workflowState.runId);
+
     set({
       activeTicket: id,
       selectedPhase: firstPhase,
       phaseMessages: {},
       phaseOutputArtifacts: {},
       phaseInteractions: {},
-      workflowState: {
-        taskId: id,
-        runId: runId || id,
-        currentPhase: null,
-        overallStatus: "loading",
-        workflowFilename: workflowFilename || runWorkflowConfig?.activeWorkflow || "",
-        workflowConfig: runWorkflowConfig,
-        phases: phaseOrder.map((pid) => ({
-          id: pid,
-          name: pid,
-          status: "pending",
-          updated: null,
-        })),
+      workflowState,
+      workflowStatesByRun: {
+        ...get().workflowStatesByRun,
+        [stateKey]: workflowState,
       },
       connectionState: "connecting",
       debugEvents: [],
@@ -400,6 +515,15 @@ export const useWorkflowStore = create((set, get) => ({
           }
         : state.workflowState,
     }));
+    const nextState = get().workflowState;
+    if (nextState) {
+      set((state) => ({
+        workflowStatesByRun: {
+          ...state.workflowStatesByRun,
+          [getWorkflowStateKey(nextState.taskId, nextState.runId)]: nextState,
+        },
+      }));
+    }
     try {
       await desktopApi.restartWorkflowPhase(activeTicket, phase, workflowState?.runId || "");
     } catch (err) {
@@ -425,6 +549,15 @@ export const useWorkflowStore = create((set, get) => ({
           }
         : state.workflowState,
     }));
+    const nextState = get().workflowState;
+    if (nextState) {
+      set((state) => ({
+        workflowStatesByRun: {
+          ...state.workflowStatesByRun,
+          [getWorkflowStateKey(nextState.taskId, nextState.runId)]: nextState,
+        },
+      }));
+    }
     try {
       await desktopApi.pauseWorkflowPhase(activeTicket, phase, workflowState?.runId || "");
     } catch (err) {
@@ -444,9 +577,12 @@ export const useWorkflowStore = create((set, get) => ({
       }
       desktopApi.detachWorkflow(targetTaskId, targetRunId);
       await desktopApi.removeTask(targetTaskId, targetRunId, options);
+      const stateKey = getWorkflowStateKey(targetTaskId, targetRunId);
+      const { [stateKey]: _removed, ...workflowStatesByRun } = get().workflowStatesByRun;
       set({
         activeTicket: null,
         workflowState: null,
+        workflowStatesByRun,
         phaseMessages: {},
         phaseOutputArtifacts: {},
         phaseInteractions: {},
