@@ -60,18 +60,9 @@ function migrateLegacyWorkflowsSync() {
   }
 }
 
-function getStepAgent(workflow, step) {
-  if (step.type !== "agent" && step.type !== "condition") return "";
-  if (step.agent) return step.agent;
-  if (step.contextGroup) {
-    return workflow.contextGroups.find((group) => group.id === step.contextGroup)?.agent || "";
-  }
-  return "";
-}
-
 function getStepBackend(workflow, step) {
-  const agentId = getStepAgent(workflow, step);
-  return workflow.agents?.[agentId]?.backend || "";
+  if (step.type !== "agent" && step.type !== "condition") return "";
+  return step.backend || workflow?.runtime?.backend || "";
 }
 
 export function getWorkflowStepOrder(workflow = WORKFLOW) {
@@ -147,22 +138,22 @@ export function interpolate(template, vars) {
   return String(template || "").replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? "");
 }
 
-export function deriveContextFields(workflow = WORKFLOW) {
-  const contextFields = [];
+export function deriveTaskInputFields(workflow = WORKFLOW) {
+  const taskInputFields = [];
   const seen = new Set();
   for (const step of workflow?.steps || []) {
     for (const input of step.inputs || []) {
-      if (input?.sourceType !== "workflow_context" || !input.name || seen.has(input.name)) continue;
+      if (input?.sourceType !== "task_input" || !input.name || seen.has(input.name)) continue;
       seen.add(input.name);
-      contextFields.push({
+      taskInputFields.push({
         key: input.name,
-        label: input.contextLabel || input.name,
-        placeholder: input.contextPlaceholder || "",
+        label: input.inputLabel || input.name,
+        placeholder: input.inputPlaceholder || "",
         required: input.required !== false,
       });
     }
   }
-  return contextFields;
+  return taskInputFields;
 }
 
 export function getWorkflowConfigShape(workflow = WORKFLOW) {
@@ -179,7 +170,7 @@ export function getWorkflowConfigShape(workflow = WORKFLOW) {
       phaseBackends: {},
       rejectTargets: {},
       conditionRoutes: {},
-      contextFields: [],
+      taskInputFields: [],
       worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false },
     };
   }
@@ -196,16 +187,16 @@ export function getWorkflowConfigShape(workflow = WORKFLOW) {
   const conditionRoutes = {};
 
   for (const step of workflow.steps) {
-    const groupKey = step.contextGroup || step.id;
-    const groupLabel = workflow.contextGroups.find((group) => group.id === step.contextGroup)?.label || step.label || step.id;
+    const groupKey = step.id;
+    const groupLabel = step.label || step.id;
     phaseLabels[step.id] = step.label || step.id;
     phaseTypes[step.id] = step.type === "checkpoint" ? "checkpoint" : step.type === "condition" ? "condition" : "auto";
     phaseInputs[step.id] = (step.inputs || []).map((input) => ({
       name: input.name,
-      sourceType: input.sourceType === "step_output" ? "phase_output" : "workflow_context",
+      sourceType: input.sourceType === "step_output" ? "phase_output" : "task_input",
       phaseId: input.stepId,
       outputKey: input.outputKey,
-      contextLabel: input.contextLabel,
+      inputLabel: input.inputLabel,
       required: input.required,
     }));
     phaseOutputs[step.id] = (step.outputs || []).map((output) => ({
@@ -236,7 +227,7 @@ export function getWorkflowConfigShape(workflow = WORKFLOW) {
     phaseBackends,
     rejectTargets,
     conditionRoutes,
-    contextFields: deriveContextFields(workflow),
+    taskInputFields: deriveTaskInputFields(workflow),
     worktree: workflow.worktree || { enabled: false, files: [], customFiles: [], removeOnComplete: false },
   };
 }
@@ -253,8 +244,8 @@ export function loadWorkflow(path) {
     STEP_META[step.id] = {
       type: step.type === "checkpoint" ? "checkpoint" : step.type === "condition" ? "condition" : "auto",
       label: step.label || step.id,
-      group: step.contextGroup || step.id,
-      groupLabel: workflow.contextGroups.find((group) => group.id === step.contextGroup)?.label || null,
+      group: step.id,
+      groupLabel: null,
       aiBackend: getStepBackend(workflow, step),
     };
   }

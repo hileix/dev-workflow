@@ -6,7 +6,7 @@ const RESERVED_STEP_IDS = new Set([
   "taskDir",
   "currentStep",
   "overallStatus",
-  "contextValues",
+  "taskInputs",
   "sessionMap",
   "stepOutputs",
   "stepArtifacts",
@@ -81,25 +81,15 @@ function normalizeWorkspaceAccess(value, path) {
   return access;
 }
 
-function normalizeAgents(rawAgents) {
-  assertObject(rawAgents, "agents");
-
-  const agents = {};
-  for (const [agentId, rawAgent] of Object.entries(rawAgents)) {
-    const id = assertNonEmptyString(agentId, `agents key`);
-    assertObject(rawAgent, `agents.${id}`);
-    agents[id] = {
-      backend: assertNonEmptyString(rawAgent.backend, `agents.${id}.backend`),
-      skill: normalizeOptionalString(rawAgent.skill),
-      contextKey: normalizeOptionalString(rawAgent.contextKey),
-      model: normalizeOptionalString(rawAgent.model),
-      workspaceAccess: normalizeWorkspaceAccess(rawAgent.workspaceAccess, `agents.${id}.workspaceAccess`),
-      options: normalizeOptions(rawAgent.options, `agents.${id}.options`),
-    };
-  }
-
-  if (Object.keys(agents).length === 0) throw new Error("agents must contain at least one agent");
-  return agents;
+function normalizeRuntime(rawRuntime) {
+  assertObject(rawRuntime, "runtime");
+  return {
+    engine: normalizeOptionalString(rawRuntime.engine) || "langgraph",
+    backend: assertNonEmptyString(rawRuntime.backend, "runtime.backend"),
+    model: normalizeOptionalString(rawRuntime.model),
+    workspaceAccess: normalizeWorkspaceAccess(rawRuntime.workspaceAccess, "runtime.workspaceAccess") || "read",
+    options: normalizeOptions(rawRuntime.options, "runtime.options"),
+  };
 }
 
 function normalizeWorktree(rawWorktree) {
@@ -120,40 +110,17 @@ function normalizeWorktree(rawWorktree) {
   };
 }
 
-function normalizeContextGroups(rawGroups, agents) {
-  if (rawGroups === undefined) return [];
-  if (!Array.isArray(rawGroups)) throw new Error("contextGroups must be an array");
-
-  const seen = new Set();
-  return rawGroups.map((rawGroup, index) => {
-    assertObject(rawGroup, `contextGroups.${index}`);
-    const id = assertNonEmptyString(rawGroup.id, `contextGroups.${index}.id`);
-    if (seen.has(id)) throw new Error(`contextGroups.${index}.id duplicates ${id}`);
-    seen.add(id);
-
-    const agent = assertNonEmptyString(rawGroup.agent, `contextGroups.${index}.agent`);
-    if (!agents[agent]) throw new Error(`contextGroups.${id}.agent references unknown agent ${agent}`);
-
-    return {
-      id,
-      label: normalizeOptionalString(rawGroup.label) || id,
-      agent,
-      sharedSession: rawGroup.sharedSession !== false,
-    };
-  });
-}
-
 function normalizeInput(rawInput, path) {
   assertObject(rawInput, path);
-  const sourceType = normalizeOptionalString(rawInput.sourceType) || "workflow_context";
-  if (sourceType !== "workflow_context" && sourceType !== "step_output") {
-    throw new Error(`${path}.sourceType must be workflow_context or step_output`);
+  const sourceType = normalizeOptionalString(rawInput.sourceType) || "task_input";
+  if (sourceType !== "task_input" && sourceType !== "step_output") {
+    throw new Error(`${path}.sourceType must be task_input or step_output`);
   }
   return {
     name: assertNonEmptyString(rawInput.name, `${path}.name`),
     sourceType,
-    contextLabel: normalizeOptionalString(rawInput.contextLabel),
-    contextPlaceholder: normalizeOptionalString(rawInput.contextPlaceholder),
+    inputLabel: normalizeOptionalString(rawInput.inputLabel),
+    inputPlaceholder: normalizeOptionalString(rawInput.inputPlaceholder),
     stepId: normalizeOptionalString(rawInput.stepId),
     outputKey: normalizeOptionalString(rawInput.outputKey),
     required: rawInput.required !== false,
@@ -181,7 +148,7 @@ function normalizePublishRule(rawRule, path) {
   };
 }
 
-function normalizeStep(rawStep, index, agents, contextGroupsById) {
+function normalizeStep(rawStep, index) {
   assertObject(rawStep, `steps.${index}`);
 
   const id = assertNonEmptyString(rawStep.id, `steps.${index}.id`);
@@ -197,26 +164,13 @@ function normalizeStep(rawStep, index, agents, contextGroupsById) {
     outputs: normalizeOptionalObjectArray(rawStep.outputs, `steps.${id}.outputs`, normalizeOutput),
   };
 
-	  if (type === "agent" || type === "condition") {
-    const contextGroup = normalizeOptionalString(rawStep.contextGroup);
-    const agent = normalizeOptionalString(rawStep.agent);
-    if (!agent && !contextGroup) throw new Error(`steps.${id} must define agent or contextGroup`);
-    if (agent && !agents[agent]) throw new Error(`steps.${id}.agent references unknown agent ${agent}`);
-    if (contextGroup && !contextGroupsById[contextGroup]) {
-      throw new Error(`steps.${id}.contextGroup references unknown group ${contextGroup}`);
-    }
-
-    const resolvedAgent = contextGroup ? contextGroupsById[contextGroup].agent : agent;
-    if (agent && contextGroup && agent !== resolvedAgent) {
-      throw new Error(`steps.${id} uses contextGroup ${contextGroup} but agent ${agent} does not match ${resolvedAgent}`);
-    }
-
-    step.agent = resolvedAgent;
-    step.contextGroup = contextGroup;
-    step.skill = normalizeOptionalString(rawStep.skill);
+  if (type === "agent" || type === "condition") {
     step.instructions = normalizeOptionalString(rawStep.instructions);
     step.prompt = normalizeOptionalString(rawStep.prompt);
+    step.backend = normalizeOptionalString(rawStep.backend);
+    step.model = normalizeOptionalString(rawStep.model);
     step.workspaceAccess = normalizeWorkspaceAccess(rawStep.workspaceAccess, `steps.${id}.workspaceAccess`);
+    step.options = normalizeOptions(rawStep.options, `steps.${id}.options`);
     const primaryOutput = isObject(rawStep.output)
       ? normalizeOutput({
           key: rawStep.output.key || rawStep.output.filename || "output",
@@ -264,19 +218,16 @@ export function validateWorkflowDsl(input) {
   const name = assertNonEmptyString(input.name || input.id, "name");
   const visible = input.visible !== false;
   const version = Number.isInteger(input.version) ? input.version : 1;
-  const runtime = normalizeOptionalString(input.runtime) || "langgraph";
-  if (runtime !== "langgraph") throw new Error("runtime must be langgraph");
+  const runtime = normalizeRuntime(input.runtime);
+  if (runtime.engine !== "langgraph") throw new Error("runtime.engine must be langgraph");
   const ui = normalizeUi(input.ui);
   const worktree = normalizeWorktree(input.worktree);
-  const agents = normalizeAgents(input.agents);
-  const contextGroups = normalizeContextGroups(input.contextGroups, agents);
-  const contextGroupsById = Object.fromEntries(contextGroups.map((group) => [group.id, group]));
 
   if (!Array.isArray(input.steps) || input.steps.length === 0) {
     throw new Error("steps must be a non-empty array");
   }
 
-  const steps = input.steps.map((step, index) => normalizeStep(step, index, agents, contextGroupsById));
+  const steps = input.steps.map((step, index) => normalizeStep(step, index));
   const stepIds = new Set();
   for (const step of steps) {
     if (stepIds.has(step.id)) throw new Error(`steps contains duplicate id ${step.id}`);
@@ -323,8 +274,6 @@ export function validateWorkflowDsl(input) {
     runtime,
     ui,
     worktree,
-    agents,
-    contextGroups,
     steps,
   };
 }

@@ -8,7 +8,7 @@ const WorkflowRuntimeState = Annotation.Root({
   taskDir: Annotation({ default: () => "" }),
   currentStep: Annotation({ default: () => "" }),
   overallStatus: Annotation({ default: () => "pending" }),
-  contextValues: Annotation({ default: () => ({}) }),
+  taskInputs: Annotation({ default: () => ({}) }),
   sessionMap: Annotation({ default: () => ({}) }),
   stepOutputs: Annotation({ default: () => ({}) }),
   stepArtifacts: Annotation({ default: () => ({}) }),
@@ -21,14 +21,17 @@ const WorkflowRuntimeState = Annotation.Root({
   }),
 });
 
-function getAgentForStep(dsl, step) {
-  return dsl.agents[step.agent];
-}
-
-function getSessionKey(step, dsl) {
-  if (!step.contextGroup) return step.id;
-  const group = (dsl.contextGroups || []).find((item) => item.id === step.contextGroup);
-  return group?.sharedSession === false ? step.id : step.contextGroup;
+function getRuntimeForStep(dsl, step) {
+  const runtime = dsl.runtime || {};
+  return {
+    backend: step.backend || runtime.backend,
+    model: step.model || runtime.model || "",
+    workspaceAccess: step.workspaceAccess || runtime.workspaceAccess || "read",
+    options: {
+      ...(runtime.options || {}),
+      ...(step.options || {}),
+    },
+  };
 }
 
 function getNextStepId(step) {
@@ -39,8 +42,8 @@ function getNextStepId(step) {
 }
 
 async function runAgentStep(step, dsl, adapters, state) {
-  const agent = getAgentForStep(dsl, step);
-  const sessionKey = getSessionKey(step, dsl);
+  const agent = getRuntimeForStep(dsl, step);
+  const sessionKey = step.id;
   const currentSessionId = state.sessionMap?.[sessionKey] || "";
   const result = await adapters.runAgent({
     step,

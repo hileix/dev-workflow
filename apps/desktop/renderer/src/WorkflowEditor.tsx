@@ -11,13 +11,14 @@ import {
   useNodesState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Braces, GitBranch, Trash2, X } from "lucide-react";
+import { Braces, CircleHelp, GitBranch, Trash2, X } from "lucide-react";
 import { BackButton } from "./components/back-button";
 import { useI18n } from "./components/i18n-provider";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Select } from "./components/ui/select";
 import { Badge } from "./components/ui/badge";
+import { Tooltip } from "./components/ui/tooltip";
 import { WindowChrome } from "./components/window-chrome";
 import { cn } from "./lib/utils";
 import { getAppApi } from "./lib/api-client";
@@ -50,7 +51,7 @@ const MODEL_OPTIONS = {
     { value: "gpt-5.4", label: "gpt-5.4", description: "Strong model for everyday coding." },
     { value: "gpt-5.4-mini", label: "gpt-5.4-mini", description: "Small, fast, and cost-efficient model for simpler coding tasks." },
     { value: "gpt-5.3-codex", label: "gpt-5.3-codex", description: "Coding-optimized model." },
-    { value: "gpt-5.2", label: "gpt-5.2", description: "Optimized for professional work and long-running agents." },
+    { value: "gpt-5.2", label: "gpt-5.2", description: "Optimized for professional work and long-running runtime sessions." },
   ],
 };
 
@@ -68,6 +69,7 @@ const NODE_WIDTH = 260;
 const NODE_HEIGHT = 126;
 const NODE_PANEL_FALLBACK_WIDTH = 320;
 const NODE_PANEL_GAP = 16;
+const CODEBASE_ACCESS_TOOLTIP = "Workflow runtime: use the workflow default access for this step.\nRead-only can read files and write task artifacts only. Can edit project files can modify the codebase.";
 
 function WorkflowStepNode({ data }) {
   const badgeVariant = data.type === "checkpoint" ? "warning" : data.type === "condition" ? "success" : "info";
@@ -208,7 +210,13 @@ function createDefaultWorkflow({ includeStartStep = true } = {}) {
     name: "",
     visible: true,
     version: 1,
-    runtime: "langgraph",
+    runtime: {
+      engine: "langgraph",
+      backend: "codex",
+      model: "",
+      workspaceAccess: "write",
+      options: {},
+    },
     ui: {
       layout: WORKFLOW_CANVAS_LAYOUT,
       nodePositions: {},
@@ -219,30 +227,6 @@ function createDefaultWorkflow({ includeStartStep = true } = {}) {
       customFiles: [],
       removeOnComplete: false,
     },
-    agents: {
-      planner: {
-        backend: "claude",
-        skill: "",
-        model: "",
-        workspaceAccess: "read",
-        options: {},
-      },
-      coder: {
-        backend: "codex",
-        skill: "",
-        model: "",
-        workspaceAccess: "write",
-        options: {},
-      },
-    },
-    contextGroups: [
-      {
-        id: "coding",
-        label: "Coding",
-        agent: "coder",
-        sharedSession: true,
-      },
-    ],
     steps: includeStartStep
       ? [{
           ...createAgentStep(1),
@@ -288,12 +272,12 @@ function createAgentStep(index) {
     id: `step_${index}`,
     label: `Step ${index}`,
     type: "agent",
-    agent: "planner",
-    contextGroup: "",
     instructions: "",
-    skill: "",
+    backend: "",
+    model: "",
     prompt: "",
     workspaceAccess: "",
+    options: {},
     inputs: [],
     outputs: [
       {
@@ -334,12 +318,12 @@ function createConditionStep(index, previousStepId, nextStepId = "", failStepId 
     id: `condition_${index}`,
     label: `Conditional Gate ${index}`,
     type: "condition",
-    agent: "planner",
-    contextGroup: "",
     instructions: "",
-    skill: "",
+    backend: "",
+    model: "",
     prompt: "Read the input and decide whether the workflow should pass or fail. Return only JSON: {\"passed\": true, \"reason\": \"short reason\"}.",
     workspaceAccess: "read",
+    options: {},
     inputs: previousStepId
       ? [{
           name: "review",
@@ -369,12 +353,16 @@ function normalizeWorkflow(raw) {
     ...(Array.isArray(raw?.worktree?.customFiles) ? raw.worktree.customFiles : []),
     ...inferredCustomFiles,
   ]);
+  const rawRuntime = raw?.runtime || {};
+  const { skill: _removedRuntimeSkill, ...runtimeWithoutSkill } = rawRuntime;
   const workflow = {
     ...base,
     ...raw,
-    runtime: "langgraph",
-    agents: raw?.agents && Object.keys(raw.agents).length > 0 ? raw.agents : base.agents,
-    contextGroups: Array.isArray(raw?.contextGroups) ? raw.contextGroups : base.contextGroups,
+    runtime: {
+      ...base.runtime,
+      ...runtimeWithoutSkill,
+      engine: "langgraph",
+    },
     steps: Array.isArray(raw?.steps) ? raw.steps : [],
     ui: normalizeWorkflowUi(raw?.ui, raw?.steps || []),
     worktree: {
@@ -404,6 +392,7 @@ function relinkSteps(workflow) {
   });
   const steps = workflow.steps.map((step, index) => {
     const cleanStep = { ...step, inputs: getInputs(step) };
+    delete cleanStep.skill;
     delete cleanStep.skillRefs;
     if (step.type === "checkpoint") {
       const rejectTargets = Array.isArray(cleanStep.rejectTargets)
@@ -460,8 +449,7 @@ function getStepSummary(step) {
   if (step.type === "condition") {
     return `pass: ${step.passTo || "end"} · reject: ${step.failTo || "end"}`;
   }
-  const target = step.contextGroup ? `context: ${step.contextGroup}` : `agent: ${step.agent || "none"}`;
-  return `${target} · next: ${step.next || "end"}`;
+  return `runtime: ${step.backend || "default"} · next: ${step.next || "end"}`;
 }
 
 function getStepOutputSummary(step) {
@@ -539,26 +527,6 @@ function getWorkflowEdges(workflow) {
   });
 }
 
-function createAgentId(workflow) {
-  let index = Object.keys(workflow.agents || {}).length + 1;
-  let id = `agent_${index}`;
-  while (workflow.agents?.[id]) {
-    index += 1;
-    id = `agent_${index}`;
-  }
-  return id;
-}
-
-function createContextGroupId(workflow) {
-  let index = (workflow.contextGroups || []).length + 1;
-  let id = `context_${index}`;
-  while ((workflow.contextGroups || []).some((group) => group.id === id)) {
-    index += 1;
-    id = `context_${index}`;
-  }
-  return id;
-}
-
 function createStepId(workflow, prefix) {
   let index = workflow.steps.length + 1;
   let id = `${prefix}_${index}`;
@@ -567,19 +535,6 @@ function createStepId(workflow, prefix) {
     id = `${prefix}_${index}`;
   }
   return id;
-}
-
-function getSkillRef(skill) {
-  return skill.slug || skill.id || skill.name || "";
-}
-
-function getSkillLabel(skill) {
-  return skill.name || skill.slug || skill.id || "";
-}
-
-function findSkillByRef(skills, ref) {
-  if (!ref) return null;
-  return skills.find((skill) => getSkillRef(skill) === ref) || null;
 }
 
 function getModelOptions(backend) {
@@ -591,8 +546,8 @@ function getModelLabel(backend, model) {
   return getModelOptions(backend).find((option) => option.value === model)?.label || model;
 }
 
-function getCodexReasoning(agent) {
-  return agent?.options?.thread?.modelReasoningEffort || "";
+function getCodexReasoning(runtime) {
+  return runtime?.options?.thread?.modelReasoningEffort || "";
 }
 
 function getReasoningLabel(value) {
@@ -612,22 +567,14 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const [confirmRemoveIdx, setConfirmRemoveIdx] = useState(null);
   const [newCustomWorktreeFile, setNewCustomWorktreeFile] = useState("");
   const [stepIdDrafts, setStepIdDrafts] = useState({});
-  const [agentIdDrafts, setAgentIdDrafts] = useState({});
-  const [modelAgentId, setModelAgentId] = useState(null);
-  const [stepSkillPickerOpen, setStepSkillPickerOpen] = useState(false);
-  const [stepSkillDraft, setStepSkillDraft] = useState("");
+  const [modelRuntimeTarget, setModelRuntimeTarget] = useState(null);
   const [showWorkflowSetup, setShowWorkflowSetup] = useState(false);
-  const [showAgentSettings, setShowAgentSettings] = useState(false);
+  const [showRuntimeSettings, setShowRuntimeSettings] = useState(false);
   const loadWorkflowConfig = useConfigStore((s) => s.loadWorkflowConfig);
   const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
-  const skills = useConfigStore((s) => s.skills);
-  const loadSkills = useConfigStore((s) => s.loadSkills);
   const showToast = useWorkflowStore((s) => s.showToast);
   const isNew = !currentFilename;
   const selected = selectedIdx !== null ? workflow.steps[selectedIdx] : null;
-  const agentEntries = Object.entries(workflow.agents || {});
-  const selectedAgent = getStepAgentValue(selected);
-  const selectedAgentContextGroups = (workflow.contextGroups || []).filter((group) => group.agent === selectedAgent);
   const worktreeFiles = Array.isArray(workflow.worktree?.files) ? workflow.worktree.files : [];
   const customWorktreeFiles = Array.isArray(workflow.worktree?.customFiles) ? workflow.worktree.customFiles : [];
   const displayedWorktreeFiles = useMemo(() => Array.from(new Set([
@@ -635,13 +582,6 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
     ...customWorktreeFiles,
     ...worktreeFiles.filter((file) => !COMMON_WORKTREE_FILES.includes(file)),
   ])), [customWorktreeFiles, worktreeFiles]);
-  const skillEntries = useMemo(() => (
-    skills
-      .map((skill) => ({ value: getSkillRef(skill), label: getSkillLabel(skill) }))
-      .filter((skill) => skill.value)
-  ), [skills]);
-  const selectedStepSkill = findSkillByRef(skills, selected?.skill || "");
-  const stepSkillDraftSkill = findSkillByRef(skills, stepSkillDraft);
   const dslPreview = useMemo(() => JSON.stringify(relinkSteps(workflow), null, 2), [workflow]);
   const flowNodes = useMemo(() => getWorkflowNodes(workflow, selectedIdx, setSelectedIdx), [workflow, selectedIdx]);
   const [liveNodes, setLiveNodes, onLiveNodesChange] = useNodesState(flowNodes);
@@ -650,39 +590,9 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const selectedNodePanelRef = useRef(null);
   const [flowInstance, setFlowInstance] = useState(null);
 
-  function renderSkillOptions(currentValue = "") {
-    const hasCurrent = currentValue && !skillEntries.some((skill) => skill.value === currentValue);
-    return (
-      <>
-        {hasCurrent && <option value={currentValue}>{currentValue}</option>}
-        {skillEntries.map((skill) => <option key={skill.value} value={skill.value}>{skill.label}</option>)}
-      </>
-    );
-  }
-
-  function openStepSkillPicker() {
-    setStepSkillDraft(selected?.skill || "");
-    setStepSkillPickerOpen(true);
-  }
-
-  function closeStepSkillPicker() {
-    setStepSkillPickerOpen(false);
-    setStepSkillDraft("");
-  }
-
-  function applyStepSkill() {
-    if (selectedIdx === null) return;
-    updateStep(selectedIdx, { skill: stepSkillDraft });
-    closeStepSkillPicker();
-  }
-
   useEffect(() => {
     setCurrentFilename(filename || null);
   }, [filename]);
-
-  useEffect(() => {
-    loadSkills();
-  }, [loadSkills]);
 
   useEffect(() => {
     setLiveNodes((currentNodes) => {
@@ -1110,9 +1020,9 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
         ...(step.inputs || []),
         {
           name: "input",
-          sourceType: previousStep && outputKeys.length > 0 ? "step_output" : "workflow_context",
-          contextLabel: "Input",
-          contextPlaceholder: "",
+          sourceType: previousStep && outputKeys.length > 0 ? "step_output" : "task_input",
+          inputLabel: "Input",
+          inputPlaceholder: "",
           stepId: previousStep && outputKeys.length > 0 ? previousStep.id : "",
           outputKey: outputKeys[0] || "",
           required: true,
@@ -1163,170 +1073,58 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
     }));
   }
 
-  function updateAgent(agentId, patch) {
+  function updateRuntime(patch) {
     updateWorkflow({
-      agents: {
-        ...workflow.agents,
-        [agentId]: {
-          ...workflow.agents[agentId],
-          ...patch,
-        },
+      runtime: {
+        ...workflow.runtime,
+        ...patch,
       },
     });
   }
 
-  function updateAgentModel(agentId, model) {
-    updateAgent(agentId, { model });
-  }
-
-  function updateAgentReasoning(agentId, modelReasoningEffort) {
-    const agent = workflow.agents[agentId] || {};
-    updateAgent(agentId, {
+  function updateRuntimeReasoning(modelReasoningEffort) {
+    updateRuntime({
       options: {
-        ...(agent.options || {}),
+        ...(workflow.runtime?.options || {}),
         thread: {
-          ...(agent.options?.thread || {}),
+          ...(workflow.runtime?.options?.thread || {}),
           modelReasoningEffort,
         },
       },
     });
   }
 
-  function renameAgent(agentId, nextAgentId) {
-    const currentId = String(agentId || "").trim();
-    const newId = String(nextAgentId || "").trim();
-    if (!currentId || !newId || currentId === newId) return;
-    if (workflow.agents?.[newId]) {
-      setError(`Agent ID "${newId}" already exists.`);
-      return;
-    }
-
-    const nextAgents = {};
-    for (const [key, agent] of Object.entries(workflow.agents || {})) {
-      nextAgents[key === currentId ? newId : key] = agent;
-    }
-
-    const nextSteps = workflow.steps.map((step) => {
-      if ((step.type !== "agent" && step.type !== "condition") || step.agent !== currentId) return step;
-      return {
-        ...step,
-        agent: newId,
-      };
-    });
-
-    const nextContextGroups = workflow.contextGroups.map((group) => (
-      group.agent === currentId ? { ...group, agent: newId } : group
-    ));
-
-    setWorkflow((prev) => relinkSteps({
-      ...prev,
-      agents: nextAgents,
-      steps: nextSteps,
-      contextGroups: nextContextGroups,
-    }));
-    setAgentIdDrafts((prev) => {
-      const nextDrafts = { ...prev };
-      delete nextDrafts[currentId];
-      return nextDrafts;
-    });
-    setDirty(true);
-    setError("");
-  }
-
-  function addAgent() {
-    const id = createAgentId(workflow);
-    updateWorkflow({
-      agents: {
-        ...workflow.agents,
-        [id]: {
-          backend: "claude",
-          skill: "",
-          model: "",
-          workspaceAccess: "read",
-          options: {},
+  function updateSelectedStepReasoning(modelReasoningEffort) {
+    updateStepWith((step) => ({
+      ...step,
+      options: {
+        ...(step.options || {}),
+        thread: {
+          ...(step.options?.thread || {}),
+          modelReasoningEffort,
         },
       },
-    });
+    }));
   }
 
-  function removeAgent(agentId) {
-    const nextAgents = { ...workflow.agents };
-    delete nextAgents[agentId];
-    updateWorkflow({ agents: nextAgents });
-    setAgentIdDrafts((prev) => {
-      const nextDrafts = { ...prev };
-      delete nextDrafts[agentId];
-      return nextDrafts;
-    });
+  function updateRuntimeTargetModel(model) {
+    if (modelRuntimeTarget === "workflow") {
+      updateRuntime({ model });
+      return;
+    }
+    if (modelRuntimeTarget === "step") {
+      updateStepWith((step) => ({ ...step, model }));
+    }
   }
 
-  function getContextGroup(groupId) {
-    return (workflow.contextGroups || []).find((group) => group.id === groupId) || null;
-  }
-
-  function getStepAgentValue(step) {
-    return step?.agent || getContextGroup(step?.contextGroup)?.agent || "";
-  }
-
-  function addContextGroup() {
-    const id = createContextGroupId(workflow);
-    updateWorkflow({
-      contextGroups: [
-        ...(workflow.contextGroups || []),
-        {
-          id,
-          label: `Context ${workflow.contextGroups.length + 1}`,
-          agent: agentEntries[0]?.[0] || "",
-          sharedSession: true,
-        },
-      ],
-    });
-  }
-
-  function addContextGroupForStep() {
-    if (selectedIdx === null || !selectedAgent) return;
-    const id = createContextGroupId(workflow);
-    const label = `${selectedAgent} context`;
-    updateWorkflow({
-      contextGroups: [
-        ...(workflow.contextGroups || []),
-        {
-          id,
-          label,
-          agent: selectedAgent,
-          sharedSession: true,
-        },
-      ],
-      steps: workflow.steps.map((step, idx) => idx === selectedIdx ? { ...step, agent: selectedAgent, contextGroup: id } : step),
-    });
-  }
-
-  function updateContextGroup(index, patch) {
-    const currentGroup = workflow.contextGroups[index] || {};
-    const nextGroup = { ...currentGroup, ...patch };
-    updateWorkflow({
-      contextGroups: workflow.contextGroups.map((group, idx) => idx === index ? nextGroup : group),
-      steps: workflow.steps.map((step) => {
-        if (step.contextGroup !== currentGroup.id) return step;
-        return {
-          ...step,
-          contextGroup: nextGroup.id,
-          agent: nextGroup.agent,
-        };
-      }),
-    });
-  }
-
-  function removeContextGroup(index) {
-    const removedGroup = workflow.contextGroups[index] || {};
-    updateWorkflow({
-      contextGroups: workflow.contextGroups.filter((_, idx) => idx !== index),
-      steps: workflow.steps.map((step) => (
-        step.contextGroup === removedGroup.id
-          ? { ...step, contextGroup: "", agent: step.agent || removedGroup.agent || "" }
-          : step
-      )),
-    });
+  function updateRuntimeTargetReasoning(modelReasoningEffort) {
+    if (modelRuntimeTarget === "workflow") {
+      updateRuntimeReasoning(modelReasoningEffort);
+      return;
+    }
+    if (modelRuntimeTarget === "step") {
+      updateSelectedStepReasoning(modelReasoningEffort);
+    }
   }
 
   async function handleSave(shouldClose = false, { draft = false } = {}) {
@@ -1389,8 +1187,8 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
         <Button type="button" className="no-drag" size="sm" variant="outline" onClick={() => setShowWorkflowSetup(true)}>
           Workflow Setup
         </Button>
-        <Button type="button" className="no-drag" size="sm" variant="outline" onClick={() => setShowAgentSettings(true)}>
-          Agents & Context
+        <Button type="button" className="no-drag" size="sm" variant="outline" onClick={() => setShowRuntimeSettings(true)}>
+          Runtime
         </Button>
         <div className="flex-1" />
         {error && <span className="max-w-md truncate text-xs text-destructive">{error}</span>}
@@ -1508,7 +1306,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                   <span className="text-sm font-semibold text-foreground">Agent</span>
                   <Badge variant="info" className="text-[10px]">agent</Badge>
                 </div>
-                <p className="mt-1 text-xs leading-4 text-muted-foreground">Run Claude Code or Codex with skill, prompt, inputs, and outputs.</p>
+                <p className="mt-1 text-xs leading-4 text-muted-foreground">Run Claude Code or Codex with prompt, inputs, and outputs.</p>
               </button>
               <button
                 type="button"
@@ -1673,60 +1471,51 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                 {(selected.type === "agent" || selected.type === "condition") && (
                   <>
                     <div className="grid gap-2">
-                      <div>
-                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Agent</label>
+                      <div className="min-w-0">
+                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Backend</label>
                         <Select
-                          value={getStepAgentValue(selected)}
+                          value={selected.backend || ""}
                           onChange={(event) => {
-                            const agent = event.target.value;
-                            const currentGroup = getContextGroup(selected.contextGroup);
+                            const backend = event.target.value;
+                            const models = backend ? getModelOptions(backend).map((model) => model.value) : [];
                             updateStep(selectedIdx, {
-                              agent,
-                              contextGroup: currentGroup?.agent === agent ? selected.contextGroup : "",
+                              backend,
+                              model: backend && models.includes(selected.model) ? selected.model : "",
                             });
                           }}
                         >
-                          <option value="">Select agent</option>
-                          {agentEntries.map(([agentId]) => <option key={agentId} value={agentId}>{agentId}</option>)}
-                        </Select>
-                      </div>
-                      <div>
-                        <div className="mb-1.5 flex items-center justify-between gap-2">
-                          <label className="block text-[10px] font-semibold text-muted-foreground">Shared Context</label>
-                          {selectedAgent && selectedAgentContextGroups.length === 0 && (
-                            <button type="button" className="text-[10px] font-semibold text-primary hover:underline" onClick={addContextGroupForStep}>Create</button>
-                          )}
-                        </div>
-                        <Select
-                          value={selected.contextGroup || ""}
-                          onChange={(event) => {
-                            const contextGroup = event.target.value;
-                            const group = getContextGroup(contextGroup);
-                            updateStep(selectedIdx, { contextGroup, agent: group?.agent || selected.agent || "" });
-                          }}
-                        >
-                          <option value="">No shared context</option>
-                          {selectedAgentContextGroups.map((group) => <option key={group.id} value={group.id}>{group.id}</option>)}
-                        </Select>
-                      </div>
-                    </div>
-                    <div className="grid gap-2">
-                      <div className="min-w-0">
-                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Workspace Access</label>
-                        <Select value={selected.workspaceAccess || ""} onChange={(event) => updateStep(selectedIdx, { workspaceAccess: event.target.value })}>
-                          <option value="">Agent default</option>
-                          <option value="read">read</option>
-                          <option value="write">write</option>
+                          <option value="">Workflow runtime</option>
+                          <option value="claude">claude</option>
+                          <option value="codex">codex</option>
                         </Select>
                       </div>
                       <div className="min-w-0">
-                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Step Skill</label>
-                        <Button type="button" variant="outline" className="h-auto w-full min-w-0 max-w-full justify-start overflow-hidden whitespace-normal px-3 py-2 text-left" onClick={openStepSkillPicker}>
-                          <span className="w-full min-w-0 overflow-hidden">
-                            <span className="block truncate text-sm text-foreground">{selectedStepSkill ? getSkillLabel(selectedStepSkill) : "No step skill"}</span>
-                            {selectedStepSkill?.description && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{selectedStepSkill.description}</span>}
+                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Model</label>
+                        <Button type="button" variant="outline" className="h-auto w-full justify-start px-3 py-2 text-left" onClick={() => setModelRuntimeTarget("step")}>
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm text-foreground">{selected.model ? getModelLabel(selected.backend || workflow.runtime.backend, selected.model) : "Workflow model"}</span>
+                            {(selected.backend || workflow.runtime.backend) === "codex" && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{getReasoningLabel(getCodexReasoning(selected))}</span>}
                           </span>
                         </Button>
+                      </div>
+                      <div className="min-w-0">
+                        <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
+                          <span>Codebase Access</span>
+                          <Tooltip content={CODEBASE_ACCESS_TOOLTIP} side="top" align="center">
+                            <button
+                              type="button"
+                              aria-label="Explain codebase access"
+                              className="inline-flex cursor-help text-muted-foreground/80 hover:text-foreground"
+                            >
+                              <CircleHelp className="h-3.5 w-3.5" />
+                            </button>
+                          </Tooltip>
+                        </label>
+                        <Select value={selected.workspaceAccess || ""} onChange={(event) => updateStep(selectedIdx, { workspaceAccess: event.target.value })}>
+                          <option value="">Workflow runtime</option>
+                          <option value="read">Read-only</option>
+                          <option value="write">Can edit project files</option>
+                        </Select>
                       </div>
                     </div>
                     <div>
@@ -1839,7 +1628,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                         <div className="mb-2">
                           <label className="mb-1 block text-[10px] font-semibold text-muted-foreground">Source</label>
                           <Select
-                            value={input.sourceType || "workflow_context"}
+                            value={input.sourceType || "task_input"}
                             onChange={(event) => {
                               const sourceType = event.target.value;
                               if (sourceType === "step_output") {
@@ -1855,7 +1644,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                               updateInput(inputIndex, { sourceType, stepId: "", outputKey: "" });
                             }}
                           >
-                            <option value="workflow_context">context</option>
+                            <option value="task_input">task input</option>
                             <option value="step_output">output</option>
                           </Select>
                         </div>
@@ -1895,11 +1684,11 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                           <div className="grid gap-2">
                             <div>
                               <label className="mb-1 block text-[10px] font-semibold text-muted-foreground">Label</label>
-                              <Input value={input.contextLabel || ""} onChange={(event) => updateInput(inputIndex, { contextLabel: event.target.value })} />
+                              <Input value={input.inputLabel || ""} onChange={(event) => updateInput(inputIndex, { inputLabel: event.target.value })} />
                             </div>
                             <div>
                               <label className="mb-1 block text-[10px] font-semibold text-muted-foreground">Placeholder</label>
-                              <Input value={input.contextPlaceholder || ""} onChange={(event) => updateInput(inputIndex, { contextPlaceholder: event.target.value })} />
+                              <Input value={input.inputPlaceholder || ""} onChange={(event) => updateInput(inputIndex, { inputPlaceholder: event.target.value })} />
                             </div>
                           </div>
                         )}
@@ -1950,81 +1739,31 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
           </div>
         </main>
 
-        {showAgentSettings && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6 py-6" onClick={() => setShowAgentSettings(false)}>
-            <div className="flex max-h-[84vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg" onClick={(event) => event.stopPropagation()}>
-              <div className="flex items-center gap-3 border-b border-border px-5 py-4">
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-sm font-semibold text-foreground">Agents & Context</h2>
-                  <span className="text-xs text-muted-foreground">Configure agents, shared context groups, and inspect the JSON DSL.</span>
-                </div>
-                <Button type="button" variant="outline" size="sm" className="h-8 w-8 px-0" onClick={() => setShowAgentSettings(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
+      {showRuntimeSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6 py-6" onClick={() => setShowRuntimeSettings(false)}>
+          <div className="flex max-h-[84vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-semibold text-foreground">Runtime</h2>
+                <span className="text-xs text-muted-foreground">Configure the default backend, model, access, and JSON DSL.</span>
               </div>
-              <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)] gap-4 overflow-y-auto p-5">
-                <div className="min-w-0">
-          <section className="mb-4 rounded-lg border border-border bg-card/70 p-3">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 className="text-xs font-semibold text-foreground">Agents</h2>
-              <Button type="button" size="sm" variant="outline" onClick={addAgent}>Add</Button>
+              <Button type="button" variant="outline" size="sm" className="h-8 w-8 px-0" onClick={() => setShowRuntimeSettings(false)}>
+                <X className="h-4 w-4" />
+              </Button>
             </div>
-            <div className="space-y-3">
-              {agentEntries.map(([agentId, agent]) => (
-                <div key={agentId} className="rounded-md border border-border bg-background/70 p-3">
-                  <div className="mb-2 grid grid-cols-[1fr_auto] items-end gap-2">
-                    <div>
-                      <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Agent ID</label>
-                      <Input
-                        value={agentIdDrafts[agentId] ?? agentId}
-                        onChange={(event) => {
-                          setError("");
-                          const value = event.target.value;
-                          setAgentIdDrafts((prev) => ({ ...prev, [agentId]: value }));
-                        }}
-                        onBlur={() => {
-                          const draft = agentIdDrafts[agentId] ?? agentId;
-                          const nextId = draft.trim();
-                          if (!nextId || nextId === agentId) {
-                            setAgentIdDrafts((prev) => {
-                              const nextDrafts = { ...prev };
-                              delete nextDrafts[agentId];
-                              return nextDrafts;
-                            });
-                            return;
-                          }
-                          renameAgent(agentId, nextId);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            event.currentTarget.blur();
-                          }
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            setAgentIdDrafts((prev) => {
-                              const nextDrafts = { ...prev };
-                              delete nextDrafts[agentId];
-                              return nextDrafts;
-                            });
-                          }
-                        }}
-                        className="font-mono"
-                      />
-                    </div>
-                    <Button type="button" size="sm" variant="outline" onClick={() => removeAgent(agentId)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
+            <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)] gap-4 overflow-y-auto p-5">
+              <div className="min-w-0">
+                <section className="rounded-lg border border-border bg-card/70 p-3">
+                  <h2 className="mb-3 text-xs font-semibold text-foreground">Default Runtime</h2>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Backend</label>
                       <Select
-                        value={agent.backend || "claude"}
+                        value={workflow.runtime.backend || "codex"}
                         onChange={(event) => {
                           const backend = event.target.value;
                           const models = getModelOptions(backend).map((model) => model.value);
-                          updateAgent(agentId, { backend, model: models.includes(agent.model) ? agent.model : "" });
+                          updateRuntime({ backend, model: models.includes(workflow.runtime.model) ? workflow.runtime.model : "" });
                         }}
                       >
                         <option value="claude">claude</option>
@@ -2032,232 +1771,133 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                       </Select>
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Workspace Access</label>
-                      <Select value={agent.workspaceAccess || "read"} onChange={(event) => updateAgent(agentId, { workspaceAccess: event.target.value })}>
-                        <option value="read">read</option>
-                        <option value="write">write</option>
+                      <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
+                        <span>Codebase Access</span>
+                        <Tooltip content={CODEBASE_ACCESS_TOOLTIP} side="top" align="center">
+                          <button
+                            type="button"
+                            aria-label="Explain codebase access"
+                            className="inline-flex cursor-help text-muted-foreground/80 hover:text-foreground"
+                          >
+                            <CircleHelp className="h-3.5 w-3.5" />
+                          </button>
+                        </Tooltip>
+                      </label>
+                      <Select value={workflow.runtime.workspaceAccess || "read"} onChange={(event) => updateRuntime({ workspaceAccess: event.target.value })}>
+                        <option value="read">Read-only</option>
+                        <option value="write">Can edit project files</option>
                       </Select>
                     </div>
                   </div>
                   <div className="mt-2">
                     <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Model</label>
-                    <Button type="button" variant="outline" className="h-auto w-full justify-start px-3 py-2 text-left" onClick={() => setModelAgentId(agentId)}>
+                    <Button type="button" variant="outline" className="h-auto w-full justify-start px-3 py-2 text-left" onClick={() => setModelRuntimeTarget("workflow")}>
                       <span className="min-w-0">
-                        <span className="block truncate text-sm text-foreground">{getModelLabel(agent.backend || "claude", agent.model)}</span>
-                        {agent.backend === "codex" && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{getReasoningLabel(getCodexReasoning(agent))}</span>}
+                        <span className="block truncate text-sm text-foreground">{getModelLabel(workflow.runtime.backend || "codex", workflow.runtime.model)}</span>
+                        {workflow.runtime.backend === "codex" && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{getReasoningLabel(getCodexReasoning(workflow.runtime))}</span>}
                       </span>
                     </Button>
                   </div>
-                  <div className="mt-2">
-                    <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Default Skill</label>
-                    <Select value={agent.skill || ""} onChange={(event) => updateAgent(agentId, { skill: event.target.value })}>
-                      <option value="">No default skill</option>
-                      {renderSkillOptions(agent.skill || "")}
-                    </Select>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="mb-4 rounded-lg border border-border bg-card/70 p-3">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 className="text-xs font-semibold text-foreground">Context Groups</h2>
-              <Button type="button" size="sm" variant="outline" onClick={addContextGroup}>Add</Button>
-            </div>
-            <div className="space-y-3">
-              {workflow.contextGroups.map((group, index) => (
-                <div key={index} className="rounded-md border border-border bg-background/70 p-3">
-                  <div className="mb-2 grid grid-cols-[1fr_auto] items-end gap-2">
-                    <div>
-                      <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Context ID</label>
-                      <Input value={group.id || ""} onChange={(event) => updateContextGroup(index, { id: event.target.value })} className="font-mono" />
-                    </div>
-                    <Button type="button" size="sm" variant="outline" onClick={() => removeContextGroup(index)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                  <div className="mt-2">
-                    <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Label</label>
-                    <Input value={group.label || ""} onChange={(event) => updateContextGroup(index, { label: event.target.value })} />
-                  </div>
-                  <div className="mt-2">
-                    <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Agent</label>
-                    <Select value={group.agent || ""} onChange={(event) => updateContextGroup(index, { agent: event.target.value })}>
-                      <option value="">Select agent</option>
-                      {agentEntries.map(([agentId]) => <option key={agentId} value={agentId}>{agentId}</option>)}
-                    </Select>
-                  </div>
-                  <label className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                    <span>Shared session</span>
-                    <input type="checkbox" checked={group.sharedSession !== false} onChange={(event) => updateContextGroup(index, { sharedSession: event.target.checked })} />
-                  </label>
-                </div>
-              ))}
-            </div>
-          </section>
-                </div>
-
-                <section className="min-w-0 rounded-lg border border-border bg-card/70 p-3">
-            <h2 className="mb-3 text-xs font-semibold text-foreground">JSON DSL Preview</h2>
-            <pre className="max-h-[34rem] overflow-auto rounded-md border border-border bg-secondary/40 p-3 text-[10px] leading-5 text-foreground">
-              {dslPreview}
-            </pre>
-          </section>
+                </section>
               </div>
+
+              <section className="min-w-0 rounded-lg border border-border bg-card/70 p-3">
+                <h2 className="mb-3 text-xs font-semibold text-foreground">JSON DSL Preview</h2>
+                <pre className="max-h-[34rem] overflow-auto rounded-md border border-border bg-secondary/40 p-3 text-[10px] leading-5 text-foreground">
+                  {dslPreview}
+                </pre>
+              </section>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-	      {modelAgentId && workflow.agents[modelAgentId] && (
-	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6 py-6" onClick={() => setModelAgentId(null)}>
-	          <div className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg" onClick={(event) => event.stopPropagation()}>
+      {modelRuntimeTarget && (modelRuntimeTarget === "workflow" || selected) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6 py-6" onClick={() => setModelRuntimeTarget(null)}>
+          <div className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-center gap-3 border-b border-border px-5 py-4">
               <div className="min-w-0 flex-1">
                 <h2 className="text-sm font-semibold text-foreground">Select Model</h2>
-                <span className="text-xs text-muted-foreground">{modelAgentId} · {workflow.agents[modelAgentId].backend || "claude"}</span>
+                <span className="text-xs text-muted-foreground">
+                  {modelRuntimeTarget === "workflow" ? "workflow runtime" : selected?.label || selected?.id}
+                </span>
               </div>
-              <Button type="button" variant="outline" size="sm" className="h-8 w-8 px-0" onClick={() => setModelAgentId(null)}>
+              <Button type="button" variant="outline" size="sm" className="h-8 w-8 px-0" onClick={() => setModelRuntimeTarget(null)}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
             <div className="min-h-0 overflow-y-auto p-5">
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  className={cn(
-                    "w-full rounded-md border px-4 py-3 text-left transition-colors",
-                    !workflow.agents[modelAgentId].model ? "border-ring bg-primary/15" : "border-border bg-background/70 hover:bg-accent"
-                  )}
-                  onClick={() => updateAgentModel(modelAgentId, "")}
-                >
-                  <div className="text-sm font-semibold text-foreground">Default model</div>
-                  <div className="mt-1 text-xs text-muted-foreground">Use the SDK or CLI default for this backend.</div>
-                </button>
-                {getModelOptions(workflow.agents[modelAgentId].backend || "claude").map((model) => (
-                  <button
-                    key={model.value}
-                    type="button"
-                    className={cn(
-                      "w-full rounded-md border px-4 py-3 text-left transition-colors",
-                      workflow.agents[modelAgentId].model === model.value ? "border-ring bg-primary/15" : "border-border bg-background/70 hover:bg-accent"
-                    )}
-                    onClick={() => updateAgentModel(modelAgentId, model.value)}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">{model.label}</span>
-                      {model.badge && <Badge variant="outline" className="text-[10px]">{model.badge}</Badge>}
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">{model.description}</div>
-                  </button>
-                ))}
-              </div>
-
-              {workflow.agents[modelAgentId].backend === "codex" && (
-                <div className="mt-5 border-t border-border pt-5">
-                  <h3 className="mb-3 text-xs font-semibold text-foreground">Reasoning Level</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    {CODEX_REASONING_OPTIONS.map((option) => (
+              {(() => {
+                const targetRuntime = modelRuntimeTarget === "workflow" ? workflow.runtime : selected || {};
+                const backend = targetRuntime.backend || workflow.runtime.backend || "codex";
+                const model = targetRuntime.model || "";
+                return (
+                  <>
+                    <div className="space-y-2">
                       <button
-                        key={option.value}
                         type="button"
                         className={cn(
-                          "rounded-md border px-3 py-3 text-left transition-colors",
-                          getCodexReasoning(workflow.agents[modelAgentId]) === option.value ? "border-ring bg-primary/15" : "border-border bg-background/70 hover:bg-accent"
+                          "w-full rounded-md border px-4 py-3 text-left transition-colors",
+                          !model ? "border-ring bg-primary/15" : "border-border bg-background/70 hover:bg-accent"
                         )}
-                        onClick={() => updateAgentReasoning(modelAgentId, option.value)}
+                        onClick={() => updateRuntimeTargetModel("")}
                       >
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-foreground">{option.label}</span>
-                          {option.badge && <Badge variant="outline" className="text-[10px]">{option.badge}</Badge>}
-                        </div>
-                        <div className="mt-1 text-xs leading-4 text-muted-foreground">{option.description}</div>
+                        <div className="text-sm font-semibold text-foreground">{modelRuntimeTarget === "workflow" ? "Default model" : "Workflow model"}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">Use the default model for this runtime.</div>
                       </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+                      {getModelOptions(backend).map((modelOption) => (
+                        <button
+                          key={modelOption.value}
+                          type="button"
+                          className={cn(
+                            "w-full rounded-md border px-4 py-3 text-left transition-colors",
+                            model === modelOption.value ? "border-ring bg-primary/15" : "border-border bg-background/70 hover:bg-accent"
+                          )}
+                          onClick={() => updateRuntimeTargetModel(modelOption.value)}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-foreground">{modelOption.label}</span>
+                            {modelOption.badge && <Badge variant="outline" className="text-[10px]">{modelOption.badge}</Badge>}
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">{modelOption.description}</div>
+                        </button>
+                      ))}
+                    </div>
+
+                    {backend === "codex" && (
+                      <div className="mt-5 border-t border-border pt-5">
+                        <h3 className="mb-3 text-xs font-semibold text-foreground">Reasoning Level</h3>
+                        <div className="grid grid-cols-2 gap-2">
+                          {CODEX_REASONING_OPTIONS.map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              className={cn(
+                                "rounded-md border px-3 py-3 text-left transition-colors",
+                                getCodexReasoning(targetRuntime) === option.value ? "border-ring bg-primary/15" : "border-border bg-background/70 hover:bg-accent"
+                              )}
+                              onClick={() => updateRuntimeTargetReasoning(option.value)}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-semibold text-foreground">{option.label}</span>
+                                {option.badge && <Badge variant="outline" className="text-[10px]">{option.badge}</Badge>}
+                              </div>
+                              <div className="mt-1 text-xs leading-4 text-muted-foreground">{option.description}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
             <div className="flex justify-end border-t border-border px-5 py-4">
-              <Button type="button" size="sm" onClick={() => setModelAgentId(null)}>Done</Button>
+              <Button type="button" size="sm" onClick={() => setModelRuntimeTarget(null)}>Done</Button>
             </div>
           </div>
-	        </div>
-	      )}
-
-	      {stepSkillPickerOpen && selected && (
-	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6 py-6" onClick={closeStepSkillPicker}>
-	          <div className="flex h-[74vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg" onClick={(event) => event.stopPropagation()}>
-	            <div className="flex items-center gap-3 border-b border-border px-5 py-4">
-	              <div className="min-w-0 flex-1">
-	                <h2 className="text-sm font-semibold text-foreground">Select Step Skill</h2>
-	                <span className="text-xs text-muted-foreground">{selected.label || selected.id}</span>
-	              </div>
-	              <Button type="button" variant="outline" size="sm" className="h-8 w-8 px-0" onClick={closeStepSkillPicker}>
-	                <X className="h-4 w-4" />
-	              </Button>
-	            </div>
-	            <div className="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] overflow-hidden">
-	              <div className="min-h-0 overflow-y-auto border-r border-border p-3">
-	                <button
-	                  type="button"
-	                  className={cn(
-	                    "mb-2 w-full rounded-md border px-3 py-3 text-left transition-colors",
-	                    !stepSkillDraft ? "border-ring bg-primary/15" : "border-border bg-background/70 hover:bg-accent"
-	                  )}
-	                  onClick={() => setStepSkillDraft("")}
-	                >
-	                  <div className="text-sm font-semibold text-foreground">No step skill</div>
-	                  <div className="mt-1 text-xs text-muted-foreground">Run this step without extra skill instructions.</div>
-	                </button>
-	                {skills.length === 0 ? (
-	                  <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
-	                    No managed skills found.
-	                  </div>
-	                ) : (
-	                  <div className="space-y-2">
-	                    {skills.map((skill) => {
-	                      const skillRef = getSkillRef(skill);
-	                      return (
-	                        <button
-	                          key={skillRef}
-	                          type="button"
-	                          className={cn(
-	                            "w-full rounded-md border px-3 py-3 text-left transition-colors",
-	                            stepSkillDraft === skillRef ? "border-ring bg-primary/15" : "border-border bg-background/70 hover:bg-accent"
-	                          )}
-	                          onClick={() => setStepSkillDraft(skillRef)}
-	                        >
-	                          <div className="truncate text-sm font-semibold text-foreground">{getSkillLabel(skill)}</div>
-	                          {skill.description && <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{skill.description}</div>}
-	                        </button>
-	                      );
-	                    })}
-	                  </div>
-	                )}
-	              </div>
-	              <section className="flex min-h-0 flex-col p-4">
-	                <div className="mb-3 min-w-0">
-	                  <h3 className="truncate text-sm font-semibold text-foreground">
-	                    {stepSkillDraftSkill ? getSkillLabel(stepSkillDraftSkill) : "No step skill"}
-	                  </h3>
-	                  <p className="mt-1 text-xs text-muted-foreground">
-	                    {stepSkillDraftSkill?.description || "No extra skill instructions will be attached to this step."}
-	                  </p>
-	                </div>
-	                <pre className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-secondary/40 p-3 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-foreground">
-	                  {stepSkillDraftSkill?.content || stepSkillDraftSkill?.body || "No skill selected."}
-	                </pre>
-	              </section>
-	            </div>
-	            <div className="flex justify-end gap-2 border-t border-border px-5 py-4">
-	              <Button type="button" variant="outline" size="sm" onClick={closeStepSkillPicker}>Cancel</Button>
-	              <Button type="button" size="sm" onClick={applyStepSkill}>Use Skill</Button>
-	            </div>
-	          </div>
-	        </div>
-	      )}
+        </div>
+      )}
 
 	      {showBackConfirm && (
 	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowBackConfirm(false)}>
@@ -2286,6 +1926,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }

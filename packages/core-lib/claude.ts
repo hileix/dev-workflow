@@ -62,9 +62,9 @@ function getOutputByKey(step, outputKey) {
   return (step?.outputs || []).find((output) => output.key === outputKey) || null;
 }
 
-async function readArtifactFile(taskId, filename, contextValues = {}, runId = "") {
+async function readArtifactFile(taskId, filename, taskInputs = {}, runId = "") {
   if (!filename) return "";
-  const resolved = interpolate(filename, { taskId, runId, ...contextValues });
+  const resolved = interpolate(filename, { taskId, runId, ...taskInputs });
   try {
     return await readFile(join(await taskDir(taskId, runId), resolved), "utf-8");
   } catch {
@@ -72,9 +72,9 @@ async function readArtifactFile(taskId, filename, contextValues = {}, runId = ""
   }
 }
 
-async function resolveArtifactPath(taskId, filename, contextValues = {}, runId = "") {
+async function resolveArtifactPath(taskId, filename, taskInputs = {}, runId = "") {
   if (!filename) return "";
-  const resolved = interpolate(filename, { taskId, runId, ...contextValues });
+  const resolved = interpolate(filename, { taskId, runId, ...taskInputs });
   return join(await taskDir(taskId, runId), resolved);
 }
 
@@ -90,7 +90,7 @@ export async function readPhaseOutputArtifact(taskId, stepId, outputKey, runId =
   const step = getStepById(stepId, getWorkflowForState(state));
   const output = getOutputByKey(step, outputKey);
   if (!output?.filename) return "";
-  return readArtifactFile(taskId, output.filename, state?.contextValues || {}, state?.runId || runId);
+  return readArtifactFile(taskId, output.filename, state?.taskInputs || {}, state?.runId || runId);
 }
 
 export async function readPhaseOutputArtifacts(taskId, stepId, runId = "") {
@@ -112,7 +112,7 @@ export async function getPhaseOutputArtifactPath(taskId, stepId, outputKey, runI
   const step = getStepById(stepId, getWorkflowForState(state));
   const output = getOutputByKey(step, outputKey);
   if (!output?.filename) return "";
-  return resolveArtifactPath(taskId, output.filename, state?.contextValues || {}, state?.runId || runId);
+  return resolveArtifactPath(taskId, output.filename, state?.taskInputs || {}, state?.runId || runId);
 }
 
 export async function getPhaseContent(taskId, stepId, runId = "") {

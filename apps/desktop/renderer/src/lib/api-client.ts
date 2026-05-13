@@ -123,7 +123,7 @@ function createWebApi() {
         type: "start",
         taskId: payload.taskId,
         workFolder: payload.workFolder,
-        contextValues: payload.contextValues,
+        taskInputs: payload.taskInputs,
         images: payload.images,
         runId: payload.runId,
         worktreeName: payload.worktreeName,

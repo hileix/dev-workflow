@@ -1,6 +1,5 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, relative, resolve } from "path";
-import { readManagedSkillContentSync } from "../../core-models/skills";
 import { appendPhaseInteraction, appendToPhaseFile, readState, taskDir, updatePhaseStatus, writeState } from "../../core-models/state";
 import { createSdkAgentAdapter } from "./sdk-agent-adapter";
 import { createContentPreview, createContentSummary, createStepOutputMetadata } from "./artifacts";
@@ -14,8 +13,8 @@ function getOutputByPath(step, artifactPath) {
   return null;
 }
 
-function resolveOutputPath(taskRunDir, filename, contextValues) {
-  const rendered = String(filename || "").replace(/\{\{(\w+)\}\}/g, (_, key) => contextValues?.[key] ?? "");
+function resolveOutputPath(taskRunDir, filename, taskInputs) {
+  const rendered = String(filename || "").replace(/\{\{(\w+)\}\}/g, (_, key) => taskInputs?.[key] ?? "");
   if (!rendered) return "";
   const outputPath = resolve(taskRunDir, rendered);
   const rel = relative(resolve(taskRunDir), outputPath);
@@ -23,15 +22,11 @@ function resolveOutputPath(taskRunDir, filename, contextValues) {
   return outputPath;
 }
 
-function getSessionKey(step) {
-  return step.contextGroup || step.id;
-}
-
-async function ensureOutputArtifact(taskId, runId, step, content, contextValues) {
+async function ensureOutputArtifact(taskId, runId, step, content, taskInputs) {
   const output = step.outputs?.[0];
   if (!output?.filename || !content) return "";
   const taskRunDir = await taskDir(taskId, runId);
-  const artifactPath = resolveOutputPath(taskRunDir, output.filename, contextValues);
+  const artifactPath = resolveOutputPath(taskRunDir, output.filename, taskInputs);
   await mkdir(dirname(artifactPath), { recursive: true });
   await writeFile(artifactPath, content, "utf-8");
   return artifactPath;
@@ -39,7 +34,7 @@ async function ensureOutputArtifact(taskId, runId, step, content, contextValues)
 
 async function readInputContent(input, state) {
   if (!input) return "";
-  if (input.sourceType === "workflow_context") return state.contextValues?.[input.name] || "";
+  if (input.sourceType === "task_input") return state.taskInputs?.[input.name] || "";
   if (input.sourceType !== "step_output" || !input.stepId || !input.outputKey) return "";
 
   const sourcePath = state.stepOutputs?.[input.stepId]?.outputs?.[input.outputKey]?.artifactPath
@@ -61,7 +56,7 @@ async function publishCheckpointOutput({ taskId, runId, step, state, rule }) {
   const content = await readInputContent(sourceInput, state);
   if (!content) return null;
 
-  const artifactPath = resolveOutputPath(await taskDir(taskId, runId), rule.filename, state.contextValues);
+  const artifactPath = resolveOutputPath(await taskDir(taskId, runId), rule.filename, state.taskInputs);
   if (!artifactPath) return null;
 
   await mkdir(dirname(artifactPath), { recursive: true });
@@ -86,7 +81,6 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
     taskDir: taskRunDir,
     imagePaths,
     abortController,
-    readSkillContentSync: readManagedSkillContentSync,
     onEvent: async (event) => {
       const phase = event.phase || event.step;
       if (!phase) return;
@@ -166,7 +160,7 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
     },
 
     async runAgent({ step, agent, state, sessionId, sessionKey }) {
-      const runtimeSessionKey = sessionKey || getSessionKey(step);
+      const runtimeSessionKey = sessionKey || step.id;
       const runtimeAgent = aiBackendOverride ? { ...agent, backend: aiBackendOverride, model: "" } : agent;
       send({ type: "backend_selected", phase: step.id, backend: runtimeAgent.backend, mode: aiBackendOverride ? "app" : "workflow" });
       const result = await adapter.runAgent({
@@ -176,7 +170,7 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
         sessionId,
         sessionKey: runtimeSessionKey,
       });
-      const artifactPath = result.artifactPath || await ensureOutputArtifact(taskId, runId, step, result.content, state.contextValues);
+      const artifactPath = result.artifactPath || await ensureOutputArtifact(taskId, runId, step, result.content, state.taskInputs);
       if (artifactPath) {
         const output = getOutputByPath(step, artifactPath) || step.outputs?.[0];
         if (output?.key) {

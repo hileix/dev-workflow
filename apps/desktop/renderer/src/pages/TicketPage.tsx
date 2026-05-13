@@ -182,17 +182,17 @@ function RunStepList({ phases, workflowConfig, selectedPhase, onSelect }) {
   );
 }
 
-function getCheckpointInputDocument(phaseId, workflowConfig, phaseOutputArtifacts, contextValues) {
+function getCheckpointInputDocument(phaseId, workflowConfig, phaseOutputArtifacts, taskInputs) {
   const inputs = workflowConfig?.phaseInputs?.[phaseId] || [];
   const documents = [];
 
   for (const input of inputs) {
     if (!input) continue;
-    let label = input.contextLabel || input.name || input.outputKey || input.phaseId || "Input";
+    let label = input.inputLabel || input.name || input.outputKey || input.phaseId || "Input";
     let content = "";
 
-    if (input.sourceType === "workflow_context") {
-      content = contextValues?.[input.name] || "";
+    if (input.sourceType === "task_input") {
+      content = taskInputs?.[input.name] || "";
     } else if (input.sourceType === "phase_output" && input.phaseId) {
       label = input.name || workflowConfig?.phaseLabels?.[input.phaseId] || input.phaseId;
       content = input.outputKey ? phaseOutputArtifacts?.[input.phaseId]?.[input.outputKey] || "" : "";
@@ -224,19 +224,19 @@ function getCheckpointDocumentTarget(phaseId, workflowConfig, phaseOutputArtifac
   return targets.length === 1 ? targets[0] : null;
 }
 
-function getDocumentContentForInput(input, phaseOutputArtifacts, contextValues) {
-  if (input.sourceType === "workflow_context") return contextValues?.[input.name] || "";
+function getDocumentContentForInput(input, phaseOutputArtifacts, taskInputs) {
+  if (input.sourceType === "task_input") return taskInputs?.[input.name] || "";
   if (input.sourceType !== "phase_output" || !input.phaseId) return "";
   return input.outputKey ? phaseOutputArtifacts?.[input.phaseId]?.[input.outputKey] || "" : "";
 }
 
-function getMissingDocumentMessage({ t, phaseId, workflowConfig, phaseOutputArtifacts, contextValues, activeStatus, isCheckpointPhase }) {
+function getMissingDocumentMessage({ t, phaseId, workflowConfig, phaseOutputArtifacts, taskInputs, activeStatus, isCheckpointPhase }) {
   if (!phaseId || activeStatus === "pending") return "";
 
   if (isCheckpointPhase) {
     const inputs = workflowConfig?.phaseInputs?.[phaseId] || [];
     const missingInput = inputs.find((input) =>
-      input.required !== false && !String(getDocumentContentForInput(input, phaseOutputArtifacts, contextValues) || "").trim()
+      input.required !== false && !String(getDocumentContentForInput(input, phaseOutputArtifacts, taskInputs) || "").trim()
     );
     if (!missingInput) return "";
     if (missingInput.sourceType === "phase_output") {
@@ -420,7 +420,7 @@ export default function TicketPage() {
   const isCheckpointPhase = runWorkflowConfig?.phaseTypes?.[detailPhase] === "checkpoint";
   const activePhaseContent = detailPhase ? phaseMessages[detailPhase] || "" : "";
   const activePhaseInputDocument = detailPhase
-    ? getCheckpointInputDocument(detailPhase, runWorkflowConfig, phaseOutputArtifacts, workflowState?.contextValues)
+    ? getCheckpointInputDocument(detailPhase, runWorkflowConfig, phaseOutputArtifacts, workflowState?.taskInputs)
     : "";
   const activePhaseArtifact = detailPhase
     ? isCheckpointPhase
@@ -440,7 +440,7 @@ export default function TicketPage() {
     phaseId: detailPhase,
     workflowConfig: runWorkflowConfig,
     phaseOutputArtifacts,
-    contextValues: workflowState?.contextValues,
+    taskInputs: workflowState?.taskInputs,
     activeStatus: detailStatus,
     isCheckpointPhase,
   });

@@ -63,7 +63,7 @@ function mergeWorkflowStates(baseState, overrideState) {
     workflowFilename: overrideState.workflowFilename || baseState.workflowFilename,
     workflowConfig: overrideState.workflowConfig || baseState.workflowConfig,
     workflowDefinition: overrideState.workflowDefinition || baseState.workflowDefinition,
-    contextValues: overrideState.contextValues || baseState.contextValues,
+    taskInputs: overrideState.taskInputs || baseState.taskInputs,
     worktree: overrideState.worktree || baseState.worktree,
     phases: overrideState.phases?.length > 0 ? overrideState.phases : baseState.phases || [],
   };
@@ -425,12 +425,12 @@ export const useWorkflowStore = create((set, get) => ({
     } catch {}
   },
 
-  async connectWorkflow(taskId, workFolder, contextValues, images, runId, worktreeName, workflowFilename) {
+  async connectWorkflow(taskId, workFolder, taskInputs, images, runId, worktreeName, workflowFilename) {
     appendDebugEvent(set, { type: "client_connect", taskId, workFolder }, "client");
     set({ connectionState: "connecting" });
     const detach = attachWorkflowEvents(set, get, taskId, runId);
     try {
-      await desktopApi.startWorkflow({ taskId, workFolder, contextValues, images, runId, worktreeName, workflowFilename });
+      await desktopApi.startWorkflow({ taskId, workFolder, taskInputs, images, runId, worktreeName, workflowFilename });
     } catch (err) {
       appendDebugEvent(set, { type: "error", message: err?.message || "Failed to start workflow" }, "client");
       detach();
@@ -438,7 +438,7 @@ export const useWorkflowStore = create((set, get) => ({
     }
   },
 
-  startWorkflow(id, folder, contextValues, images, runId, worktreeName, workflowFilename) {
+  startWorkflow(id, folder, taskInputs, images, runId, worktreeName, workflowFilename) {
     const selectedFolder = folder || useConfigStore.getState().selectedFolder;
     if (!id || !selectedFolder) return;
 
@@ -483,7 +483,7 @@ export const useWorkflowStore = create((set, get) => ({
     });
     prevStatusRef = {};
 
-    get().connectWorkflow(id, selectedFolder, contextValues, images, runId, worktreeName, workflowFilename);
+    get().connectWorkflow(id, selectedFolder, taskInputs, images, runId, worktreeName, workflowFilename);
   },
 
   async approve() {
