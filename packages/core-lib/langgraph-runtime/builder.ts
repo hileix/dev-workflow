@@ -1,5 +1,5 @@
 import { Annotation, Command, END, MemorySaver, START, StateGraph, interrupt } from "@langchain/langgraph";
-import { normalizeStepOutputMetadata, hasStepOutputResult } from "./artifacts.mjs";
+import { normalizeStepOutputMetadata, hasStepOutputResult } from "./artifacts";
 
 const WorkflowRuntimeState = Annotation.Root({
   taskId: Annotation({ default: () => "" }),

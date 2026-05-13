@@ -4,11 +4,11 @@ import { createServer } from "http";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
-import "../../packages/core-models/workflow.mjs";
-import workfoldersController from "./local-server-controllers/workfoldersController.mjs";
-import workflowController from "./local-server-controllers/workflowController.mjs";
-import { setupWebSocket } from "./local-server-controllers/wsController.mjs";
-import { activeWorkflows } from "../../packages/core-lib/claude.mjs";
+import "../../packages/core-models/workflow";
+import workfoldersController from "./local-server-controllers/workfoldersController";
+import workflowController from "./local-server-controllers/workflowController";
+import { setupWebSocket } from "./local-server-controllers/wsController";
+import { activeWorkflows } from "../../packages/core-lib/claude";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();

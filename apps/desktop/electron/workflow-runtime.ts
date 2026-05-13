@@ -1,8 +1,8 @@
 import { Command, INTERRUPT, isInterrupted } from "@langchain/langgraph";
 import { realpath, stat } from "fs/promises";
 import { join, relative, resolve } from "path";
-import { getBaseDir, readAiBackendOverrideSync } from "../../../packages/core-models/config.mjs";
-import { readManagedSkillContentSync } from "../../../packages/core-models/skills.mjs";
+import { getBaseDir, readAiBackendOverrideSync } from "../../../packages/core-models/config";
+import { readManagedSkillContentSync } from "../../../packages/core-models/skills";
 import {
   assertSafeWorkflowFilename,
   getActiveWorkflowFile,
@@ -13,7 +13,7 @@ import {
   getWorkflowStepType,
   isWorkflowAutoStep,
   readWorkflowFileSync,
-} from "../../../packages/core-models/workflow.mjs";
+} from "../../../packages/core-models/workflow";
 import {
   appendPhaseInteraction,
   appendToPhaseFile,
@@ -24,11 +24,11 @@ import {
   updatePhaseStatus,
   writeState,
   taskDir,
-} from "../../../packages/core-models/state.mjs";
-import { upsertTask } from "../../../packages/core-models/workfolders.mjs";
-import { activeWorkflows, getPhaseContent, normalizeAiBackend, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
-import { prepareWorktree, removeWorktree } from "../../../packages/core-lib/worktree.mjs";
-import { buildWorkflowGraphFromDsl, createAppSdkAgentAdapter, createSdkAgentAdapter, FileCheckpointSaver } from "../../../packages/core-lib/langgraph-runtime/index.mjs";
+} from "../../../packages/core-models/state";
+import { upsertTask } from "../../../packages/core-models/workfolders";
+import { activeWorkflows, getPhaseContent, normalizeAiBackend, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude";
+import { prepareWorktree, removeWorktree } from "../../../packages/core-lib/worktree";
+import { buildWorkflowGraphFromDsl, createAppSdkAgentAdapter, createSdkAgentAdapter, FileCheckpointSaver } from "../../../packages/core-lib/langgraph-runtime/index";
 import { nanoid } from "nanoid";
 
 const DEFAULT_WORKTREE_NAMING_SKILL = `Choose a concise Git branch name for this workflow run.

@@ -1,7 +1,7 @@
 import { join } from "path";
 import { readFile, writeFile, mkdir, appendFile, rm, rename } from "fs/promises";
-import { getBaseDir, getWorkfoldersFile } from "./config.mjs";
-import { getWorkflow, getWorkflowConfigShape, getWorkflowStepOrder, interpolate } from "./workflow.mjs";
+import { getBaseDir, getWorkfoldersFile } from "./config";
+import { getWorkflow, getWorkflowConfigShape, getWorkflowStepOrder, interpolate } from "./workflow";
 
 export function assertSafeRunId(runId) {
   const value = String(runId || "").trim();

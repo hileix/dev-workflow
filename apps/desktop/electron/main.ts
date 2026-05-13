@@ -2,8 +2,8 @@ import { spawn } from "child_process";
 import { app, BrowserWindow, ipcMain } from "electron";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
-import { killAllChildren } from "../../../packages/core-lib/claude.mjs";
-import { setRuntimeBaseDir, setRuntimeStorageDir } from "../../../packages/core-models/config.mjs";
+import { killAllChildren } from "../../../packages/core-lib/claude";
+import { setRuntimeBaseDir, setRuntimeStorageDir } from "../../../packages/core-models/config";
 import {
   pickFolder,
   getWorkflowConfig,
@@ -31,7 +31,7 @@ import {
   removeTask,
   removeTaskWorktreeOnly,
   saveTaskUploads,
-} from "./api.mjs";
+} from "./api";
 import {
   startWorkflowSession,
   approveWorkflow,
@@ -40,7 +40,7 @@ import {
   restartWorkflowPhase,
   pauseWorkflowPhase,
   detachWorkflowSender,
-} from "./workflow-runtime.mjs";
+} from "./workflow-runtime";
 
 let mainWindow;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -96,7 +96,7 @@ async function createWindow() {
     trafficLightPosition: { x: 18, y: 8 },
     backgroundColor: "#f5f5f7",
     webPreferences: {
-      preload: join(__dirname, "preload.cjs"),
+      preload: join(__dirname, "..", "electron-dist", "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
     },

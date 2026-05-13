@@ -3,10 +3,10 @@ import { basename, resolve, join } from "path";
 import { stat, mkdir } from "fs/promises";
 import { spawn } from "child_process";
 import multer from "multer";
-import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders.mjs";
-import { getBaseDir } from "../../../packages/core-models/config.mjs";
-import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state.mjs";
-import { getPhaseContent, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude.mjs";
+import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders";
+import { getBaseDir } from "../../../packages/core-models/config";
+import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state";
+import { getPhaseContent, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude";
 
 const upload = multer({ storage: multer.diskStorage({
   async destination(req, _file, cb) {

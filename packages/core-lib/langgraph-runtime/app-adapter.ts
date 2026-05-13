@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, relative, resolve } from "path";
-import { readManagedSkillContentSync } from "../../core-models/skills.mjs";
-import { appendPhaseInteraction, appendToPhaseFile, readState, taskDir, updatePhaseStatus, writeState } from "../../core-models/state.mjs";
-import { createSdkAgentAdapter } from "./sdk-agent-adapter.mjs";
-import { createContentPreview, createContentSummary, createStepOutputMetadata } from "./artifacts.mjs";
+import { readManagedSkillContentSync } from "../../core-models/skills";
+import { appendPhaseInteraction, appendToPhaseFile, readState, taskDir, updatePhaseStatus, writeState } from "../../core-models/state";
+import { createSdkAgentAdapter } from "./sdk-agent-adapter";
+import { createContentPreview, createContentSummary, createStepOutputMetadata } from "./artifacts";
 
 function getOutputByPath(step, artifactPath) {
   const normalizedArtifactPath = resolve(artifactPath);

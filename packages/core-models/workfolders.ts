@@ -1,8 +1,8 @@
 import { dirname, join } from "path";
 import { readFile, writeFile, mkdir, rm } from "fs/promises";
-import { getBaseDir, getWorkfoldersFile } from "./config.mjs";
-import { assertSafeRunId, readState, getTaskRunId, writeState } from "./state.mjs";
-import { removeWorktree } from "../core-lib/worktree.mjs";
+import { getBaseDir, getWorkfoldersFile } from "./config";
+import { assertSafeRunId, readState, getTaskRunId, writeState } from "./state";
+import { removeWorktree } from "../core-lib/worktree";
 
 function getStoredTaskId(task) {
   return task?.taskId || task?.ticketId || "";

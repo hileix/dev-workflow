@@ -1,7 +1,7 @@
 import { join } from "path";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from "fs";
-import { readConfigSync, LEGACY_WORKFLOW_DIR, getWorkflowDir } from "./config.mjs";
-import { validateWorkflowDsl } from "../core-lib/langgraph-runtime/index.mjs";
+import { readConfigSync, LEGACY_WORKFLOW_DIR, getWorkflowDir } from "./config";
+import { validateWorkflowDsl } from "../core-lib/langgraph-runtime/index";
 
 let WORKFLOW = null;
 let STEP_ORDER = [];

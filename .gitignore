@@ -1,6 +1,7 @@
 node_modules/
 renderer/dist/
 apps/desktop/renderer/dist/
+apps/desktop/electron-dist/
 renderer/node_modules/
 
 references/

@@ -19,7 +19,7 @@ async function main() {
   const port = Number(portArg);
 
   if (!port || command.length === 0) {
-    console.error("usage: node scripts/run-if-port-free.mjs <port> <command> [args...]");
+    console.error("usage: node scripts/run-if-port-free.ts <port> <command> [args...]");
     process.exit(1);
   }
 

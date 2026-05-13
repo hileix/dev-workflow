@@ -360,7 +360,7 @@ fastify.get("/ws/desktop", { websocket: true }, (socket) => {
         if (task) {
           broadcastMobile({
             type: "task.event",
-            taskId: task.key,
+            taskKey: task.key,
             deviceId,
             taskId: task.taskId,
             event: message.event,
