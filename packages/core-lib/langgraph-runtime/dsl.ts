@@ -99,6 +99,8 @@ function normalizeWorktree(rawWorktree) {
       files: [],
       customFiles: [],
       removeOnComplete: false,
+      useCustomSetupScript: false,
+      setupScript: "",
     };
   }
   if (!isObject(rawWorktree)) throw new Error("worktree must be an object");
@@ -107,6 +109,8 @@ function normalizeWorktree(rawWorktree) {
     files: normalizeOptionalStringArray(rawWorktree.files, "worktree.files"),
     customFiles: normalizeOptionalStringArray(rawWorktree.customFiles, "worktree.customFiles"),
     removeOnComplete: rawWorktree.removeOnComplete === true,
+    useCustomSetupScript: rawWorktree.useCustomSetupScript === true,
+    setupScript: normalizeOptionalString(rawWorktree.setupScript),
   };
 }
 

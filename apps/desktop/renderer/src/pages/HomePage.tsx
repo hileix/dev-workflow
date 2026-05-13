@@ -235,7 +235,11 @@ function StartWorkflowModal({ workflows, workFolders, defaultFolder, defaultWork
                     {t("home.gitWorktreeRemoveHint")}
                   </div>
                 )}
-                {worktreeConfig.files.length > 0 && (
+                {worktreeConfig.useCustomSetupScript ? (
+                  <div className="text-[10px] text-muted-foreground mt-1">
+                    {t("home.gitWorktreeCustomSetup")}
+                  </div>
+                ) : worktreeConfig.files.length > 0 && (
                   <div className="text-[10px] text-muted-foreground mt-1">
                     {t("home.gitWorktreeFiles", { files: worktreeConfig.files.join(", ") })}
                   </div>

@@ -227,6 +227,8 @@ function createDefaultWorkflow({ includeStartStep = true } = {}) {
       files: [...COMMON_WORKTREE_FILES],
       customFiles: [],
       removeOnComplete: false,
+      useCustomSetupScript: false,
+      setupScript: "",
     },
     steps: includeStartStep
       ? [{
@@ -371,6 +373,7 @@ function normalizeWorkflow(raw) {
       ...(raw?.worktree || {}),
       files: Array.from(new Set(worktreeFiles)),
       customFiles,
+      useCustomSetupScript: raw?.worktree?.useCustomSetupScript === true,
     },
   };
   return relinkSteps(workflow);
@@ -1157,6 +1160,10 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
       setError(t("editor.phaseRequired"));
       return;
     }
+    if (dsl.worktree?.enabled && dsl.worktree?.useCustomSetupScript && !String(dsl.worktree.setupScript || "").trim()) {
+      setError("Setup script is required when custom setup is enabled.");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -1237,13 +1244,6 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
               </div>
               <div className="min-h-0 overflow-y-auto p-5">
           <section className="mb-4 rounded-lg border border-border bg-card/70 p-3">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-xs font-semibold text-foreground">Runtime</h2>
-                <p className="text-[10px] text-muted-foreground">LangGraph StateGraph</p>
-              </div>
-              <Badge variant="success" className="text-[10px]">DSL</Badge>
-            </div>
             <label className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
               <span className="flex items-center gap-2">
                 <GitBranch className="h-3.5 w-3.5" />
@@ -1266,6 +1266,18 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
               </label>
             )}
             {workflow.worktree.enabled && (
+              <div className="mt-3">
+                <label className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                  <span>Use custom setup script</span>
+                  <input
+                    type="checkbox"
+                    checked={workflow.worktree.useCustomSetupScript === true}
+                    onChange={(event) => updateWorktree({ useCustomSetupScript: event.target.checked })}
+                  />
+                </label>
+              </div>
+            )}
+            {workflow.worktree.enabled && workflow.worktree.useCustomSetupScript !== true && (
               <div className="mt-3 space-y-2 rounded-md border border-border bg-background/70 p-2">
                 {displayedWorktreeFiles.map((file) => (
                   <label key={file} className="flex items-center gap-2 text-[11px] text-foreground">
@@ -1291,7 +1303,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                 ))}
               </div>
             )}
-            {workflow.worktree.enabled && (
+            {workflow.worktree.enabled && workflow.worktree.useCustomSetupScript !== true && (
               <div className="mt-3">
                 <label className="mb-1.5 block text-[10px] text-muted-foreground">Extra files or folders</label>
                 <div className="flex gap-2">
@@ -1310,6 +1322,17 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                   <Button type="button" size="sm" variant="outline" onClick={addCustomWorktreeFile}>Add</Button>
                 </div>
               </div>
+            )}
+            {workflow.worktree.enabled && workflow.worktree.useCustomSetupScript === true && (
+                  <div>
+                    <textarea
+                      value={workflow.worktree.setupScript || ""}
+                      onChange={(event) => updateWorktree({ setupScript: event.target.value })}
+                      placeholder="pnpm install"
+                      rows={3}
+                      className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20"
+                    />
+                  </div>
             )}
           </section>
 

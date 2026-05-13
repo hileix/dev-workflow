@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { app, BrowserWindow, ipcMain } from "electron";
+import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { killAllChildren } from "../../../packages/core-lib/claude";
@@ -46,6 +47,12 @@ let mainWindow;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rendererDevServerUrl = process.env.ELECTRON_RENDERER_URL;
 const isDev = Boolean(rendererDevServerUrl);
+const userDataDirOverride = process.env.DEV_WORKFLOW_USER_DATA_DIR;
+
+if (userDataDirOverride) {
+  mkdirSync(userDataDirOverride, { recursive: true });
+  app.setPath("userData", userDataDirOverride);
+}
 
 function spawnDetached(command, args) {
   return new Promise((resolve, reject) => {
@@ -189,8 +196,9 @@ function registerIpcHandlers() {
 }
 
 app.whenReady().then(async () => {
-  setRuntimeStorageDir(app.getPath("userData"));
-  setRuntimeBaseDir(join(app.getPath("userData"), "tasks"));
+  const userDataDir = app.getPath("userData");
+  setRuntimeStorageDir(userDataDir);
+  setRuntimeBaseDir(join(userDataDir, "tasks"));
   registerIpcHandlers();
   try {
     await createWindow();
