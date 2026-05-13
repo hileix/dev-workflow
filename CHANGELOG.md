@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.0.1](https://github.com/hileix/dev-workflow/compare/dev-workflow-v0.0.1...dev-workflow-v0.0.1) (2026-05-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** Existing unfinished runs without a workflowDefinition snapshot may not resume reliably, and workflows with invalid step_output references or unsafe filenames are now rejected.
+
+### Features
+
+* **workflow:** add default workflows and visibility controls ([#10](https://github.com/hileix/dev-workflow/issues/10)) ([a19c7fe](https://github.com/hileix/dev-workflow/commit/a19c7fec67412733256759f5f8c4d35225870311))
+* **workflow:** persist run-specific langgraph state ([#7](https://github.com/hileix/dev-workflow/issues/7)) ([9b3756a](https://github.com/hileix/dev-workflow/commit/9b3756a1ddcfd7bbb80f14f53887895cdc89b024))
+* **workflow:** support pasted task images ([#14](https://github.com/hileix/dev-workflow/issues/14)) ([32a1d77](https://github.com/hileix/dev-workflow/commit/32a1d7733a3bc23f1386d34ea80cdfea6e518958))
+
+
+### Bug Fixes
+
+* issues ([#16](https://github.com/hileix/dev-workflow/issues/16)) ([21c977c](https://github.com/hileix/dev-workflow/commit/21c977c07321b61cf27f1c9dc731e73bf38b4cff))
+* share workflow run state across pages ([#15](https://github.com/hileix/dev-workflow/issues/15)) ([75506f9](https://github.com/hileix/dev-workflow/commit/75506f9ff4d995d8d19e79659bda009f65d56f43))
+* **workflow:** keep AI loading indicator visible ([#12](https://github.com/hileix/dev-workflow/issues/12)) ([73d73ac](https://github.com/hileix/dev-workflow/commit/73d73ac27bb9632786e2473e10a8b46c62bca1d6))
+
 ## [0.0.1](https://github.com/hileix/dev-workflow/compare/dev-workflow-v0.0.1...dev-workflow-v0.0.1) (2026-05-12)
 
 
