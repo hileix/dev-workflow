@@ -35,14 +35,14 @@
 
 当前相关链路大致是：
 
-- `apps/desktop/renderer/src/pages/TicketPage.jsx`
+- `apps/desktop/renderer/src/pages/TaskPage.jsx`
   - 任务详情页入口
   - 已经展示 task id、phase、worktree badge、调试面板
   - worktree badge 可以打开关联目录
 
 - `apps/desktop/renderer/src/stores/workflowStore.js`
   - 负责加载任务状态
-  - `loadTicket()` 会读取 `state`、messages、artifacts、interactions
+  - `loadTask()` 会读取 `state`、messages、artifacts、interactions
 
 - `apps/desktop/electron/api.mjs`
   - `getTaskState()` 读取任务状态
@@ -69,7 +69,7 @@
 - Files changed
 - History
 
-第一阶段建议放在 `TicketPage.jsx` / `StepDetail.jsx` 附近，不要先引入复杂路由。
+第一阶段建议放在 `TaskPage.jsx` / `StepDetail.jsx` 附近，不要先引入复杂路由。
 
 如果当前任务没有可用 Git 仓库，需要展示空状态：
 

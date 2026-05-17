@@ -4,7 +4,8 @@ import {
   approveWorkflow,
   pauseWorkflowPhase,
   rejectWorkflow,
-  restartWorkflowPhase,
+  resumeWorkflowPhase,
+  retryWorkflowPhase,
   sendWorkflowMessage,
   startWorkflowSession,
 } from "../electron/workflow-runtime";
@@ -31,8 +32,10 @@ export function setupWebSocket(server) {
           await rejectWorkflow(msg.taskId, msg.rejectTo, msg.reason, send, msg.runId);
         } else if (msg.type === "message") {
           await sendWorkflowMessage(msg.taskId, msg.text, msg.images, send, msg.runId);
-        } else if (msg.type === "restart_phase") {
-          await restartWorkflowPhase(msg.taskId, msg.phase, send, msg.runId);
+        } else if (msg.type === "resume_phase") {
+          await resumeWorkflowPhase(msg.taskId, msg.phase, send, msg.runId);
+        } else if (msg.type === "retry_phase") {
+          await retryWorkflowPhase(msg.taskId, msg.phase, send, msg.runId);
         } else if (msg.type === "pause_phase") {
           await pauseWorkflowPhase(msg.taskId, msg.phase, send, msg.runId);
         }

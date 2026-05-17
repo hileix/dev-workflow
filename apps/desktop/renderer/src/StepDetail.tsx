@@ -81,6 +81,8 @@ function normalizeConversation(interactions) {
 }
 
 function getBackendLabel(backend) {
+  if (String(backend || "").startsWith("ai-api:")) return `AI API: ${String(backend).slice("ai-api:".length)}`;
+  if (backend === "ai-api") return "AI API";
   if (backend === "codex") return "Codex";
   if (backend === "claude") return "Claude Code";
   return "AI Conversation";
@@ -225,7 +227,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
   const wasStreamingRef = useRef(false);
   const fileInputRef = useRef(null);
   const imagesRef = useRef([]);
-  const activeTicket = useWorkflowStore((s) => s.activeTicket);
+  const activeTask = useWorkflowStore((s) => s.activeTask);
   const workflowState = useWorkflowStore((s) => s.workflowState);
 
   const conversation = normalizeConversation(interactions);
@@ -346,7 +348,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
     try {
       let uploadedPaths = [];
       const runId = workflowState?.runId || "";
-      if (images.length > 0 && activeTicket && runId) {
+      if (images.length > 0 && activeTask && runId) {
         const payload = await Promise.all(images.map(async (img) => ({
           name: img.file.name,
           data: Array.from(new Uint8Array(await img.file.arrayBuffer())),

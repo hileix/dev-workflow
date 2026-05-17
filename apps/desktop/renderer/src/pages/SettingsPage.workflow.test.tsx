@@ -81,6 +81,7 @@ describe("SettingsPage workflow editor routes", () => {
       workflowConfig: null,
       workflows: [],
       skills: [],
+      aiApiProfiles: [],
       activeWorkflowFile: "",
       workFolders: [],
       selectedFolder: "",

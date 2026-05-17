@@ -22,7 +22,7 @@ async function resolveTaskRunId(taskId, requestedRunId = "") {
     const folders = JSON.parse(await readFile(file, "utf-8"));
     for (const folder of folders || []) {
       for (const task of folder.tasks || []) {
-        const storedTaskId = task.taskId || task.ticketId;
+        const storedTaskId = task.taskId;
         if (storedTaskId === taskId) {
           return assertSafeRunId(task.runId || storedTaskId);
         }

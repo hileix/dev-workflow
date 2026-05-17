@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { CheckCircle2, Circle, Loader2, RotateCcw, Square, Trash2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { CheckCircle2, ChevronDown, Circle, Loader2, RotateCcw, Square, Trash2 } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import StepDetail from "../StepDetail";
 import { BackButton } from "../components/back-button";
@@ -10,14 +10,22 @@ import { Button } from "../components/ui/button";
 import { WindowChrome } from "../components/window-chrome";
 import WorkflowDebugPanel from "../components/WorkflowDebugPanel";
 import { getAppApi } from "../lib/api-client";
+import { buildClientDebugPayload, DEBUG_EVENT_TRIGGERS, DEBUG_EVENT_TYPES } from "../lib/debug-events";
 import { cn } from "../lib/utils";
-import { useWorkflowStore } from "../stores/workflowStore";
+import { pushClientDebugEvent, useWorkflowStore } from "../stores/workflowStore";
 import { useConfigStore } from "../stores/configStore";
 
 const appApi = getAppApi();
 
+const WORKTREE_EDITORS = [
+  { key: "code", label: "VS Code" },
+  { key: "sublime", label: "Sublime Text" },
+  { key: "zed", label: "Zed" },
+];
+
 function getStatusTone(status) {
   if (status === "completed") return "success";
+  if (status === "paused") return "warning";
   if (status === "awaiting_input") return "warning";
   if (status === "in_progress") return "info";
   if (status === "failed") return "destructive";
@@ -26,10 +34,20 @@ function getStatusTone(status) {
 
 function getStatusLabel(status) {
   if (status === "completed") return "done";
+  if (status === "paused") return "paused";
   if (status === "awaiting_input") return "waiting";
   if (status === "in_progress") return "running";
   if (status === "failed") return "failed";
   return "pending";
+}
+
+function getPhaseControls({ isAutoPhase, activePhase, currentPhase, activeStatus, isStreaming, lastError }) {
+  const isCurrentAutoPhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase);
+  return {
+    canPausePhase: Boolean(isCurrentAutoPhase && activeStatus === "in_progress" && !lastError),
+    canResumePhase: Boolean(isCurrentAutoPhase && !isStreaming && activeStatus === "paused" && !lastError),
+    canRetryPhase: Boolean(isCurrentAutoPhase && !isStreaming && activeStatus === "failed"),
+  };
 }
 
 function getWorktreeDisplayName(worktree) {
@@ -273,18 +291,18 @@ function stepStatus(done, running) {
 function buildStartupSteps({ t, debugEvents, workflowState, workflowConfig, connectionState }) {
   if (workflowState?.overallStatus !== "loading") return [];
 
-  const receivedState = hasEvent(debugEvents, "state") || workflowState?.overallStatus !== "loading";
+  const receivedState = hasEvent(debugEvents, DEBUG_EVENT_TYPES.STATE) || workflowState?.overallStatus !== "loading";
   const worktreeEnabled = Boolean(workflowConfig?.worktree?.enabled || workflowState?.worktree?.enabled);
-  const worktreeNamingStarted = hasEvent(debugEvents, "worktree_naming_started");
-  const worktreeNamingDone = hasEvent(debugEvents, "worktree_naming_completed");
-  const worktreePreparing = hasEvent(debugEvents, "worktree_preparing");
-  const worktreeReady = hasEvent(debugEvents, "worktree_ready") || Boolean(workflowState?.worktree?.enabled);
+  const worktreeNamingStarted = hasEvent(debugEvents, DEBUG_EVENT_TYPES.WORKTREE_NAMING_STARTED);
+  const worktreeNamingDone = hasEvent(debugEvents, DEBUG_EVENT_TYPES.WORKTREE_NAMING_COMPLETED);
+  const worktreePreparing = hasEvent(debugEvents, DEBUG_EVENT_TYPES.WORKTREE_PREPARING);
+  const worktreeReady = hasEvent(debugEvents, DEBUG_EVENT_TYPES.WORKTREE_READY) || Boolean(workflowState?.worktree?.enabled);
 
   const steps = [
     {
       key: "connect",
       label: t("stepDetail.startupConnect"),
-      status: stepStatus(receivedState || hasEvent(debugEvents, "workflow_starting"), connectionState === "connecting"),
+      status: stepStatus(receivedState || hasEvent(debugEvents, DEBUG_EVENT_TYPES.WORKFLOW_STARTING), connectionState === "connecting"),
     },
   ];
 
@@ -307,7 +325,7 @@ function buildStartupSteps({ t, debugEvents, workflowState, workflowConfig, conn
     {
       key: "state",
       label: t("stepDetail.startupState"),
-      status: stepStatus(receivedState, worktreeEnabled ? worktreeReady : hasEvent(debugEvents, "workflow_starting")),
+      status: stepStatus(receivedState, worktreeEnabled ? worktreeReady : hasEvent(debugEvents, DEBUG_EVENT_TYPES.WORKFLOW_STARTING)),
     }
   );
 
@@ -349,28 +367,30 @@ function StartupProgressModal({ steps, t }) {
   );
 }
 
-export default function TicketPage() {
+export default function TaskPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteWorktree, setDeleteWorktree] = useState(false);
+  const [showWorktreeOpenMenu, setShowWorktreeOpenMenu] = useState(false);
+  const worktreeOpenMenuRef = useRef(null);
   const [isDeletingTask, setIsDeletingTask] = useState(false);
   const [showRemoveWorktreeConfirm, setShowRemoveWorktreeConfirm] = useState(false);
   const [isRemovingWorktree, setIsRemovingWorktree] = useState(false);
   const navigate = useNavigate();
-  const { id: urlTicketId } = useParams();
+  const { id: urlTaskId } = useParams();
   const [searchParams] = useSearchParams();
   const urlRunId = searchParams.get("runId") || "";
   const { t } = useI18n();
 
-  const activeTicket = useWorkflowStore((s) => s.activeTicket);
-  const loadTicket = useWorkflowStore((s) => s.loadTicket);
+  const activeTask = useWorkflowStore((s) => s.activeTask);
+  const loadTask = useWorkflowStore((s) => s.loadTask);
   const showToast = useWorkflowStore((s) => s.showToast);
   const workflowState = useWorkflowStore((s) => s.workflowState);
 
   useEffect(() => {
-    if (urlTicketId && (urlTicketId !== activeTicket || workflowState?.taskId !== urlTicketId || (urlRunId && workflowState?.runId !== urlRunId))) {
-      loadTicket(urlTicketId, urlRunId);
+    if (urlTaskId && (urlTaskId !== activeTask || workflowState?.taskId !== urlTaskId || (urlRunId && workflowState?.runId !== urlRunId))) {
+      loadTask(urlTaskId, urlRunId);
     }
-  }, [urlTicketId, urlRunId, activeTicket, workflowState?.taskId, workflowState?.runId]);
+  }, [urlTaskId, urlRunId, activeTask, workflowState?.taskId, workflowState?.runId]);
   const selectedPhase = useWorkflowStore((s) => s.selectedPhase);
   const setSelectedPhase = useWorkflowStore((s) => s.setSelectedPhase);
   const phaseMessages = useWorkflowStore((s) => s.phaseMessages);
@@ -385,14 +405,15 @@ export default function TicketPage() {
   const approve = useWorkflowStore((s) => s.approve);
   const reject = useWorkflowStore((s) => s.reject);
   const sendMessage = useWorkflowStore((s) => s.sendMessage);
-  const restartPhase = useWorkflowStore((s) => s.restartPhase);
+  const resumePhase = useWorkflowStore((s) => s.resumePhase);
+  const retryPhase = useWorkflowStore((s) => s.retryPhase);
   const pausePhase = useWorkflowStore((s) => s.pausePhase);
   const deleteTask = useWorkflowStore((s) => s.deleteTask);
   const removeTaskWorktree = useWorkflowStore((s) => s.removeTaskWorktree);
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
   const runWorkflowConfig = workflowState?.workflowConfig || workflowConfig;
 
-  const taskId = urlTicketId || activeTicket;
+  const taskId = urlTaskId || activeTask;
   const [cleanedWorktree, setCleanedWorktree] = useState(null);
   const visibleWorktree = workflowState?.worktree || cleanedWorktree;
   const worktreeDisplayName = getWorktreeDisplayName(visibleWorktree);
@@ -404,12 +425,15 @@ export default function TicketPage() {
   const selectedRunPhase = selectedPhase;
   const activePhase = selectedRunPhase || currentPhase || phases[0]?.id || null;
   const activeStatus = phases.find((p) => (p.id || p.name) === activePhase)?.status;
-  const isActivePhaseRunning = activeStatus === "in_progress";
-  const isActivePhaseAwaiting = activeStatus === "awaiting_input";
-  const isActivePhaseFailed = activeStatus === "failed";
   const isAutoPhase = runWorkflowConfig?.phaseTypes?.[activePhase] === "auto" || runWorkflowConfig?.phaseTypes?.[activePhase] === "condition";
-  const canPausePhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && isActivePhaseRunning && !lastError);
-  const canRestartPhase = Boolean(isAutoPhase && activePhase && activePhase === currentPhase && !isStreaming && (lastError || isActivePhaseAwaiting || isActivePhaseFailed));
+  const { canPausePhase, canResumePhase, canRetryPhase } = getPhaseControls({
+    isAutoPhase,
+    activePhase,
+    currentPhase,
+    activeStatus,
+    isStreaming,
+    lastError,
+  });
 
   const detailPhase = activePhase;
   const detailStatus = phases.find((p) => (p.id || p.name) === detailPhase)?.status;
@@ -458,6 +482,18 @@ export default function TicketPage() {
     }
   }, [workflowState?.worktree?.enabled]);
 
+  useEffect(() => {
+    if (!showWorktreeOpenMenu) return;
+
+    function handlePointerDown(event) {
+      if (worktreeOpenMenuRef.current?.contains(event.target)) return;
+      setShowWorktreeOpenMenu(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [showWorktreeOpenMenu]);
+
   async function handleDelete() {
     if (isDeletingTask) return;
     setIsDeletingTask(true);
@@ -469,7 +505,7 @@ export default function TicketPage() {
       return;
     }
     setIsDeletingTask(false);
-    showToast(t("ticket.deleteTaskFailed"));
+    showToast(t("task.deleteTaskFailed"));
   }
 
   async function handleCopyDebugInfo() {
@@ -493,13 +529,36 @@ export default function TicketPage() {
     }
   }
 
-  async function handleOpenWorktree() {
+  async function handleOpenWorktree(editor = "code") {
     const targetPath = workflowState?.worktree?.rootPath || workflowState?.workFolder;
     if (!targetPath) return;
+    setShowWorktreeOpenMenu(false);
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.WORKTREE_OPEN_REQUESTED, {
+      taskId,
+      runId: workflowState?.runId || urlRunId || "",
+      editor,
+      path: targetPath,
+      trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+    }));
     try {
-      await appApi.openInCode(targetPath);
+      await appApi.openInCode(targetPath, editor);
+      pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.WORKTREE_OPENED, {
+        taskId,
+        runId: workflowState?.runId || urlRunId || "",
+        editor,
+        path: targetPath,
+        trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+      }));
     } catch (error) {
-      showToast(error?.message || t("ticket.openInCodeFailed"));
+      pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.WORKTREE_OPEN_FAILED, {
+        taskId,
+        runId: workflowState?.runId || urlRunId || "",
+        editor,
+        path: targetPath,
+        message: error?.message || t("task.openInCodeFailed"),
+        trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+      }));
+      showToast(error?.message || t("task.openInCodeFailed"));
     }
   }
 
@@ -517,11 +576,18 @@ export default function TicketPage() {
       });
       setShowRemoveWorktreeConfirm(false);
     }
-    if (!removed) showToast(t("ticket.removeWorktreeFailed"));
+    if (!removed) showToast(t("task.removeWorktreeFailed"));
   }
 
   async function handleOpenDocument() {
     if (!taskId || !documentOpenTarget) return;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.DOCUMENT_OPEN_REQUESTED, {
+      taskId,
+      runId: workflowState?.runId || urlRunId || "",
+      phase: documentOpenTarget.phaseId,
+      outputKey: documentOpenTarget.outputKey,
+      trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+    }));
     try {
       await appApi.openTaskOutputInCode(
         taskId,
@@ -529,19 +595,39 @@ export default function TicketPage() {
         documentOpenTarget.phaseId,
         documentOpenTarget.outputKey,
       );
+      pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.DOCUMENT_OPENED, {
+        taskId,
+        runId: workflowState?.runId || urlRunId || "",
+        phase: documentOpenTarget.phaseId,
+        outputKey: documentOpenTarget.outputKey,
+        trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+      }));
     } catch (error) {
-      showToast(error?.message || t("ticket.openDocumentInCodeFailed"));
+      pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.DOCUMENT_OPEN_FAILED, {
+        taskId,
+        runId: workflowState?.runId || urlRunId || "",
+        phase: documentOpenTarget.phaseId,
+        outputKey: documentOpenTarget.outputKey,
+        message: error?.message || t("task.openDocumentInCodeFailed"),
+        trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+      }));
+      showToast(error?.message || t("task.openDocumentInCodeFailed"));
     }
   }
 
-  function handleRestartPhase() {
-    if (!canRestartPhase) return;
-    restartPhase(activePhase);
+  function handleResumePhase() {
+    if (!canResumePhase) return;
+    resumePhase(activePhase);
   }
 
   function handlePausePhase() {
     if (!canPausePhase) return;
     pausePhase(activePhase);
+  }
+
+  function handleRetryPhase() {
+    if (!canRetryPhase) return;
+    retryPhase(activePhase);
   }
 
   return (
@@ -556,24 +642,44 @@ export default function TicketPage() {
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2.5">
             {hasWorktreeRecord && (
               <div className="flex items-center gap-1.5 rounded-full bg-secondary/70 p-0.5">
-                <Badge
-                  as="button"
-                  type="button"
-                  variant="secondary"
-                  className={cn(
-                    "border border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                    isWorktreeCleaned
-                      ? "cursor-not-allowed opacity-60"
-                      : "cursor-pointer hover:border-border/80"
+                <div className="relative" ref={worktreeOpenMenuRef}>
+                  <Badge
+                    as="button"
+                    type="button"
+                    variant="secondary"
+                    className={cn(
+                      "border border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                      isWorktreeCleaned
+                        ? "cursor-not-allowed opacity-60"
+                        : "cursor-pointer hover:border-border/80"
+                    )}
+                    title={isWorktreeCleaned ? t("task.gitWorktreeCleaned") : visibleWorktree.rootPath || worktreeDisplayName}
+                    onClick={() => setShowWorktreeOpenMenu((value) => !value)}
+                    disabled={isWorktreeCleaned}
+                  >
+                    {worktreeDisplayName
+                      ? t("task.gitWorktreeNamed", { name: worktreeDisplayName })
+                      : t("task.gitWorktree")}
+                    {!isWorktreeCleaned && <ChevronDown className="ml-1 h-3 w-3" />}
+                  </Badge>
+                  {showWorktreeOpenMenu && !isWorktreeCleaned && (
+                    <div
+                      className="absolute right-0 top-full z-50 mt-2 w-44 overflow-hidden rounded-md border border-border bg-card p-1 text-sm shadow-lg"
+                      style={{ backgroundColor: "var(--card)" }}
+                    >
+                      {WORKTREE_EDITORS.map((editor) => (
+                        <button
+                          key={editor.key}
+                          type="button"
+                          className="flex w-full items-center rounded px-3 py-2 text-left text-card-foreground hover:bg-accent hover:text-accent-foreground"
+                          onClick={() => handleOpenWorktree(editor.key)}
+                        >
+                          {editor.label}
+                        </button>
+                      ))}
+                    </div>
                   )}
-                  title={isWorktreeCleaned ? t("ticket.gitWorktreeCleaned") : visibleWorktree.rootPath || worktreeDisplayName}
-                  onClick={handleOpenWorktree}
-                  disabled={isWorktreeCleaned}
-                >
-                  {worktreeDisplayName
-                    ? t("ticket.gitWorktreeNamed", { name: worktreeDisplayName })
-                    : t("ticket.gitWorktree")}
-                </Badge>
+                </div>
                 {!isWorktreeCleaned && (
                   <Button
                     type="button"
@@ -583,29 +689,35 @@ export default function TicketPage() {
                   onClick={() => setShowRemoveWorktreeConfirm(true)}
                   disabled={isRemovingWorktree}
                 >
-                    {isRemovingWorktree ? <Loader2 className="h-3 w-3 animate-spin" /> : t("ticket.removeWorktree")}
+                    {isRemovingWorktree ? <Loader2 className="h-3 w-3 animate-spin" /> : t("task.removeWorktree")}
                   </Button>
                 )}
               </div>
             )}
             {isStreaming && (
-              <Badge variant="info" className="animate-pulse-subtle">{t("ticket.working")}</Badge>
+              <Badge variant="info" className="animate-pulse-subtle">{t("task.working")}</Badge>
             )}
             {canPausePhase && (
               <Button type="button" variant="outline" size="sm" onClick={handlePausePhase}>
                 <Square className="h-3.5 w-3.5" />
-                {t("ticket.pausePhase")}
+                {t("task.pausePhase")}
               </Button>
             )}
-            {canRestartPhase && (
-              <Button type="button" variant="outline" size="sm" onClick={handleRestartPhase}>
+            {canResumePhase && (
+              <Button type="button" variant="outline" size="sm" onClick={handleResumePhase}>
                 <RotateCcw className="h-3.5 w-3.5" />
-                {t("ticket.restartPhase")}
+                {t("task.resumePhase")}
+              </Button>
+            )}
+            {canRetryPhase && (
+              <Button type="button" variant="outline" size="sm" onClick={handleRetryPhase}>
+                <RotateCcw className="h-3.5 w-3.5" />
+                {t("task.retryPhase")}
               </Button>
             )}
             <ThemeToggle />
             <WorkflowDebugPanel
-              ticketId={taskId}
+              taskId={taskId}
               workflowState={workflowState}
               activePhase={activePhase}
               activeStatus={activeStatus}
@@ -642,7 +754,7 @@ export default function TicketPage() {
                   <h2 className="truncate text-sm font-semibold text-foreground">Run details</h2>
                   <p className="truncate text-xs text-muted-foreground">Selected workflow step output and conversation.</p>
                 </div>
-                <Badge variant={workflowState?.overallStatus === "completed" ? "success" : workflowState?.overallStatus === "awaiting_input" ? "warning" : "outline"}>
+                <Badge variant={workflowState?.overallStatus === "completed" ? "success" : workflowState?.overallStatus === "awaiting_input" || workflowState?.overallStatus === "paused" ? "warning" : "outline"}>
                   {workflowState?.overallStatus || "unknown"}
                 </Badge>
               </div>
@@ -695,9 +807,9 @@ export default function TicketPage() {
           }}
         >
           <div className="bg-card border border-border rounded-lg p-6 max-w-sm w-full mx-4 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-foreground mb-2">{t("ticket.removeWorktreeConfirmTitle")}</h3>
+            <h3 className="text-sm font-semibold text-foreground mb-2">{t("task.removeWorktreeConfirmTitle")}</h3>
             <p className="text-sm text-muted-foreground mb-4">
-              {t("ticket.removeWorktreeConfirm", { name: worktreeDisplayName || taskId })}
+              {t("task.removeWorktreeConfirm", { name: worktreeDisplayName || taskId })}
             </p>
             <div className="flex justify-end gap-3">
               <Button
@@ -709,7 +821,7 @@ export default function TicketPage() {
                 {t("common.cancel")}
               </Button>
               <Button variant="destructive" size="sm" onClick={handleRemoveWorktree} disabled={isRemovingWorktree}>
-                {isRemovingWorktree ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("ticket.removeWorktree")}
+                {isRemovingWorktree ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("task.removeWorktree")}
               </Button>
             </div>
           </div>
@@ -729,28 +841,28 @@ export default function TicketPage() {
                 <div className="mb-4 flex items-center gap-3">
                   <Loader2 className="h-5 w-5 animate-spin text-info" />
                   <div>
-                    <h3 className="text-sm font-semibold text-foreground">{t("ticket.deletingTask")}</h3>
-                    <p className="mt-1 text-xs text-muted-foreground">{t("ticket.deletingTaskHint")}</p>
+                    <h3 className="text-sm font-semibold text-foreground">{t("task.deletingTask")}</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">{t("task.deletingTaskHint")}</p>
                   </div>
                 </div>
                 <div className="space-y-2 rounded-md border border-border bg-secondary/35 p-3 text-sm">
                   <div className="flex items-center gap-2 text-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-info" />
-                    <span>{t("ticket.deletingTaskData")}</span>
+                    <span>{t("task.deletingTaskData")}</span>
                   </div>
                   {hasWorktree && deleteWorktree && (
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <Circle className="h-3.5 w-3.5" />
-                      <span>{t("ticket.deletingWorktree")}</span>
+                      <span>{t("task.deletingWorktree")}</span>
                     </div>
                   )}
                 </div>
               </>
             ) : (
               <>
-                <h3 className="text-sm font-semibold text-foreground mb-2">{t("ticket.deleteTask")}</h3>
+                <h3 className="text-sm font-semibold text-foreground mb-2">{t("task.deleteTask")}</h3>
                 <p className="text-sm text-muted-foreground mb-4">
-                  {t("ticket.deleteTaskConfirm", { name: taskId })}
+                  {t("task.deleteTaskConfirm", { name: taskId })}
                 </p>
               </>
             )}
@@ -765,11 +877,11 @@ export default function TicketPage() {
                 <span>
                   <span className="block font-medium">
                     {worktreeDisplayName
-                      ? t("ticket.deleteWorktreeNamed", { name: worktreeDisplayName })
-                      : t("ticket.deleteWorktreeWithTask")}
+                      ? t("task.deleteWorktreeNamed", { name: worktreeDisplayName })
+                      : t("task.deleteWorktreeWithTask")}
                   </span>
                   <span className="mt-1 block text-xs text-muted-foreground">
-                    {t("ticket.deleteWorktreeHint")}
+                    {t("task.deleteWorktreeHint")}
                   </span>
                 </span>
               </label>
@@ -778,7 +890,7 @@ export default function TicketPage() {
               <div className="flex justify-end gap-3">
                 <Button variant="outline" size="sm" onClick={() => setShowDeleteConfirm(false)}>{t("common.cancel")}</Button>
                 <Button variant="destructive" size="sm" onClick={handleDelete}>
-                  {hasWorktree && deleteWorktree ? t("ticket.deleteTaskAndWorktree") : t("common.delete")}
+                  {hasWorktree && deleteWorktree ? t("task.deleteTaskAndWorktree") : t("common.delete")}
                 </Button>
               </div>
             )}

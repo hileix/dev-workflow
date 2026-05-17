@@ -1,0 +1,18 @@
+export const WORKFLOW_DEBUG_EVENT_TYPES = {
+  STATE: "state",
+  TEXT_DELTA: "text_delta",
+  TOOL_USE: "tool_use",
+  BACKEND_SELECTED: "backend_selected",
+  SESSION_ATTACHED: "session_attached",
+  USER_MESSAGE: "user_message",
+  PHASE_ARTIFACT: "phase_artifact",
+  PHASE_CONTENT: "phase_content",
+  PHASE_INTERACTION: "phase_interaction",
+  PHASE_DONE: "phase_done",
+  PHASE_COMPLETED: "phase_completed",
+  WORKFLOW_STARTING: "workflow_starting",
+  WORKTREE_NAMING_STARTED: "worktree_naming_started",
+  WORKTREE_NAMING_COMPLETED: "worktree_naming_completed",
+  WORKTREE_PREPARING: "worktree_preparing",
+  WORKTREE_READY: "worktree_ready",
+} as const;

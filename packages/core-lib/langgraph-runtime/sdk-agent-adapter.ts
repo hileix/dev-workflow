@@ -336,7 +336,7 @@ async function streamCodexSdk({ prompt, workFolder, sessionId, imagePaths, abort
 }
 
 function resolveOutputPath(taskDir, step, state) {
-  const filename = renderTemplate(step.output?.filename || "", state);
+  const filename = renderTemplate(step.outputs?.[0]?.filename || "", state);
   if (!filename) return "";
   const outputPath = resolve(taskDir, filename);
   if (!isPathInside(taskDir, outputPath)) throw new Error(`step ${step.id} output filename escapes taskDir`);
@@ -353,10 +353,12 @@ function resolveDeclaredOutputPath(taskDir, output, state) {
 
 async function writeOutputArtifact(taskDir, step, state, content) {
   const outputPath = resolveOutputPath(taskDir, step, state);
-  if (!outputPath || content === undefined) return "";
-  await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, content, "utf-8");
-  return outputPath;
+  if (!outputPath) return "";
+  try {
+    await readFile(outputPath, "utf-8");
+    return outputPath;
+  } catch {}
+  return "";
 }
 
 export function createSdkAgentAdapter(options = {}) {
@@ -423,8 +425,14 @@ export function createSdkAgentAdapter(options = {}) {
       }
 
       const artifactPath = await writeOutputArtifact(taskDir, step, state, content);
-      const summary = createContentSummary(content);
-      const contentPreview = createContentPreview(content);
+      let artifactContent = content;
+      if (artifactPath) {
+        try {
+          artifactContent = await readFile(artifactPath, "utf-8");
+        } catch {}
+      }
+      const summary = createContentSummary(artifactContent);
+      const contentPreview = createContentPreview(artifactContent);
       const outputs = {};
       for (const output of step.outputs || []) {
         const outputPath = resolveDeclaredOutputPath(taskDir, output, state);

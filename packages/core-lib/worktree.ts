@@ -108,8 +108,8 @@ async function branchExists(repoRoot, branchName) {
 }
 
 async function findAvailableWorktree(repoRoot, taskId, preferredName) {
-  const ticketSlug = sanitizeNamePart(taskId, "task");
-  const fallbackBranch = `chore/${ticketSlug}`;
+  const taskSlug = sanitizeNamePart(taskId, "task");
+  const fallbackBranch = `chore/${taskSlug}`;
   const baseBranchName = normalizeBranchName(preferredName, fallbackBranch);
   const baseDirName = branchToWorktreeName(baseBranchName);
   const parentDir = dirname(repoRoot);

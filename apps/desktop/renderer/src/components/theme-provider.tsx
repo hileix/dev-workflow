@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
-const ThemeContext = createContext({ theme: "dark", setTheme: () => {} });
+const ThemeContext = createContext({ theme: "light", setTheme: () => {} });
 
-export function ThemeProvider({ children, defaultTheme = "dark", storageKey = "ui-theme" }) {
+export function ThemeProvider({ children, defaultTheme = "light", storageKey = "ui-theme" }) {
   const [theme, setTheme] = useState(() => localStorage.getItem(storageKey) || defaultTheme);
 
   useEffect(() => {

@@ -7,8 +7,11 @@ import {
   saveConfig,
   getWorkflowDir,
   readAiBackendOverride,
+  readAiApiProfilesForUi,
   readMobileAccessEnabled,
   saveAiBackendOverride,
+  saveAiApiProfile,
+  deleteAiApiProfile,
   saveMobileAccessEnabled,
 } from "../../../packages/core-models/config";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills";
@@ -44,11 +47,12 @@ function getWorkflowFilename(workflow) {
 async function writeWorkflowFile(filename, workflow, isDraft) {
   if (!String(workflow?.name || "").trim()) throw new Error("workflow name is required");
   const workflowDir = await ensureWorkflowDir();
-  await writeFile(join(workflowDir, filename), JSON.stringify(workflow, null, 2));
+  const data = isDraft ? workflow : validateWorkflowDsl(workflow);
+  await writeFile(join(workflowDir, filename), JSON.stringify(data, null, 2));
   if (!isDraft && filename === getActiveWorkflowFile()) {
     loadWorkflow(join(workflowDir, filename));
   }
-  return { filename, name: workflow.name };
+  return { filename, name: data.name };
 }
 
 // --- AI skill generation ---
@@ -147,14 +151,19 @@ router.get("/workflow", async (req, res) => {
   const WORKFLOW = getWorkflow();
   const mobileAccessEnabled = await readMobileAccessEnabled();
   const aiBackendOverride = await readAiBackendOverride();
+  const aiApiProfiles = await readAiApiProfilesForUi();
   if (!WORKFLOW) {
-    return res.json(buildEmptyWorkflowConfig(mobileAccessEnabled, aiBackendOverride));
+    return res.json({
+      ...buildEmptyWorkflowConfig(mobileAccessEnabled, aiBackendOverride),
+      aiApiProfiles,
+    });
   }
 
   res.json({
     ...getWorkflowConfigShape(WORKFLOW),
     mobileAccessEnabled,
     aiBackendOverride,
+    aiApiProfiles,
   });
 });
 
@@ -187,6 +196,26 @@ router.put("/settings/ai-backend", async (req, res) => {
     });
   } catch (err) {
     res.status(400).json({ error: err.message || "failed to update AI backend" });
+  }
+});
+
+router.get("/settings/ai-api-profiles", async (_req, res) => {
+  res.json({ profiles: await readAiApiProfilesForUi() });
+});
+
+router.post("/settings/ai-api-profiles", async (req, res) => {
+  try {
+    res.json({ profiles: await saveAiApiProfile(req.body) });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "failed to save AI API profile" });
+  }
+});
+
+router.delete("/settings/ai-api-profiles/:id", async (req, res) => {
+  try {
+    res.json({ profiles: await deleteAiApiProfile(req.params.id) });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "failed to delete AI API profile" });
   }
 });
 

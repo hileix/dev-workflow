@@ -4,12 +4,15 @@ import { mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { killAllChildren } from "../../../packages/core-lib/claude";
-import { setRuntimeBaseDir, setRuntimeStorageDir } from "../../../packages/core-models/config";
+import { getDefaultDesktopUserDataDir, setRuntimeBaseDir, setRuntimeStorageDir } from "../../../packages/core-models/config";
 import {
   pickFolder,
   getWorkflowConfig,
   setMobileAccessEnabled,
   setAiBackendOverride,
+  listAiApiProfiles,
+  saveAiApi,
+  deleteAiApi,
   listWorkflows,
   getWorkflowByFilename,
   setWorkflowVisible,
@@ -38,20 +41,25 @@ import {
   approveWorkflow,
   rejectWorkflow,
   sendWorkflowMessage,
-  restartWorkflowPhase,
+  resumeWorkflowPhase,
+  retryWorkflowPhase,
   pauseWorkflowPhase,
   detachWorkflowSender,
 } from "./workflow-runtime";
 
-let mainWindow;
+let mainWindow: BrowserWindow | null = null;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rendererDevServerUrl = process.env.ELECTRON_RENDERER_URL;
 const isDev = Boolean(rendererDevServerUrl);
-const userDataDirOverride = process.env.DEV_WORKFLOW_USER_DATA_DIR;
+const userDataDir = getDefaultDesktopUserDataDir();
 
-if (userDataDirOverride) {
-  mkdirSync(userDataDirOverride, { recursive: true });
-  app.setPath("userData", userDataDirOverride);
+mkdirSync(userDataDir, { recursive: true });
+app.setPath("userData", userDataDir);
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!gotSingleInstanceLock) {
+  app.quit();
 }
 
 function spawnDetached(command, args) {
@@ -68,17 +76,39 @@ function spawnDetached(command, args) {
   });
 }
 
-async function openInCode(targetPath) {
+const EDITOR_OPENERS = {
+  code: {
+    command: "code",
+    args: (targetPath) => [targetPath],
+    darwinApp: "Visual Studio Code",
+    label: "VS Code",
+  },
+  sublime: {
+    command: "subl",
+    args: (targetPath) => [targetPath],
+    darwinApp: "Sublime Text",
+    label: "Sublime Text",
+  },
+  zed: {
+    command: "zed",
+    args: (targetPath) => [targetPath],
+    darwinApp: "Zed",
+    label: "Zed",
+  },
+};
+
+async function openInEditor(targetPath, editor = "code") {
   if (!targetPath) throw new Error("path required");
+  const opener = EDITOR_OPENERS[editor] || EDITOR_OPENERS.code;
   try {
-    await spawnDetached("code", [targetPath]);
+    await spawnDetached(opener.command, opener.args(targetPath));
     return { ok: true };
   } catch (error) {
     if (process.platform === "darwin") {
-      await spawnDetached("open", ["-a", "Visual Studio Code", targetPath]);
+      await spawnDetached("open", ["-a", opener.darwinApp, targetPath]);
       return { ok: true };
     }
-    throw new Error(error?.message || "failed to open VS Code");
+    throw new Error(error?.message || `failed to open ${opener.label}`);
   }
 }
 
@@ -132,6 +162,10 @@ async function createWindow() {
   } else {
     await mainWindow.loadFile(join(__dirname, "..", "renderer", "dist", "index.html"));
   }
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
 }
 
 function registerIpcHandlers() {
@@ -139,6 +173,9 @@ function registerIpcHandlers() {
   ipcMain.handle("app:get-workflow-config", () => getWorkflowConfig());
   ipcMain.handle("app:set-mobile-access-enabled", (_event, enabled) => setMobileAccessEnabled(enabled));
   ipcMain.handle("app:set-ai-backend-override", (_event, backend) => setAiBackendOverride(backend));
+  ipcMain.handle("app:list-ai-api-profiles", () => listAiApiProfiles());
+  ipcMain.handle("app:save-ai-api-profile", (_event, profile) => saveAiApi(profile));
+  ipcMain.handle("app:delete-ai-api-profile", (_event, id) => deleteAiApi(id));
   ipcMain.handle("app:list-workflows", () => listWorkflows());
   ipcMain.handle("app:get-workflow", (_event, filename) => getWorkflowByFilename(filename));
   ipcMain.handle("app:set-workflow-visible", (_event, filename, visible) => setWorkflowVisible(filename, visible));
@@ -157,9 +194,9 @@ function registerIpcHandlers() {
   ipcMain.handle("app:add-workfolder", (_event, path) => addWorkFolder(path));
   ipcMain.handle("app:remove-workfolder", (_event, path) => removeWorkFolder(path));
   ipcMain.handle("app:get-task-state", (_event, taskId, runId) => getTaskState(taskId, runId));
-  ipcMain.handle("app:open-in-code", (_event, targetPath) => openInCode(targetPath));
+  ipcMain.handle("app:open-in-code", (_event, targetPath, editor) => openInEditor(targetPath, editor));
   ipcMain.handle("app:open-task-output-in-code", async (_event, taskId, runId, phaseId, outputKey) =>
-    openInCode(await getTaskOutputPath(taskId, runId, phaseId, outputKey))
+    openInEditor(await getTaskOutputPath(taskId, runId, phaseId, outputKey))
   );
   ipcMain.handle("app:remove-task", (_event, taskId, runId, options) => removeTask(taskId, runId, options));
   ipcMain.handle("app:remove-task-worktree", (_event, taskId, runId) => removeTaskWorktreeOnly(taskId, runId));
@@ -184,8 +221,11 @@ function registerIpcHandlers() {
   ipcMain.handle("app:send-workflow-message", (event, taskId, text, images, runId) =>
     sendWorkflowMessage(taskId, text, images, (message) => event.sender.send("workflow:event", message), runId)
   );
-  ipcMain.handle("app:restart-workflow-phase", (event, taskId, phase, runId) =>
-    restartWorkflowPhase(taskId, phase, (message) => event.sender.send("workflow:event", message), runId)
+  ipcMain.handle("app:resume-workflow-phase", (event, taskId, phase, runId) =>
+    resumeWorkflowPhase(taskId, phase, (message) => event.sender.send("workflow:event", message), runId)
+  );
+  ipcMain.handle("app:retry-workflow-phase", (event, taskId, phase, runId) =>
+    retryWorkflowPhase(taskId, phase, (message) => event.sender.send("workflow:event", message), runId)
   );
   ipcMain.handle("app:pause-workflow-phase", (event, taskId, phase, runId) =>
     pauseWorkflowPhase(taskId, phase, (message) => event.sender.send("workflow:event", message), runId)
@@ -195,18 +235,26 @@ function registerIpcHandlers() {
   });
 }
 
-app.whenReady().then(async () => {
-  const userDataDir = app.getPath("userData");
-  setRuntimeStorageDir(userDataDir);
-  setRuntimeBaseDir(join(userDataDir, "tasks"));
-  registerIpcHandlers();
-  try {
-    await createWindow();
-  } catch (err) {
-    console.error(err);
-    app.quit();
-  }
-});
+if (gotSingleInstanceLock) {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  });
+
+  app.whenReady().then(async () => {
+    const userDataDir = app.getPath("userData");
+    setRuntimeStorageDir(userDataDir);
+    setRuntimeBaseDir(join(userDataDir, "tasks"));
+    registerIpcHandlers();
+    try {
+      await createWindow();
+    } catch (err) {
+      console.error(err);
+      app.quit();
+    }
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

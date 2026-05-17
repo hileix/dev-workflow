@@ -5,7 +5,7 @@ import { assertSafeRunId, readState, getTaskRunId, writeState } from "./state";
 import { removeWorktree } from "../core-lib/worktree";
 
 function getStoredTaskId(task) {
-  return task?.taskId || task?.ticketId || "";
+  return task?.taskId || "";
 }
 
 function normalizeTask(task) {
