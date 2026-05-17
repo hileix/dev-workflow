@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useConfigStore } from "./configStore";
 import { getAppApi } from "../lib/api-client";
+import { buildClientDebugPayload, DEBUG_EVENT_TRIGGERS, DEBUG_EVENT_TYPES } from "../lib/debug-events";
 
 const desktopApi = getAppApi();
 const MAX_DEBUG_EVENTS = 200;
@@ -33,13 +34,13 @@ function getWorkflowStateKey(taskId, runId = "") {
 function getCurrentPhaseFromTask(task) {
   if (task.status === "completed") return "completed";
   const activePhase = (task.phases || []).find((phase) =>
-    phase.status === "in_progress" || phase.status === "awaiting_input" || phase.status === "failed"
+    phase.status === "in_progress" || phase.status === "paused" || phase.status === "awaiting_input" || phase.status === "failed"
   );
   return activePhase?.id || activePhase?.name || task.phases?.[0]?.id || null;
 }
 
 function getWorkflowStateFromTask(task) {
-  const taskId = task.taskId || task.ticketId || "";
+  const taskId = task.taskId || "";
   if (!taskId) return null;
   const runId = task.runId || taskId;
   return {
@@ -111,7 +112,7 @@ function appendDebugEvent(set, payload, source = "workflow") {
       connectionState: source === "workflow" ? "connected" : state.connectionState,
     };
 
-    if (payload?.type === "error" || payload?.type === "phase_failed") {
+    if (payload?.type === DEBUG_EVENT_TYPES.ERROR || payload?.type === DEBUG_EVENT_TYPES.PHASE_FAILED) {
       nextState.lastError = {
         at: event.at,
         phase: payload.phase || null,
@@ -123,6 +124,34 @@ function appendDebugEvent(set, payload, source = "workflow") {
     }
 
     return nextState;
+  });
+}
+
+export function pushClientDebugEvent(payload) {
+  useWorkflowStore.setState((state) => {
+    const event = createDebugEvent(payload, "client");
+    return {
+      debugEvents: [...state.debugEvents, event].slice(-MAX_DEBUG_EVENTS),
+      lastEventAt: event.at,
+    };
+  });
+}
+
+export function pushClientErrorEvent(payload) {
+  useWorkflowStore.setState((state) => {
+    const event = createDebugEvent(payload, "client");
+    return {
+      debugEvents: [...state.debugEvents, event].slice(-MAX_DEBUG_EVENTS),
+      lastEventAt: event.at,
+      lastError: {
+        at: event.at,
+        phase: payload.phase || null,
+        message: payload.message || "Unknown error",
+        payload,
+      },
+      isStreaming: false,
+      streamingPhase: null,
+    };
   });
 }
 
@@ -178,10 +207,8 @@ function applyDisconnectedState(set, get) {
   if (state) {
     const updated = {
       ...state,
-      overallStatus: state.overallStatus === "in_progress" ? "awaiting_input" : state.overallStatus,
-      phases: state.phases.map((phase) =>
-        phase.status === "in_progress" ? { ...phase, status: "awaiting_input" } : phase
-      ),
+      overallStatus: state.overallStatus,
+      phases: state.phases.map((phase) => ({ ...phase })),
     };
     set({ workflowState: updated, isStreaming: false, streamingPhase: null, connectionState: "disconnected" });
   } else {
@@ -253,6 +280,9 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
           playNotificationSound();
           set({ selectedPhase: phase.id });
         }
+        if (phase.status === "paused" && prevStatus !== "paused") {
+          set({ selectedPhase: phase.id });
+        }
         if (phase.status === "in_progress") streaming = true;
       }
       if (!streaming) {
@@ -269,7 +299,7 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
       }
     } else if (msg.type === "phase_done") {
       set({ isStreaming: false, streamingPhase: null });
-    } else if (msg.type === "phase_paused") {
+    } else if (msg.type === DEBUG_EVENT_TYPES.PHASE_PAUSED) {
       set({ isStreaming: false, streamingPhase: null });
     } else if (msg.type === "phase_content") {
       set((state) => ({ phaseMessages: { ...state.phaseMessages, [msg.phase]: msg.content } }));
@@ -317,7 +347,7 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
   });
 
   return () => {
-    appendDebugEvent(set, { type: "client_detach", taskId, runId }, "client");
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.CLIENT_DETACH, { taskId, runId }));
     if (taskId) desktopApi.detachWorkflow(taskId, runId);
     if (unsubscribeWorkflowEvents) {
       unsubscribeWorkflowEvents();
@@ -328,7 +358,7 @@ function attachWorkflowEvents(set, get, taskId, runId = "") {
 }
 
 export const useWorkflowStore = create((set, get) => ({
-  activeTicket: null,
+  activeTask: null,
   workflowState: null,
   workflowStatesByRun: {},
   selectedPhase: null,
@@ -378,7 +408,7 @@ export const useWorkflowStore = create((set, get) => ({
     });
   },
 
-  async loadTicket(taskId, runId) {
+  async loadTask(taskId, runId) {
     try {
       const stateKey = getWorkflowStateKey(taskId, runId);
       const cachedState = get().workflowStatesByRun[stateKey];
@@ -387,7 +417,7 @@ export const useWorkflowStore = create((set, get) => ({
           ? cachedState.currentPhase
           : cachedState.phases?.[0]?.id || null;
         set({
-          activeTicket: taskId,
+          activeTask: taskId,
           workflowState: cachedState,
           selectedPhase,
           connectionState: cachedState.overallStatus === "completed" ? "disconnected" : get().connectionState,
@@ -401,7 +431,7 @@ export const useWorkflowStore = create((set, get) => ({
         ? displayState.currentPhase
         : displayState.phases?.[0]?.id || null;
       set({
-        activeTicket: taskId,
+        activeTask: taskId,
         workflowState: displayState,
         phaseMessages: messages || {},
         phaseOutputArtifacts: outputArtifacts || {},
@@ -426,13 +456,13 @@ export const useWorkflowStore = create((set, get) => ({
   },
 
   async connectWorkflow(taskId, workFolder, taskInputs, images, runId, worktreeName, workflowFilename) {
-    appendDebugEvent(set, { type: "client_connect", taskId, workFolder }, "client");
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.CLIENT_CONNECT, { taskId, workFolder }));
     set({ connectionState: "connecting" });
     const detach = attachWorkflowEvents(set, get, taskId, runId);
     try {
       await desktopApi.startWorkflow({ taskId, workFolder, taskInputs, images, runId, worktreeName, workflowFilename });
     } catch (err) {
-      appendDebugEvent(set, { type: "error", message: err?.message || "Failed to start workflow" }, "client");
+      pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Failed to start workflow" });
       detach();
       applyDisconnectedState(set, get);
     }
@@ -466,7 +496,7 @@ export const useWorkflowStore = create((set, get) => ({
     const stateKey = getWorkflowStateKey(id, workflowState.runId);
 
     set({
-      activeTicket: id,
+      activeTask: id,
       selectedPhase: firstPhase,
       phaseMessages: {},
       phaseOutputArtifacts: {},
@@ -487,39 +517,111 @@ export const useWorkflowStore = create((set, get) => ({
   },
 
   async approve() {
-    const { activeTicket, workflowState } = get();
-    if (!activeTicket) return;
+    const { activeTask, workflowState } = get();
+    if (!activeTask) return;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_APPROVE_REQUESTED, {
+      phase: workflowState?.currentPhase || null,
+      trigger: DEBUG_EVENT_TRIGGERS.CHECKPOINT,
+    }));
     try {
-      await desktopApi.approveWorkflow(activeTicket, workflowState?.runId || "");
+      await desktopApi.approveWorkflow(activeTask, workflowState?.runId || "");
     } catch (err) {
-      appendDebugEvent(set, { type: "error", message: err?.message || "Approve failed" }, "client");
+      pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Approve failed" });
     }
   },
 
   async reject(rejectTo, reason) {
-    const { activeTicket, workflowState } = get();
-    if (!activeTicket) return;
+    const { activeTask, workflowState } = get();
+    if (!activeTask) return;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_REJECT_REQUESTED, {
+      phase: workflowState?.currentPhase || null,
+      rejectTo,
+      message: reason,
+      trigger: DEBUG_EVENT_TRIGGERS.CHECKPOINT,
+    }));
     try {
-      await desktopApi.rejectWorkflow(activeTicket, rejectTo, reason, workflowState?.runId || "");
+      await desktopApi.rejectWorkflow(activeTask, rejectTo, reason, workflowState?.runId || "");
     } catch (err) {
-      appendDebugEvent(set, { type: "error", message: err?.message || "Reject failed", rejectTo }, "client");
+      pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Reject failed", rejectTo });
     }
   },
 
   async sendMessage(text, images) {
-    const { activeTicket, workflowState } = get();
-    if (!activeTicket) return;
+    const { activeTask, workflowState } = get();
+    if (!activeTask) return;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_MESSAGE_REQUESTED, {
+      phase: workflowState?.currentPhase || null,
+      text,
+      imageCount: Array.isArray(images) ? images.length : 0,
+      trigger: DEBUG_EVENT_TRIGGERS.CHAT,
+    }));
     try {
-      await desktopApi.sendWorkflowMessage(activeTicket, text, images, workflowState?.runId || "");
+      await desktopApi.sendWorkflowMessage(activeTask, text, images, workflowState?.runId || "");
     } catch (err) {
-      appendDebugEvent(set, { type: "error", message: err?.message || "Send message failed" }, "client");
+      pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Send message failed" });
     }
   },
 
-  async restartPhase(phase) {
-    const { activeTicket, workflowState } = get();
-    if (!activeTicket || !phase) return;
-    appendDebugEvent(set, { type: "phase_restart_requested", phase }, "client");
+  async resumePhase(phase) {
+    const { activeTask, workflowState } = get();
+    if (!activeTask || !phase) return;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_RESUME_REQUESTED, { phase, trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR }));
+    set((state) => ({
+      isStreaming: true,
+      streamingPhase: phase,
+      lastError: null,
+      workflowState: state.workflowState
+        ? {
+            ...state.workflowState,
+            overallStatus: "in_progress",
+            currentPhase: phase,
+            phases: state.workflowState.phases.map((item) =>
+              item.id === phase ? { ...item, status: "in_progress" } : item
+            ),
+          }
+        : state.workflowState,
+    }));
+      const nextState = get().workflowState;
+    if (nextState) {
+      set((state) => ({
+        workflowStatesByRun: {
+          ...state.workflowStatesByRun,
+          [getWorkflowStateKey(nextState.taskId, nextState.runId)]: nextState,
+        },
+      }));
+    }
+    try {
+      await desktopApi.resumeWorkflowPhase(activeTask, phase, workflowState?.runId || "");
+    } catch (err) {
+      const currentState = get().workflowState;
+      if (currentState) {
+        const reverted = {
+          ...currentState,
+          overallStatus: "paused",
+          phases: currentState.phases.map((item) =>
+            item.id === phase ? { ...item, status: "paused" } : item
+          ),
+        };
+        set((state) => ({
+          workflowState: reverted,
+          workflowStatesByRun: {
+            ...state.workflowStatesByRun,
+            [getWorkflowStateKey(reverted.taskId, reverted.runId)]: reverted,
+          },
+          isStreaming: false,
+          streamingPhase: null,
+        }));
+      } else {
+        set({ isStreaming: false, streamingPhase: null });
+      }
+      pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Resume failed", phase });
+    }
+  },
+
+  async retryPhase(phase) {
+    const { activeTask, workflowState } = get();
+    if (!activeTask || !phase) return;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_RETRY_REQUESTED, { phase, trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR }));
     set((state) => ({
       isStreaming: true,
       streamingPhase: phase,
@@ -545,26 +647,46 @@ export const useWorkflowStore = create((set, get) => ({
       }));
     }
     try {
-      await desktopApi.restartWorkflowPhase(activeTicket, phase, workflowState?.runId || "");
+      await desktopApi.retryWorkflowPhase(activeTask, phase, workflowState?.runId || "");
     } catch (err) {
-      set({ isStreaming: false, streamingPhase: null });
-      appendDebugEvent(set, { type: "error", message: err?.message || "Restart failed", phase }, "client");
+      const currentState = get().workflowState;
+      if (currentState) {
+        const reverted = {
+          ...currentState,
+          overallStatus: "failed",
+          phases: currentState.phases.map((item) =>
+            item.id === phase ? { ...item, status: "failed" } : item
+          ),
+        };
+        set((state) => ({
+          workflowState: reverted,
+          workflowStatesByRun: {
+            ...state.workflowStatesByRun,
+            [getWorkflowStateKey(reverted.taskId, reverted.runId)]: reverted,
+          },
+          isStreaming: false,
+          streamingPhase: null,
+        }));
+      } else {
+        set({ isStreaming: false, streamingPhase: null });
+      }
+      pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Retry failed", phase });
     }
   },
 
   async pausePhase(phase) {
-    const { activeTicket, workflowState } = get();
-    if (!activeTicket || !phase) return;
-    appendDebugEvent(set, { type: "phase_pause_requested", phase }, "client");
+    const { activeTask, workflowState } = get();
+    if (!activeTask || !phase) return;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_PAUSE_REQUESTED, { phase, trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR }));
     set((state) => ({
       isStreaming: false,
       streamingPhase: null,
       workflowState: state.workflowState
         ? {
             ...state.workflowState,
-            overallStatus: "awaiting_input",
+            overallStatus: "paused",
             phases: state.workflowState.phases.map((item) =>
-              item.id === phase ? { ...item, status: "awaiting_input" } : item
+              item.id === phase ? { ...item, status: "paused" } : item
             ),
           }
         : state.workflowState,
@@ -579,17 +701,40 @@ export const useWorkflowStore = create((set, get) => ({
       }));
     }
     try {
-      await desktopApi.pauseWorkflowPhase(activeTicket, phase, workflowState?.runId || "");
+      await desktopApi.pauseWorkflowPhase(activeTask, phase, workflowState?.runId || "");
     } catch (err) {
-      appendDebugEvent(set, { type: "error", message: err?.message || "Pause failed", phase }, "client");
+      const currentState = get().workflowState;
+      if (currentState) {
+        const reverted = {
+          ...currentState,
+          overallStatus: "in_progress",
+          phases: currentState.phases.map((item) =>
+            item.id === phase ? { ...item, status: "in_progress" } : item
+          ),
+        };
+        set((state) => ({
+          workflowState: reverted,
+          workflowStatesByRun: {
+            ...state.workflowStatesByRun,
+            [getWorkflowStateKey(reverted.taskId, reverted.runId)]: reverted,
+          },
+        }));
+      }
+      pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Pause failed", phase });
     }
   },
 
   async deleteTask(taskId, runId, options = {}) {
-    const { activeTicket, workflowState } = get();
-    const targetTaskId = taskId || activeTicket;
+    const { activeTask, workflowState } = get();
+    const targetTaskId = taskId || activeTask;
     const targetRunId = runId || workflowState?.runId || "";
     if (!targetTaskId) return false;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.TASK_DELETE_REQUESTED, {
+      taskId: targetTaskId,
+      runId: targetRunId,
+      removeWorktree: Boolean(options?.removeWorktree),
+      trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+    }));
     try {
       if (unsubscribeWorkflowEvents) {
         unsubscribeWorkflowEvents();
@@ -597,10 +742,16 @@ export const useWorkflowStore = create((set, get) => ({
       }
       desktopApi.detachWorkflow(targetTaskId, targetRunId);
       await desktopApi.removeTask(targetTaskId, targetRunId, options);
+      pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.TASK_DELETED, {
+        taskId: targetTaskId,
+        runId: targetRunId,
+        removeWorktree: Boolean(options?.removeWorktree),
+        trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+      }));
       const stateKey = getWorkflowStateKey(targetTaskId, targetRunId);
       const { [stateKey]: _removed, ...workflowStatesByRun } = get().workflowStatesByRun;
       set({
-        activeTicket: null,
+        activeTask: null,
         workflowState: null,
         workflowStatesByRun,
         phaseMessages: {},
@@ -616,18 +767,33 @@ export const useWorkflowStore = create((set, get) => ({
       await useConfigStore.getState().loadWorkFolders();
       return true;
     } catch (err) {
-      appendDebugEvent(set, { type: "error", message: err?.message || "Delete task failed" }, "client");
+      pushClientErrorEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.TASK_DELETE_FAILED, {
+        taskId: targetTaskId,
+        runId: targetRunId,
+        message: err?.message || "Delete task failed",
+        trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+      }));
       return false;
     }
   },
 
   async removeTaskWorktree(taskId, runId) {
-    const { activeTicket, workflowState } = get();
-    const targetTaskId = taskId || activeTicket;
+    const { activeTask, workflowState } = get();
+    const targetTaskId = taskId || activeTask;
     const targetRunId = runId || workflowState?.runId || "";
     if (!targetTaskId) return false;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.WORKTREE_REMOVE_REQUESTED, {
+      taskId: targetTaskId,
+      runId: targetRunId,
+      trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+    }));
     try {
       const result = await desktopApi.removeTaskWorktree(targetTaskId, targetRunId);
+      pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.WORKTREE_REMOVED, {
+        taskId: targetTaskId,
+        runId: targetRunId,
+        trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+      }));
       const nextState = result?.state || (workflowState ? {
         ...workflowState,
         worktree: {
@@ -649,7 +815,12 @@ export const useWorkflowStore = create((set, get) => ({
       await useConfigStore.getState().loadWorkFolders();
       return true;
     } catch (err) {
-      appendDebugEvent(set, { type: "error", message: err?.message || "Remove worktree failed" }, "client");
+      pushClientErrorEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.WORKTREE_REMOVE_FAILED, {
+        taskId: targetTaskId,
+        runId: targetRunId,
+        message: err?.message || "Remove worktree failed",
+        trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
+      }));
       return false;
     }
   },

@@ -21,7 +21,7 @@ flowchart LR
     B[Cloud Backend]
     D[Desktop Connector]
 
-    M -- "HTTP\nGET /api/tasks\nGET /api/devices\nPOST /api/tasks/:deviceId/:ticketId/commands" --> B
+    M -- "HTTP\nGET /api/tasks\nGET /api/devices\nPOST /api/tasks/:deviceId/:taskId/commands" --> B
     B -- "HTTP Response" --> M
 
     M -- "WebSocket\n/ws/mobile" --> B
@@ -44,7 +44,7 @@ flowchart LR
 
     M -->|HTTP + WebSocket| B
     B -->|WebSocket| D
-    D -->|HTTP\n/api/workfolders\n/api/workflow\n/api/workflows\n/api/tasks/:ticketId/state| S
+    D -->|HTTP\n/api/workfolders\n/api/workflow\n/api/workflows\n/api/tasks/:taskId/state| S
     D -->|WebSocket\n/ws| S
     E -. "本地 IPC" .-> R
     S --> R
@@ -81,7 +81,7 @@ sequenceDiagram
 
     D->>B: WebSocket connect /ws/desktop
     D->>B: device.hello
-    D->>S: HTTP GET /api/tasks/:ticketId/state
+    D->>S: HTTP GET /api/tasks/:taskId/state
     D->>B: task.snapshot / task.event
 
     M->>B: HTTP GET /api/tasks
@@ -100,7 +100,7 @@ sequenceDiagram
     participant D as Desktop Connector
     participant S as Local Workflow Server
 
-    M->>B: HTTP POST /api/tasks/:deviceId/:ticketId/commands
+    M->>B: HTTP POST /api/tasks/:deviceId/:taskId/commands
     B-->>M: command created
     B-->>D: command.request
 
@@ -108,7 +108,7 @@ sequenceDiagram
         D->>S: WebSocket /ws
         D->>S: approve / reject / message
     else sync_task
-        D->>S: HTTP GET /api/tasks/:ticketId/state
+        D->>S: HTTP GET /api/tasks/:taskId/state
     else start_workflow
         D->>S: WebSocket /ws
         D->>S: start

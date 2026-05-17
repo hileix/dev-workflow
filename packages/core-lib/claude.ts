@@ -8,12 +8,21 @@ export const AI_BACKENDS = {
   CODEX: "codex",
 };
 
+export const WORKTREE_NAMING_PROVIDERS = {
+  AI_API: "ai_api",
+  AI_BACKEND: "ai_backend",
+};
+
 export const SUPPORTED_AI_BACKENDS = [AI_BACKENDS.CLAUDE, AI_BACKENDS.CODEX];
 export const DEFAULT_AI_BACKEND = AI_BACKENDS.CLAUDE;
 export const activeWorkflows = new Map();
 
 export function normalizeAiBackend(value) {
   return SUPPORTED_AI_BACKENDS.includes(value) ? value : DEFAULT_AI_BACKEND;
+}
+
+export function normalizeWorktreeNamingProvider(value) {
+  return value === WORKTREE_NAMING_PROVIDERS.AI_BACKEND ? WORKTREE_NAMING_PROVIDERS.AI_BACKEND : WORKTREE_NAMING_PROVIDERS.AI_API;
 }
 
 export function sendWorkflowEvent(send, data) {

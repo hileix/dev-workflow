@@ -227,6 +227,8 @@ function createDefaultWorkflow({ includeStartStep = true } = {}) {
       files: [...COMMON_WORKTREE_FILES],
       customFiles: [],
       removeOnComplete: false,
+      namingProvider: "ai_api",
+      namingAiApiProfileId: "",
       useCustomSetupScript: false,
       setupScript: "",
     },
@@ -373,6 +375,8 @@ function normalizeWorkflow(raw) {
       ...(raw?.worktree || {}),
       files: Array.from(new Set(worktreeFiles)),
       customFiles,
+      namingProvider: raw?.worktree?.namingProvider === "ai_backend" ? "ai_backend" : "ai_api",
+      namingAiApiProfileId: raw?.worktree?.namingAiApiProfileId || "",
       useCustomSetupScript: raw?.worktree?.useCustomSetupScript === true,
     },
   };
@@ -583,6 +587,8 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const [modelRuntimeTarget, setModelRuntimeTarget] = useState(null);
   const [showWorkflowSetup, setShowWorkflowSetup] = useState(false);
   const [showRuntimeSettings, setShowRuntimeSettings] = useState(false);
+  const aiApiProfiles = useConfigStore((s) => s.aiApiProfiles);
+  const workflowConfig = useConfigStore((s) => s.workflowConfig);
   const loadWorkflowConfig = useConfigStore((s) => s.loadWorkflowConfig);
   const loadWorkflows = useConfigStore((s) => s.loadWorkflows);
   const showToast = useWorkflowStore((s) => s.showToast);
@@ -604,6 +610,11 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
   const canvasViewportRef = useRef(null);
   const selectedNodePanelRef = useRef(null);
   const [flowInstance, setFlowInstance] = useState(null);
+
+  useEffect(() => {
+    if (workflowConfig) return;
+    loadWorkflowConfig();
+  }, [workflowConfig, loadWorkflowConfig]);
 
   function closeEditor() {
     resetEditor();
@@ -1256,6 +1267,36 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
               />
             </label>
             {workflow.worktree.enabled && (
+              <div className="mt-3 grid gap-2 rounded-md border border-border bg-background/70 p-2">
+                <div>
+                  <label className="mb-1.5 block text-[10px] text-muted-foreground">Name generator</label>
+                  <Select
+                    value={workflow.worktree.namingProvider || "ai_api"}
+                    onChange={(event) => updateWorktree({ namingProvider: event.target.value })}
+                    className="h-8 text-xs"
+                  >
+                    <option value="ai_api">AI API</option>
+                    <option value="ai_backend">Default AI Backend</option>
+                  </Select>
+                </div>
+                {(workflow.worktree.namingProvider || "ai_api") === "ai_api" && (
+                  <div>
+                    <label className="mb-1.5 block text-[10px] text-muted-foreground">AI API Client</label>
+                    <Select
+                      value={workflow.worktree.namingAiApiProfileId || ""}
+                      onChange={(event) => updateWorktree({ namingAiApiProfileId: event.target.value })}
+                      className="h-8 text-xs"
+                    >
+                      <option value="" disabled>Select AI API client</option>
+                      {aiApiProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>
+                      ))}
+                    </Select>
+                  </div>
+                )}
+              </div>
+            )}
+            {workflow.worktree.enabled && (
               <label className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
                 <span>Remove on complete</span>
                 <input
@@ -1381,7 +1422,7 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
 	              <p>Drag from a node handle to another node to create a route.</p>
 	              <p>Agent: blue handle writes <span className="font-mono">next</span>.</p>
 	              <p>Checkpoint: green writes <span className="font-mono">approve</span>, amber writes <span className="font-mono">rejectTo</span>.</p>
-	              <p>Condition: green writes <span className="font-mono">passTo</span>, amber writes <span className="font-mono">failTo</span>.</p>
+	              <p>Conditional Gate: green writes <span className="font-mono">passTo</span>, amber writes <span className="font-mono">failTo</span>.</p>
 	            </div>
           </section>
               </div>
@@ -1523,42 +1564,61 @@ export default function WorkflowEditor({ filename, onClose, onSaved }) {
                             updateStep(selectedIdx, {
                               backend,
                               model: backend && models.includes(selected.model) ? selected.model : "",
+                              aiApiProfileId: backend === "ai_api" ? selected.aiApiProfileId || aiApiProfiles[0]?.id || "" : selected.aiApiProfileId,
                             });
                           }}
                         >
                           <option value="">Workflow runtime</option>
                           <option value="claude">claude</option>
                           <option value="codex">codex</option>
+                          <option value="ai_api">AI API</option>
                         </Select>
                       </div>
-                      <div className="min-w-0">
-                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Model</label>
-                        <Button type="button" variant="outline" className="h-auto w-full justify-start px-3 py-2 text-left" onClick={() => setModelRuntimeTarget("step")}>
-                          <span className="min-w-0">
-                            <span className="block truncate text-sm text-foreground">{selected.model ? getModelLabel(selected.backend || workflow.runtime.backend, selected.model) : "Workflow model"}</span>
-                            {(selected.backend || workflow.runtime.backend) === "codex" && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{getReasoningLabel(getCodexReasoning(selected))}</span>}
-                          </span>
-                        </Button>
-                      </div>
-                      <div className="min-w-0">
-                        <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
-                          <span>Codebase Access</span>
-                          <Tooltip content={CODEBASE_ACCESS_TOOLTIP} side="top" align="center">
-                            <button
-                              type="button"
-                              aria-label="Explain codebase access"
-                              className="inline-flex cursor-help text-muted-foreground/80 hover:text-foreground"
-                            >
-                              <CircleHelp className="h-3.5 w-3.5" />
-                            </button>
-                          </Tooltip>
-                        </label>
-                        <Select value={selected.workspaceAccess || ""} onChange={(event) => updateStep(selectedIdx, { workspaceAccess: event.target.value })}>
-                          <option value="">Workflow runtime</option>
-                          <option value="read">Read-only</option>
-                          <option value="write">Can edit project files</option>
-                        </Select>
-                      </div>
+                      {selected.backend === "ai_api" ? (
+                        <div className="min-w-0">
+                          <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">AI API Client</label>
+                          <Select
+                            value={selected.aiApiProfileId || ""}
+                            onChange={(event) => updateStep(selectedIdx, { aiApiProfileId: event.target.value })}
+                          >
+                            <option value="">Select AI API client</option>
+                            {aiApiProfiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>
+                            ))}
+                          </Select>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="min-w-0">
+                            <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Model</label>
+                            <Button type="button" variant="outline" className="h-auto w-full justify-start px-3 py-2 text-left" onClick={() => setModelRuntimeTarget("step")}>
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm text-foreground">{selected.model ? getModelLabel(selected.backend || workflow.runtime.backend, selected.model) : "Workflow model"}</span>
+                                {(selected.backend || workflow.runtime.backend) === "codex" && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{getReasoningLabel(getCodexReasoning(selected))}</span>}
+                              </span>
+                            </Button>
+                          </div>
+                          <div className="min-w-0">
+                            <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
+                              <span>Codebase Access</span>
+                              <Tooltip content={CODEBASE_ACCESS_TOOLTIP} side="top" align="center">
+                                <button
+                                  type="button"
+                                  aria-label="Explain codebase access"
+                                  className="inline-flex cursor-help text-muted-foreground/80 hover:text-foreground"
+                                >
+                                  <CircleHelp className="h-3.5 w-3.5" />
+                                </button>
+                              </Tooltip>
+                            </label>
+                            <Select value={selected.workspaceAccess || ""} onChange={(event) => updateStep(selectedIdx, { workspaceAccess: event.target.value })}>
+                              <option value="">Workflow runtime</option>
+                              <option value="read">Read-only</option>
+                              <option value="write">Can edit project files</option>
+                            </Select>
+                          </div>
+                        </>
+                      )}
                     </div>
                     <div>
                       <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">Step Prompt</label>

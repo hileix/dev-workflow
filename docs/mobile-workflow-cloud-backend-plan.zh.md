@@ -125,7 +125,7 @@ Local Workflow Runtime
   "event": {
     "type": "state",
     "state": {
-      "ticketId": "TASK-123",
+      "taskId": "TASK-123",
       "overallStatus": "awaiting_input",
       "currentPhase": "review"
     }
@@ -265,7 +265,7 @@ heartbeat
 - `id`
 - `user_id`
 - `device_id`
-- `ticket_id`
+- `task_id`
 - `work_folder`
 - `overall_status`
 - `current_phase`

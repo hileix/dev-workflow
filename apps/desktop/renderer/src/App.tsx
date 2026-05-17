@@ -4,7 +4,7 @@ import { useConfigStore } from "./stores/configStore";
 import { useWorkflowStore } from "./stores/workflowStore";
 import HomePage from "./pages/HomePage";
 import SettingsPage from "./pages/SettingsPage";
-import TicketPage from "./pages/TicketPage";
+import TaskPage from "./pages/TaskPage";
 
 export default function App() {
   const toast = useWorkflowStore((s) => s.toast);
@@ -20,7 +20,7 @@ export default function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/workflows/new" element={<SettingsPage />} />
         <Route path="/settings/workflows/:filename/edit" element={<SettingsPage />} />
-        <Route path="/ticket/:id" element={<TicketPage />} />
+        <Route path="/task/:id" element={<TaskPage />} />
       </Routes>
 
       {toast && (

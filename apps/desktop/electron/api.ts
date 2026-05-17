@@ -8,8 +8,11 @@ import {
   getBaseDir,
   getWorkflowDir,
   readAiBackendOverride,
+  readAiApiProfilesForUi,
   readMobileAccessEnabled,
   saveAiBackendOverride,
+  saveAiApiProfile,
+  deleteAiApiProfile,
   saveMobileAccessEnabled,
 } from "../../../packages/core-models/config";
 import {
@@ -56,13 +59,18 @@ export async function getWorkflowConfig() {
   const workflow = getWorkflow();
   const mobileAccessEnabled = await readMobileAccessEnabled();
   const aiBackendOverride = await readAiBackendOverride();
+  const aiApiProfiles = await readAiApiProfilesForUi();
   if (!workflow) {
-    return buildEmptyWorkflowConfig(mobileAccessEnabled, aiBackendOverride);
+    return {
+      ...buildEmptyWorkflowConfig(mobileAccessEnabled, aiBackendOverride),
+      aiApiProfiles,
+    };
   }
   return {
     ...getWorkflowConfigShape(workflow),
     mobileAccessEnabled,
     aiBackendOverride,
+    aiApiProfiles,
   };
 }
 
@@ -74,6 +82,20 @@ export async function setMobileAccessEnabled(enabled) {
 export async function setAiBackendOverride(backend) {
   await saveAiBackendOverride(backend);
   return getWorkflowConfig();
+}
+
+export async function listAiApiProfiles() {
+  return { profiles: await readAiApiProfilesForUi() };
+}
+
+export async function saveAiApi(profile) {
+  const profiles = await saveAiApiProfile(profile);
+  return { profiles };
+}
+
+export async function deleteAiApi(id) {
+  const profiles = await deleteAiApiProfile(id);
+  return { profiles };
 }
 
 export async function listWorkflows() {

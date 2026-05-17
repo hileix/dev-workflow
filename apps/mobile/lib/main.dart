@@ -1008,6 +1008,8 @@ class _TaskCard extends StatelessWidget {
     switch (status) {
       case "completed":
         return const Color(0xFF15803D);
+      case "paused":
+        return const Color(0xFFD97706);
       case "awaiting_input":
         return const Color(0xFFD97706);
       case "in_progress":

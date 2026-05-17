@@ -7,6 +7,7 @@ import { useI18n } from "../components/i18n-provider";
 import SkillManager from "../components/SkillManager";
 import { ThemeToggle } from "../components/theme-toggle";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { WindowChrome } from "../components/window-chrome";
 import { cn } from "../lib/utils";
 import { useConfigStore } from "../stores/configStore";
@@ -20,6 +21,8 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("workflows");
   const [savingMobileAccess, setSavingMobileAccess] = useState(false);
   const [savingAiBackend, setSavingAiBackend] = useState(false);
+  const [savingAiApiProfile, setSavingAiApiProfile] = useState(false);
+  const [aiApiProfileDraft, setAiApiProfileDraft] = useState(null);
   const [confirmRemoveWorkflow, setConfirmRemoveWorkflow] = useState(null);
   const [confirmRemoveWorkflowStep, setConfirmRemoveWorkflowStep] = useState(1);
   const [confirmRemoveFolder, setConfirmRemoveFolder] = useState(null);
@@ -27,11 +30,14 @@ export default function SettingsPage() {
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
   const workflows = useConfigStore((s) => s.workflows);
   const skills = useConfigStore((s) => s.skills);
+  const aiApiProfiles = useConfigStore((s) => s.aiApiProfiles);
   const workFolders = useConfigStore((s) => s.workFolders);
   const selectedFolder = useConfigStore((s) => s.selectedFolder);
   const setSelectedFolder = useConfigStore((s) => s.setSelectedFolder);
   const setMobileAccessEnabled = useConfigStore((s) => s.setMobileAccessEnabled);
   const setAiBackendOverride = useConfigStore((s) => s.setAiBackendOverride);
+  const saveAiApiProfile = useConfigStore((s) => s.saveAiApiProfile);
+  const deleteAiApiProfile = useConfigStore((s) => s.deleteAiApiProfile);
   const deleteWorkflow = useConfigStore((s) => s.deleteWorkflow);
   const setWorkflowVisible = useConfigStore((s) => s.setWorkflowVisible);
   const addFolder = useConfigStore((s) => s.addFolder);
@@ -48,6 +54,7 @@ export default function SettingsPage() {
   const aiBackendOverride = workflowConfig?.aiBackendOverride || "claude";
   const tabs = [
     { key: "workflows", label: t("settings.tab.workflows") },
+    { key: "aiApis", label: t("settings.tab.aiApis") },
     { key: "skills", label: t("settings.tab.skills") },
     { key: "folders", label: t("settings.tab.folders") },
   ];
@@ -58,6 +65,37 @@ export default function SettingsPage() {
     loadSkills();
     loadWorkFolders();
   }, []);
+
+  function startNewAiApiProfile() {
+    setAiApiProfileDraft({
+      id: "",
+      name: "",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "",
+      model: "gpt-5.2",
+    });
+  }
+
+  function startEditAiApiProfile(profile) {
+    setAiApiProfileDraft({
+      ...profile,
+      apiKey: "",
+    });
+  }
+
+  async function handleSaveAiApiProfile() {
+    if (!aiApiProfileDraft) return;
+    setSavingAiApiProfile(true);
+    try {
+      await saveAiApiProfile(aiApiProfileDraft);
+      showToast(t("settings.aiApiProfileSaved"));
+      setAiApiProfileDraft(null);
+    } catch (error) {
+      showToast(error?.message || t("settings.aiApiProfileSaveFailed"));
+    } finally {
+      setSavingAiApiProfile(false);
+    }
+  }
 
   const isCreatingWorkflow = location.pathname === "/settings/workflows/new";
   const isEditingWorkflow = Boolean(filename);
@@ -265,6 +303,95 @@ export default function SettingsPage() {
                       );
                     })}
                   </ul>
+                )}
+              </div>
+              )}
+
+              {activeTab === "aiApis" && (
+              <div>
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="text-[15px] font-semibold text-foreground">{t("settings.aiApis")}</h3>
+                  <Button variant="outline" size="sm" onClick={startNewAiApiProfile}>{t("settings.newAiApiProfile")}</Button>
+                </div>
+
+                {aiApiProfiles.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border bg-card/50 p-6 text-center text-sm text-muted-foreground">
+                    {t("settings.noAiApiProfiles")}
+                  </div>
+                ) : (
+                  <ul className="list-none divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
+                    {aiApiProfiles.map((profile) => (
+                      <li key={profile.id} className="flex items-center justify-between gap-3 px-4 py-3.5 transition-colors hover:bg-accent/70">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-foreground">{profile.name}</div>
+                          <div className="mt-1 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                            <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono">{profile.model}</span>
+                            <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono">{profile.baseUrl}</span>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Button variant="outline" size="sm" onClick={() => startEditAiApiProfile(profile)}>{t("settings.edit")}</Button>
+                          <button
+                            className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => {
+                              deleteAiApiProfile(profile.id).then(() => showToast(t("settings.aiApiProfileDeleted"))).catch((error) => {
+                                showToast(error?.message || t("settings.aiApiProfileDeleteFailed"));
+                              });
+                            }}
+                            aria-label={`Remove ${profile.name}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {aiApiProfileDraft && (
+                  <div className="mt-4 rounded-2xl border border-border bg-card/78 p-4 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset]">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">{t("settings.aiApiName")}</label>
+                        <Input
+                          value={aiApiProfileDraft.name || ""}
+                          onChange={(event) => setAiApiProfileDraft((draft) => ({ ...draft, name: event.target.value }))}
+                          placeholder="OpenAI"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">{t("settings.aiApiModel")}</label>
+                        <Input
+                          value={aiApiProfileDraft.model || ""}
+                          onChange={(event) => setAiApiProfileDraft((draft) => ({ ...draft, model: event.target.value }))}
+                          placeholder="gpt-5.2"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">{t("settings.aiApiBaseUrl")}</label>
+                        <Input
+                          value={aiApiProfileDraft.baseUrl || ""}
+                          onChange={(event) => setAiApiProfileDraft((draft) => ({ ...draft, baseUrl: event.target.value }))}
+                          placeholder="https://api.openai.com/v1"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-semibold text-muted-foreground">{t("settings.aiApiKey")}</label>
+                        <Input
+                          type="password"
+                          value={aiApiProfileDraft.apiKey || ""}
+                          onChange={(event) => setAiApiProfileDraft((draft) => ({ ...draft, apiKey: event.target.value }))}
+                          placeholder={aiApiProfileDraft.hasApiKey ? t("settings.aiApiKeyUnchanged") : "sk-..."}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-4 flex justify-end gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setAiApiProfileDraft(null)} disabled={savingAiApiProfile}>{t("common.cancel")}</Button>
+                      <Button type="button" size="sm" onClick={handleSaveAiApiProfile} disabled={savingAiApiProfile}>
+                        {savingAiApiProfile ? t("editor.saving") : t("settings.saveAiApiProfile")}
+                      </Button>
+                    </div>
+                  </div>
                 )}
               </div>
               )}

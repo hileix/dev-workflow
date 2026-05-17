@@ -62,6 +62,7 @@ function migrateLegacyWorkflowsSync() {
 
 function getStepBackend(workflow, step) {
   if (step.type !== "agent" && step.type !== "condition") return "";
+  if (step.backend === "ai_api") return step.aiApiProfileId ? `ai-api:${step.aiApiProfileId}` : "ai-api";
   return step.backend || workflow?.runtime?.backend || "";
 }
 
@@ -171,7 +172,7 @@ export function getWorkflowConfigShape(workflow = WORKFLOW) {
       rejectTargets: {},
       conditionRoutes: {},
       taskInputFields: [],
-      worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false, useCustomSetupScript: false, setupScript: "" },
+      worktree: { enabled: false, files: [], customFiles: [], removeOnComplete: false, namingProvider: "ai_api", namingAiApiProfileId: "", useCustomSetupScript: false, setupScript: "" },
     };
   }
 
@@ -228,7 +229,7 @@ export function getWorkflowConfigShape(workflow = WORKFLOW) {
     rejectTargets,
     conditionRoutes,
     taskInputFields: deriveTaskInputFields(workflow),
-    worktree: workflow.worktree || { enabled: false, files: [], customFiles: [], removeOnComplete: false, useCustomSetupScript: false, setupScript: "" },
+    worktree: workflow.worktree || { enabled: false, files: [], customFiles: [], removeOnComplete: false, namingProvider: "ai_api", namingAiApiProfileId: "", useCustomSetupScript: false, setupScript: "" },
   };
 }
 

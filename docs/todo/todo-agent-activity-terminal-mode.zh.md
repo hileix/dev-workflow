@@ -43,7 +43,7 @@
   - `normalizeConversation()` 会把 `assistant_delta`、`tool_use` 等 interaction 组合成可渲染消息
   - 当前已经有 loading row、tool 折叠块、用户输入框
 
-- `apps/desktop/renderer/src/pages/TicketPage.jsx`
+- `apps/desktop/renderer/src/pages/TaskPage.jsx`
   - 任务详情页入口
   - 负责选择当前 workflow step，并把 step 的 content、artifact、interactions 传给 `StepDetail`
 

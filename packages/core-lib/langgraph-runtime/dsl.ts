@@ -99,16 +99,24 @@ function normalizeWorktree(rawWorktree) {
       files: [],
       customFiles: [],
       removeOnComplete: false,
+      namingProvider: "ai_api",
+      namingAiApiProfileId: "",
       useCustomSetupScript: false,
       setupScript: "",
     };
   }
   if (!isObject(rawWorktree)) throw new Error("worktree must be an object");
+  const namingProvider = normalizeOptionalString(rawWorktree.namingProvider) || "ai_api";
+  if (namingProvider !== "ai_api" && namingProvider !== "ai_backend") {
+    throw new Error("worktree.namingProvider must be ai_api or ai_backend");
+  }
   return {
     enabled: Boolean(rawWorktree.enabled),
     files: normalizeOptionalStringArray(rawWorktree.files, "worktree.files"),
     customFiles: normalizeOptionalStringArray(rawWorktree.customFiles, "worktree.customFiles"),
     removeOnComplete: rawWorktree.removeOnComplete === true,
+    namingProvider,
+    namingAiApiProfileId: normalizeOptionalString(rawWorktree.namingAiApiProfileId),
     useCustomSetupScript: rawWorktree.useCustomSetupScript === true,
     setupScript: normalizeOptionalString(rawWorktree.setupScript),
   };
@@ -171,10 +179,6 @@ function normalizeStep(rawStep, index) {
   if (type === "agent" || type === "condition") {
     step.instructions = normalizeOptionalString(rawStep.instructions);
     step.prompt = normalizeOptionalString(rawStep.prompt);
-    step.backend = normalizeOptionalString(rawStep.backend);
-    step.model = normalizeOptionalString(rawStep.model);
-    step.workspaceAccess = normalizeWorkspaceAccess(rawStep.workspaceAccess, `steps.${id}.workspaceAccess`);
-    step.options = normalizeOptions(rawStep.options, `steps.${id}.options`);
     const primaryOutput = isObject(rawStep.output)
       ? normalizeOutput({
           key: rawStep.output.key || rawStep.output.filename || "output",
@@ -188,6 +192,14 @@ function normalizeStep(rawStep, index) {
           optional: rawStep.output?.optional !== false,
         }
       : null;
+  }
+
+  if (type === "agent" || type === "condition") {
+    step.backend = normalizeOptionalString(rawStep.backend);
+    step.model = normalizeOptionalString(rawStep.model);
+    step.workspaceAccess = normalizeWorkspaceAccess(rawStep.workspaceAccess, `steps.${id}.workspaceAccess`);
+    step.options = normalizeOptions(rawStep.options, `steps.${id}.options`);
+    step.aiApiProfileId = normalizeOptionalString(rawStep.aiApiProfileId);
   }
 
   if (type === "condition") {

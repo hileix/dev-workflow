@@ -14,7 +14,7 @@ function createWebApi() {
   const baseUrl = normalizeBaseUrl();
   let workflowSocket = null;
   let workflowHandler = null;
-  let activeTicketId = null;
+  let activeTaskId = null;
   let activeRunId = "";
   let activeWorkFolder = "";
 
@@ -60,6 +60,9 @@ function createWebApi() {
     getWorkflowConfig: async () => request("/api/workflow"),
     setMobileAccessEnabled: async (enabled) => request("/api/settings/mobile-access", { method: "PUT", body: JSON.stringify({ enabled }) }),
     setAiBackendOverride: async (backend) => request("/api/settings/ai-backend", { method: "PUT", body: JSON.stringify({ backend }) }),
+    listAiApiProfiles: async () => request("/api/settings/ai-api-profiles"),
+    saveAiApiProfile: async (profile) => request("/api/settings/ai-api-profiles", { method: "POST", body: JSON.stringify(profile) }),
+    deleteAiApiProfile: async (id) => request(`/api/settings/ai-api-profiles/${encodeURIComponent(id)}`, { method: "DELETE" }),
     listWorkflows: async () => request("/api/workflows"),
     getWorkflow: async (filename) => request(`/api/workflows/${filename}`),
     setWorkflowVisible: async (filename, visible) => request(`/api/workflows/${filename}/visibility`, { method: "PUT", body: JSON.stringify({ visible }) }),
@@ -116,7 +119,7 @@ function createWebApi() {
       return data;
     },
     startWorkflow: async (payload) => {
-      activeTicketId = payload.taskId;
+      activeTaskId = payload.taskId;
       activeRunId = payload.runId || "";
       activeWorkFolder = payload.workFolder;
       sendSocket({
@@ -139,8 +142,11 @@ function createWebApi() {
     sendWorkflowMessage: async (taskId, text, images, runId) => {
       sendSocket({ type: "message", taskId, text, images, runId });
     },
-    restartWorkflowPhase: async (taskId, phase, runId) => {
-      sendSocket({ type: "restart_phase", taskId, phase, runId });
+    resumeWorkflowPhase: async (taskId, phase, runId) => {
+      sendSocket({ type: "resume_phase", taskId, phase, runId });
+    },
+    retryWorkflowPhase: async (taskId, phase, runId) => {
+      sendSocket({ type: "retry_phase", taskId, phase, runId });
     },
     pauseWorkflowPhase: async (taskId, phase, runId) => {
       sendSocket({ type: "pause_phase", taskId, phase, runId });
@@ -153,8 +159,8 @@ function createWebApi() {
       };
     },
     detachWorkflow(taskId, runId) {
-      if (activeTicketId === taskId && (!runId || activeRunId === runId)) {
-        activeTicketId = null;
+      if (activeTaskId === taskId && (!runId || activeRunId === runId)) {
+        activeTaskId = null;
         activeRunId = "";
         activeWorkFolder = "";
       }

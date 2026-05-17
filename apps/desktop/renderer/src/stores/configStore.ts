@@ -7,6 +7,7 @@ export const useConfigStore = create((set, get) => ({
   workflowConfig: null,
   workflows: [],
   skills: [],
+  aiApiProfiles: [],
   activeWorkflowFile: "",
   workFolders: [],
   selectedFolder: "",
@@ -21,7 +22,7 @@ export const useConfigStore = create((set, get) => ({
   async loadWorkflowConfig() {
     try {
       const workflowConfig = await desktopApi.getWorkflowConfig();
-      set({ workflowConfig });
+      set({ workflowConfig, aiApiProfiles: workflowConfig?.aiApiProfiles || [] });
     } catch {}
   },
 
@@ -35,7 +36,7 @@ export const useConfigStore = create((set, get) => ({
     });
     try {
       const workflowConfig = await desktopApi.setMobileAccessEnabled(enabled);
-      set({ workflowConfig });
+      set({ workflowConfig, aiApiProfiles: workflowConfig?.aiApiProfiles || get().aiApiProfiles });
       return workflowConfig;
     } catch (error) {
       set({ workflowConfig: previousConfig });
@@ -53,12 +54,26 @@ export const useConfigStore = create((set, get) => ({
     });
     try {
       const workflowConfig = await desktopApi.setAiBackendOverride(backend);
-      set({ workflowConfig });
+      set({ workflowConfig, aiApiProfiles: workflowConfig?.aiApiProfiles || get().aiApiProfiles });
       return workflowConfig;
     } catch (error) {
       set({ workflowConfig: previousConfig });
       throw error;
     }
+  },
+
+  async saveAiApiProfile(profile) {
+    const data = await desktopApi.saveAiApiProfile(profile);
+    set({ aiApiProfiles: data.profiles || [] });
+    get().loadWorkflowConfig();
+    return data;
+  },
+
+  async deleteAiApiProfile(id) {
+    const data = await desktopApi.deleteAiApiProfile(id);
+    set({ aiApiProfiles: data.profiles || [] });
+    get().loadWorkflowConfig();
+    return data;
   },
 
   async loadWorkflows() {

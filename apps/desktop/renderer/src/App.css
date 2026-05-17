@@ -627,6 +627,11 @@ body {
   color: #f2c94c;
 }
 
+.task-status-paused {
+  background: #4a3a2d;
+  color: #f2c94c;
+}
+
 .task-status-completed {
   background: #2d4a3e;
   color: #6fcf97;

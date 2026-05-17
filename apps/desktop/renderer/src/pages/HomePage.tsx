@@ -29,6 +29,15 @@ function StepCheckbox({ status }) {
       </svg>
     );
   }
+  if (status === "paused") {
+    return (
+      <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 20 20" fill="none">
+        <rect x="1" y="1" width="18" height="18" rx="3" stroke="#f59e0b" strokeWidth="2" />
+        <rect x="7" y="6" width="2.5" height="8" rx="1" fill="#f59e0b" />
+        <rect x="10.5" y="6" width="2.5" height="8" rx="1" fill="#f59e0b" />
+      </svg>
+    );
+  }
   if (status === "awaiting_input") {
     return (
       <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 20 20" fill="none">
@@ -53,7 +62,7 @@ function StepCheckbox({ status }) {
 }
 
 function TaskCard({ task, onClick, t }) {
-  const taskId = task.taskId || task.ticketId || "";
+  const taskId = task.taskId || "";
   const groups = task.workflowConfig?.groups || [];
   const phaseStatusMap = {};
   for (const p of task.phases || []) {
@@ -65,7 +74,7 @@ function TaskCard({ task, onClick, t }) {
       className={`w-52 max-w-full flex-none overflow-hidden rounded-2xl border bg-card/78 shadow-[0_1px_0_rgba(255,255,255,0.65)_inset] cursor-pointer transition-colors hover:bg-accent/65 ${
         task.status === "failed"
           ? "border-2 border-destructive"
-          : task.status === "awaiting_input"
+          : task.status === "awaiting_input" || task.status === "paused"
             ? "border-2 border-warning animate-pulse-subtle"
             : "border-border"
       }`}
@@ -77,7 +86,7 @@ function TaskCard({ task, onClick, t }) {
           className="shrink-0"
           variant={
             task.status === "completed" ? "success" :
-            task.status === "awaiting_input" ? "warning" :
+            task.status === "awaiting_input" || task.status === "paused" ? "warning" :
             task.status === "in_progress" ? "info" :
             task.status === "failed" ? "destructive" :
             "secondary"
@@ -94,6 +103,7 @@ function TaskCard({ task, onClick, t }) {
             let groupStatus = "pending";
             if (statuses.every((s) => s === "completed")) groupStatus = "completed";
             else if (statuses.some((s) => s === "failed")) groupStatus = "failed";
+            else if (statuses.some((s) => s === "paused")) groupStatus = "paused";
             else if (statuses.some((s) => s === "awaiting_input")) groupStatus = "awaiting_input";
             else if (statuses.some((s) => s === "in_progress")) groupStatus = "in_progress";
 
@@ -340,14 +350,14 @@ export default function HomePage() {
   const workflowStatesByRun = useWorkflowStore((s) => s.workflowStatesByRun);
   const syncTaskSummaries = useWorkflowStore((s) => s.syncTaskSummaries);
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow);
-  const loadTicket = useWorkflowStore((s) => s.loadTicket);
+  const loadTask = useWorkflowStore((s) => s.loadTask);
   const visibleWorkflows = workflows.filter((workflow) => workflow.visible !== false);
 
   useEffect(() => { loadWorkFolders(); }, []);
   const taskSummaries = useMemo(() => workFolders.flatMap((folder) =>
     (folder.tasks || []).map((task) => ({
       ...task,
-      taskId: task.taskId || task.ticketId || "",
+      taskId: task.taskId || "",
       workFolderPath: folder.path,
       workFolderName: folder.name,
     }))
@@ -382,15 +392,15 @@ export default function HomePage() {
     startWorkflow(id, folderPath, taskInputs, images, runId, worktreeName, workflowFilename);
     setShowStartModal(false);
     const query = runId ? `?runId=${encodeURIComponent(runId)}` : "";
-    navigate(`/ticket/${encodeURIComponent(id)}${query}`);
+    navigate(`/task/${encodeURIComponent(id)}${query}`);
   }
 
   function handleOpenTask(task) {
     const id = task.taskId;
     if (!id) return;
-    loadTicket(id, task.runId);
+    loadTask(id, task.runId);
     const query = task.runId ? `?runId=${encodeURIComponent(task.runId)}` : "";
-    navigate(`/ticket/${encodeURIComponent(id)}${query}`);
+    navigate(`/task/${encodeURIComponent(id)}${query}`);
   }
 
   return (

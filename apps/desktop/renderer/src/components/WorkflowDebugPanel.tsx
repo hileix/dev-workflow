@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Bug, Copy, X } from "lucide-react";
+import { DEBUG_EVENT_REQUESTED_BY, DEBUG_EVENT_TRIGGERS, DEBUG_EVENT_TYPES } from "../lib/debug-events";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { useI18n } from "./i18n-provider";
@@ -25,6 +26,16 @@ function truncate(value, max = 96) {
   return `${value.slice(0, max - 1)}…`;
 }
 
+function formatControlSource(payload, t) {
+  if (payload?.requestedBy === DEBUG_EVENT_REQUESTED_BY.USER) {
+    if (payload?.trigger === DEBUG_EVENT_TRIGGERS.TOOLBAR) return t("debug.summaryToolbar");
+    if (payload?.trigger === DEBUG_EVENT_TRIGGERS.CHECKPOINT) return t("debug.summaryCheckpoint");
+    if (payload?.trigger === DEBUG_EVENT_TRIGGERS.CHAT) return t("debug.summaryChat");
+    return t("debug.summaryUser");
+  }
+  return "";
+}
+
 function getEventSummary(event, t) {
   const payload = event?.payload || {};
   if (payload.type === "state") {
@@ -43,7 +54,7 @@ function getEventSummary(event, t) {
   if (payload.type === "session_attached") {
     return truncate(payload.sessionId, 48);
   }
-  if (payload.type === "phase_failed" || payload.type === "error") {
+  if (payload.type === DEBUG_EVENT_TYPES.PHASE_FAILED || payload.type === DEBUG_EVENT_TYPES.ERROR) {
     return truncate(payload.message || t("debug.unknown"));
   }
   if (payload.type === "user_message") {
@@ -55,16 +66,129 @@ function getEventSummary(event, t) {
   if (payload.type === "phase_content") {
     return t("debug.summaryContent");
   }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKFLOW_STARTING) {
+    return t("debug.summaryWorkflowStarting");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_NAMING_STARTED) {
+    return t("debug.summaryWorktreeNamingStarted");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_NAMING_COMPLETED) {
+    return payload.name ? `${t("debug.summaryWorktreeNamingCompleted")} · ${payload.name}` : t("debug.summaryWorktreeNamingCompleted");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_PREPARING) {
+    return payload.name ? `${t("debug.summaryWorktreePreparing")} · ${payload.name}` : t("debug.summaryWorktreePreparing");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_READY) {
+    return payload.branchName || payload.rootPath || t("debug.summaryWorktreeReady");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.PHASE_PAUSED) {
+    const source = formatControlSource(payload, t);
+    return source ? `${t("debug.summaryPaused")} · ${source}` : t("debug.summaryPaused");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.PHASE_RESUMED || payload.type === DEBUG_EVENT_TYPES.PHASE_RESUME_REQUESTED) {
+    const source = formatControlSource(payload, t);
+    return source ? `${t("debug.summaryResumed")} · ${source}` : t("debug.summaryResumed");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.PHASE_RETRIED || payload.type === DEBUG_EVENT_TYPES.PHASE_RETRY_REQUESTED) {
+    const source = formatControlSource(payload, t);
+    return source ? `${t("debug.summaryRetried")} · ${source}` : t("debug.summaryRetried");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.PHASE_APPROVED || payload.type === DEBUG_EVENT_TYPES.PHASE_APPROVE_REQUESTED) {
+    const source = formatControlSource(payload, t);
+    return source ? `${t("debug.summaryApproved")} · ${source}` : t("debug.summaryApproved");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.PHASE_REJECTED || payload.type === DEBUG_EVENT_TYPES.PHASE_REJECT_REQUESTED) {
+    const source = formatControlSource(payload, t);
+    return source ? `${t("debug.summaryRejected")} · ${source}` : t("debug.summaryRejected");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.PHASE_MESSAGE_REQUESTED) {
+    const source = formatControlSource(payload, t);
+    return source ? `${t("debug.summaryMessage")} · ${source}` : t("debug.summaryMessage");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.TASK_DELETE_REQUESTED) {
+    return t("debug.summaryDeleteTask");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.TASK_DELETED) {
+    return t("debug.summaryTaskDeleted");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.TASK_DELETE_FAILED) {
+    return t("debug.summaryTaskDeleteFailed");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_REMOVE_REQUESTED) {
+    return t("debug.summaryRemoveWorktree");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_REMOVED) {
+    return t("debug.summaryWorktreeRemoved");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_REMOVE_FAILED) {
+    return t("debug.summaryWorktreeRemoveFailed");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_OPEN_REQUESTED) {
+    return t("debug.summaryOpenWorktree");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_OPENED) {
+    return t("debug.summaryWorktreeOpened");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.WORKTREE_OPEN_FAILED) {
+    return t("debug.summaryWorktreeOpenFailed");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.DOCUMENT_OPEN_REQUESTED) {
+    return t("debug.summaryOpenDocument");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.DOCUMENT_OPENED) {
+    return t("debug.summaryDocumentOpened");
+  }
+  if (payload.type === DEBUG_EVENT_TYPES.DOCUMENT_OPEN_FAILED) {
+    return t("debug.summaryDocumentOpenFailed");
+  }
   if (payload.type === "phase_done" || payload.type === "phase_completed") {
     return t("debug.summaryDone");
   }
-  if (payload.type === "client_connect") {
+  if (payload.type === DEBUG_EVENT_TYPES.CLIENT_CONNECT) {
     return truncate(payload.workFolder || "");
   }
-  if (payload.type === "client_detach") {
+  if (payload.type === DEBUG_EVENT_TYPES.CLIENT_DETACH) {
     return t("debug.summaryDetached");
   }
   return truncate(JSON.stringify(payload));
+}
+
+function isFailureEvent(payload) {
+  return payload?.type === DEBUG_EVENT_TYPES.ERROR || payload?.type === DEBUG_EVENT_TYPES.PHASE_FAILED;
+}
+
+function isPhaseControlEvent(payload) {
+  return payload?.type === DEBUG_EVENT_TYPES.PHASE_PAUSED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_RESUMED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_RETRIED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_APPROVED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_REJECTED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_RESUME_REQUESTED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_RETRY_REQUESTED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_PAUSE_REQUESTED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_APPROVE_REQUESTED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_REJECT_REQUESTED
+    || payload?.type === DEBUG_EVENT_TYPES.PHASE_MESSAGE_REQUESTED;
+}
+
+function isLocalActionEvent(payload) {
+  return payload?.type?.startsWith("task_")
+    || payload?.type?.startsWith("worktree_")
+    || payload?.type?.startsWith("document_");
+}
+
+function getEventCategory(payload, event) {
+  if (isFailureEvent(payload)) return "error";
+  if (isLocalActionEvent(payload)) return "local";
+  if (isPhaseControlEvent(payload) || event?.source === "client") return "action";
+  return "workflow";
+}
+
+function getEventCategoryVariant(category) {
+  if (category === "error") return "destructive";
+  if (category === "local") return "secondary";
+  if (category === "action") return "warning";
+  return "outline";
 }
 
 function getIdleVariant(idleSeconds, activeStatus) {
@@ -74,7 +198,7 @@ function getIdleVariant(idleSeconds, activeStatus) {
 }
 
 export default function WorkflowDebugPanel({
-  ticketId,
+  taskId,
   workflowState,
   activePhase,
   activeStatus,
@@ -158,7 +282,7 @@ export default function WorkflowDebugPanel({
             {t("debug.idleFor", { duration: idleLabel })}
           </Badge>
         )}
-        {lastError && (
+        {lastError && !isPhaseControlEvent(lastError.payload) && (
           <Badge variant="destructive">
             {t("debug.lastError")}
           </Badge>
@@ -184,7 +308,7 @@ export default function WorkflowDebugPanel({
                     {t("debug.idleFor", { duration: idleLabel })}
                   </Badge>
                 )}
-                {lastError && (
+                {lastError && !isPhaseControlEvent(lastError.payload) && (
                   <Badge variant="destructive">
                     {t("debug.lastError")}
                   </Badge>
@@ -244,7 +368,7 @@ export default function WorkflowDebugPanel({
                 </div>
               )}
 
-              {lastError && (
+              {lastError && !isPhaseControlEvent(lastError.payload) && (
                 <div className="mx-6 mt-4 rounded-xl border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   <div className="font-semibold">{t("debug.lastError")}</div>
                   <div className="mt-1 break-words">{lastError.message}</div>
@@ -255,7 +379,7 @@ export default function WorkflowDebugPanel({
                 <div className="border-b border-border lg:border-b-0 lg:border-r">
                   <div className="flex items-center justify-between px-4 pb-3">
                     <div className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{t("debug.timeline")}</div>
-                    <div className="text-xs text-muted-foreground">{ticketId || "--"}</div>
+                    <div className="text-xs text-muted-foreground">{taskId || "--"}</div>
                   </div>
                   <div className="max-h-[52vh] overflow-y-auto px-2 pb-2">
                     {debugEvents.length ? (
@@ -263,6 +387,7 @@ export default function WorkflowDebugPanel({
                         const payload = event.payload || {};
                         const isSelected = event.id === selectedEventId;
                         const phaseLabel = payload.phase ? phaseLabels?.[payload.phase] || payload.phase : null;
+                        const category = getEventCategory(payload, event);
                         return (
                           <button
                             key={event.id}
@@ -277,7 +402,8 @@ export default function WorkflowDebugPanel({
                             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                               <span className="font-mono">{formatTime(event.at)}</span>
                               <Badge variant={event.source === "client" ? "secondary" : "outline"}>{event.source}</Badge>
-                              <Badge variant={payload.type === "error" || payload.type === "phase_failed" ? "destructive" : "outline"}>
+                              <Badge variant={getEventCategoryVariant(category)}>{category}</Badge>
+                              <Badge variant={isFailureEvent(payload) ? "destructive" : isPhaseControlEvent(payload) ? "warning" : "outline"}>
                                 {payload.type || t("debug.unknown")}
                               </Badge>
                               {phaseLabel && <span>{phaseLabel}</span>}
