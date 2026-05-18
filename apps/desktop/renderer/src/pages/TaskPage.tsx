@@ -709,9 +709,6 @@ export default function TaskPage() {
                 )}
               </div>
             )}
-            {isStreaming && (
-              <Badge variant="info" className="animate-pulse-subtle">{t("task.working")}</Badge>
-            )}
             {canPausePhase && (
               <Button type="button" variant="outline" size="sm" onClick={handlePausePhase}>
                 <Square className="h-3.5 w-3.5" />
