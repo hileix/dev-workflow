@@ -46,6 +46,12 @@ function normalizeConversation(interactions) {
     if (!interaction) continue;
     if (interaction.type === "prompt") continue;
 
+    if (interaction.type === "phase_start") {
+      activeAssistant = null;
+      items.push(interaction);
+      continue;
+    }
+
     if (interaction.type === "assistant_delta") {
       const assistant = ensureAssistant(interaction);
       const lastSegment = assistant.segments[assistant.segments.length - 1];
@@ -76,6 +82,28 @@ function normalizeConversation(interactions) {
     if (interaction.type === "prompt" && !interaction.text) continue;
     activeAssistant = null;
     items.push(interaction);
+  }
+  return items;
+}
+
+function getConversationWithRunMarkers(conversation) {
+  const startMarkers = conversation.filter((item) => item?.type === "phase_start");
+  const shouldShowMarkers = startMarkers.length > 1 || startMarkers.some((item) => Number(item.runIndex) > 1);
+  if (!shouldShowMarkers) {
+    return conversation.filter((item) => item?.type !== "phase_start");
+  }
+
+  const items = [];
+  for (const item of conversation) {
+    if (item?.type === "phase_start" && Number(item.runIndex) > 1) {
+      const triggerMessages = [];
+      while (items[items.length - 1]?.role === "user") {
+        triggerMessages.unshift(items.pop());
+      }
+      items.push(item, ...triggerMessages);
+    } else {
+      items.push(item);
+    }
   }
   return items;
 }
@@ -198,6 +226,18 @@ function ConversationItem({ item, t }) {
   );
 }
 
+function RunDivider({ item, t }) {
+  return (
+    <div className="flex items-center gap-3 py-1 text-[11px] font-semibold uppercase text-muted-foreground">
+      <div className="h-px flex-1 bg-border" />
+      <span className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5">
+        {t("stepDetail.runDivider", { count: item.runIndex || "" })}
+      </span>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
 function LoadingItem({ t }) {
   return (
     <div className="rounded-lg border border-border bg-card/72 px-3 py-2.5">
@@ -230,7 +270,7 @@ export default function StepDetail({ phase, content, artifact, interactions = []
   const activeTask = useWorkflowStore((s) => s.activeTask);
   const workflowState = useWorkflowStore((s) => s.workflowState);
 
-  const conversation = normalizeConversation(interactions);
+  const conversation = getConversationWithRunMarkers(normalizeConversation(interactions));
   const isCheckpoint = phaseTypes?.[phase] === "checkpoint";
   const currentBackend = isCheckpoint ? t("stepDetail.checkpoint") : getBackendLabel(getCurrentBackend(activeBackend, interactions));
   const showLoading = !isCheckpoint && isWaitingForAssistant(conversation, isRunning, isStreaming);
@@ -458,7 +498,11 @@ export default function StepDetail({ phase, content, artifact, interactions = []
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4" ref={conversationRef}>
             {conversation.length > 0 ? (
               conversation.map((item, idx) => (
-                <ConversationItem key={item.id || `${item.type}-${idx}`} item={item} t={t} />
+                item.type === "phase_start" ? (
+                  <RunDivider key={item.id || `${item.type}-${idx}`} item={item} t={t} />
+                ) : (
+                  <ConversationItem key={item.id || `${item.type}-${idx}`} item={item} t={t} />
+                )
               ))
             ) : !showLoading ? (
               <div className="rounded-lg border border-dashed border-border bg-background/45 px-4 py-8 text-center text-sm text-muted-foreground">

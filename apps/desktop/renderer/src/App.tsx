@@ -11,6 +11,7 @@ export default function App() {
 
   useEffect(() => {
     useConfigStore.getState().loadAll();
+    useWorkflowStore.getState().ensureWorkflowEvents();
   }, []);
 
   return (

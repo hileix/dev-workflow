@@ -2,6 +2,8 @@ import { readFile, writeFile, mkdir } from "fs/promises";
 import { dirname, join } from "path";
 import { BaseCheckpointSaver, WRITES_IDX_MAP, TASKS, copyCheckpoint, getCheckpointId, maxChannelVersion } from "@langchain/langgraph-checkpoint";
 
+const SERIALIZED_UINT8_ARRAY = "__serialized_uint8_array__";
+
 function generateKey(threadId, checkpointNamespace, checkpointId) {
   return JSON.stringify([threadId, checkpointNamespace || "", checkpointId]);
 }
@@ -22,6 +24,33 @@ async function readJson(file, fallback) {
 async function writeJson(file, value) {
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify(value, null, 2));
+}
+
+function encodeSerializedValue(value) {
+  if (value instanceof Uint8Array) {
+    return {
+      type: SERIALIZED_UINT8_ARRAY,
+      data: Buffer.from(value).toString("base64"),
+    };
+  }
+  return value;
+}
+
+function decodeSerializedValue(value) {
+  if (value?.type === SERIALIZED_UINT8_ARRAY && typeof value.data === "string") {
+    return Uint8Array.from(Buffer.from(value.data, "base64"));
+  }
+
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const keys = Object.keys(value);
+    if (keys.length && keys.every((key) => /^\d+$/.test(key))) {
+      const sortedKeys = keys.map(Number).sort((a, b) => a - b);
+      const isContiguous = sortedKeys.every((key, index) => key === index);
+      if (isContiguous) return Uint8Array.from(sortedKeys.map((key) => value[key]));
+    }
+  }
+
+  return value;
 }
 
 export class FileCheckpointSaver extends BaseCheckpointSaver {
@@ -50,7 +79,7 @@ export class FileCheckpointSaver extends BaseCheckpointSaver {
     const parentKey = generateKey(threadId, checkpointNs, parentCheckpointId);
     const pendingSends = await Promise.all(Object.values(this.writes[parentKey] ?? {})
       .filter(([_taskId, channel]) => channel === TASKS)
-      .map(async ([_taskId, _channel, writes]) => await this.serde.loadsTyped("json", writes)));
+      .map(async ([_taskId, _channel, writes]) => await this.serde.loadsTyped("json", decodeSerializedValue(writes))));
     mutableCheckpoint.channel_values ??= {};
     mutableCheckpoint.channel_values[TASKS] = pendingSends;
     mutableCheckpoint.channel_versions ??= {};
@@ -62,19 +91,19 @@ export class FileCheckpointSaver extends BaseCheckpointSaver {
   async createTuple(threadId, checkpointNamespace, checkpointId, saved, config) {
     const [checkpoint, metadata, parentCheckpointId] = saved;
     const key = generateKey(threadId, checkpointNamespace, checkpointId);
-    const deserializedCheckpoint = await this.serde.loadsTyped("json", checkpoint);
+    const deserializedCheckpoint = await this.serde.loadsTyped("json", decodeSerializedValue(checkpoint));
     if (deserializedCheckpoint.v < 4 && parentCheckpointId !== undefined) {
       await this.migratePendingSends(deserializedCheckpoint, threadId, checkpointNamespace, parentCheckpointId);
     }
     const pendingWrites = await Promise.all(Object.values(this.writes[key] || {}).map(async ([taskId, channel, value]) => [
       taskId,
       channel,
-      await this.serde.loadsTyped("json", value),
+      await this.serde.loadsTyped("json", decodeSerializedValue(value)),
     ]));
     const checkpointTuple = {
       config,
       checkpoint: deserializedCheckpoint,
-      metadata: await this.serde.loadsTyped("json", metadata),
+      metadata: await this.serde.loadsTyped("json", decodeSerializedValue(metadata)),
       pendingWrites,
     };
     if (parentCheckpointId !== undefined) {
@@ -130,7 +159,7 @@ export class FileCheckpointSaver extends BaseCheckpointSaver {
         for (const [checkpointId, saved] of sortedCheckpoints) {
           if (configCheckpointId && checkpointId !== configCheckpointId) continue;
           if (before?.configurable?.checkpoint_id && checkpointId >= before.configurable.checkpoint_id) continue;
-          const metadata = await this.serde.loadsTyped("json", saved[1]);
+          const metadata = await this.serde.loadsTyped("json", decodeSerializedValue(saved[1]));
           if (filter && !Object.entries(filter).every(([key, value]) => metadata[key] === value)) continue;
           if (limit !== undefined) {
             if (limit <= 0) break;
@@ -161,8 +190,8 @@ export class FileCheckpointSaver extends BaseCheckpointSaver {
       this.serde.dumpsTyped(metadata),
     ]);
     this.storage[threadId][checkpointNamespace][checkpoint.id] = [
-      serializedCheckpoint,
-      serializedMetadata,
+      encodeSerializedValue(serializedCheckpoint),
+      encodeSerializedValue(serializedMetadata),
       config.configurable?.checkpoint_id,
     ];
     await this.persist();
@@ -190,7 +219,7 @@ export class FileCheckpointSaver extends BaseCheckpointSaver {
       const innerKey = [taskId, WRITES_IDX_MAP[channel] || index];
       const innerKeyStr = `${innerKey[0]},${innerKey[1]}`;
       if (innerKey[1] >= 0 && existingWrites && innerKeyStr in existingWrites) return;
-      this.writes[outerKey][innerKeyStr] = [taskId, channel, serializedValue];
+      this.writes[outerKey][innerKeyStr] = [taskId, channel, encodeSerializedValue(serializedValue)];
     }));
     await this.persist();
   }

@@ -24,11 +24,19 @@ function playNotificationSound() {
 
 let prevStatusRef = {};
 let unsubscribeWorkflowEvents = null;
+const ACTIVE_PHASE_STATUSES = new Set(["in_progress", "awaiting_input", "paused"]);
 
-function getWorkflowStateKey(taskId, runId = "") {
+export function getWorkflowStateKey(taskId, runId = "") {
   const id = taskId || "";
   const run = runId || taskId || "";
   return `${id}:${run}`;
+}
+
+function getEventStateKey(msg) {
+  const taskId = msg?.taskId || msg?.state?.taskId || "";
+  const runId = msg?.runId || msg?.state?.runId || taskId;
+  if (!taskId) return "";
+  return getWorkflowStateKey(taskId, runId);
 }
 
 function getCurrentPhaseFromTask(task) {
@@ -39,9 +47,52 @@ function getCurrentPhaseFromTask(task) {
   return activePhase?.id || activePhase?.name || task.phases?.[0]?.id || null;
 }
 
+export function getSelectedPhaseFromWorkflowState(state) {
+  const phases = state?.phases || [];
+  const activePhase = phases.find((phase) =>
+    phase.status === "in_progress" || phase.status === "paused" || phase.status === "awaiting_input" || phase.status === "failed"
+  );
+  if (activePhase) return activePhase.id || activePhase.name || null;
+
+  if (state?.currentPhase && state.currentPhase !== "completed") {
+    const currentPhase = phases.find((phase) => (phase.id || phase.name) === state.currentPhase);
+    if (currentPhase) return currentPhase.id || currentPhase.name || null;
+  }
+
+  const latestStartedPhase = phases.findLast?.((phase) => phase.status && phase.status !== "pending")
+    || [...phases].reverse().find((phase) => phase.status && phase.status !== "pending");
+  return latestStartedPhase?.id || latestStartedPhase?.name || phases[0]?.id || phases[0]?.name || null;
+}
+
+function getRunningPhaseFromWorkflowState(state) {
+  const runningPhase = (state?.phases || []).find((phase) => phase.status === "in_progress");
+  return runningPhase?.id || runningPhase?.name || null;
+}
+
+export function getPhasesWithRunningPhase(phases = [], phaseId, now = new Date().toISOString()) {
+  const phaseIndex = phases.findIndex((phase) => (phase.id || phase.name) === phaseId);
+  return phases.map((phase, index) => {
+    const id = phase.id || phase.name;
+    let status = phase.status;
+    if (id === phaseId) {
+      status = "in_progress";
+    } else if (phaseIndex >= 0 && index > phaseIndex) {
+      status = "pending";
+    } else if (ACTIVE_PHASE_STATUSES.has(phase.status)) {
+      status = "completed";
+    }
+    return {
+      ...phase,
+      status,
+      updated: id === phaseId || status !== phase.status ? now : phase.updated,
+    };
+  });
+}
+
 function getWorkflowStateFromTask(task) {
   const taskId = task.taskId || "";
   if (!taskId) return null;
+  if (!Array.isArray(task.phases) || task.phases.length === 0) return null;
   const runId = task.runId || taskId;
   return {
     taskId,
@@ -49,6 +100,7 @@ function getWorkflowStateFromTask(task) {
     workFolder: task.workFolderPath || "",
     currentPhase: getCurrentPhaseFromTask(task),
     overallStatus: task.status || "pending",
+    updated: task.updated || task.updatedAt || "",
     workflowConfig: task.workflowConfig || null,
     phases: task.phases || [],
   };
@@ -102,25 +154,50 @@ function createDebugEvent(payload, source = "workflow") {
   };
 }
 
-function appendDebugEvent(set, payload, source = "workflow") {
+function appendDebugEvent(set, get, payload, source = "workflow") {
   const event = createDebugEvent(payload, source);
   set((state) => {
-    const debugEvents = [...state.debugEvents, event];
+    const stateKey = getEventStateKey(payload) || getWorkflowStateKey(state.workflowState?.taskId, state.workflowState?.runId);
+    const debugEvents = stateKey ? [...(state.debugEventsByRun[stateKey] || []), event] : [];
     const nextState = {
-      debugEvents: debugEvents.slice(-MAX_DEBUG_EVENTS),
-      lastEventAt: event.at,
-      connectionState: source === "workflow" ? "connected" : state.connectionState,
+      debugEventsByRun: stateKey
+        ? {
+            ...state.debugEventsByRun,
+            [stateKey]: debugEvents.slice(-MAX_DEBUG_EVENTS),
+          }
+        : state.debugEventsByRun,
+      lastEventAtByRun: stateKey
+        ? {
+            ...state.lastEventAtByRun,
+            [stateKey]: event.at,
+          }
+        : state.lastEventAtByRun,
+      connectionStateByRun: stateKey && source === "workflow"
+        ? {
+            ...state.connectionStateByRun,
+            [stateKey]: "connected",
+          }
+        : state.connectionStateByRun,
     };
 
-    if (payload?.type === DEBUG_EVENT_TYPES.ERROR || payload?.type === DEBUG_EVENT_TYPES.PHASE_FAILED) {
-      nextState.lastError = {
-        at: event.at,
-        phase: payload.phase || null,
-        message: payload.message || "Unknown error",
-        payload,
+    if (stateKey && (payload?.type === DEBUG_EVENT_TYPES.ERROR || payload?.type === DEBUG_EVENT_TYPES.PHASE_FAILED)) {
+      nextState.lastErrorByRun = {
+        ...state.lastErrorByRun,
+        [stateKey]: {
+          at: event.at,
+          phase: payload.phase || null,
+          message: payload.message || "Unknown error",
+          payload,
+        },
       };
-      nextState.isStreaming = false;
-      nextState.streamingPhase = null;
+      nextState.isStreamingByRun = {
+        ...state.isStreamingByRun,
+        [stateKey]: false,
+      };
+      nextState.streamingPhaseByRun = {
+        ...state.streamingPhaseByRun,
+        [stateKey]: null,
+      };
     }
 
     return nextState;
@@ -130,9 +207,17 @@ function appendDebugEvent(set, payload, source = "workflow") {
 export function pushClientDebugEvent(payload) {
   useWorkflowStore.setState((state) => {
     const event = createDebugEvent(payload, "client");
+    const stateKey = getEventStateKey(payload) || getWorkflowStateKey(state.workflowState?.taskId, state.workflowState?.runId);
+    if (!stateKey) return {};
     return {
-      debugEvents: [...state.debugEvents, event].slice(-MAX_DEBUG_EVENTS),
-      lastEventAt: event.at,
+      debugEventsByRun: {
+        ...state.debugEventsByRun,
+        [stateKey]: [...(state.debugEventsByRun[stateKey] || []), event].slice(-MAX_DEBUG_EVENTS),
+      },
+      lastEventAtByRun: {
+        ...state.lastEventAtByRun,
+        [stateKey]: event.at,
+      },
     };
   });
 }
@@ -140,63 +225,81 @@ export function pushClientDebugEvent(payload) {
 export function pushClientErrorEvent(payload) {
   useWorkflowStore.setState((state) => {
     const event = createDebugEvent(payload, "client");
+    const stateKey = getEventStateKey(payload) || getWorkflowStateKey(state.workflowState?.taskId, state.workflowState?.runId);
+    if (!stateKey) return {};
     return {
-      debugEvents: [...state.debugEvents, event].slice(-MAX_DEBUG_EVENTS),
-      lastEventAt: event.at,
-      lastError: {
-        at: event.at,
-        phase: payload.phase || null,
-        message: payload.message || "Unknown error",
-        payload,
+      debugEventsByRun: {
+        ...state.debugEventsByRun,
+        [stateKey]: [...(state.debugEventsByRun[stateKey] || []), event].slice(-MAX_DEBUG_EVENTS),
       },
-      isStreaming: false,
-      streamingPhase: null,
+      lastEventAtByRun: {
+        ...state.lastEventAtByRun,
+        [stateKey]: event.at,
+      },
+      lastErrorByRun: {
+        ...state.lastErrorByRun,
+        [stateKey]: {
+          at: event.at,
+          phase: payload.phase || null,
+          message: payload.message || "Unknown error",
+          payload,
+        },
+      },
+      isStreamingByRun: {
+        ...state.isStreamingByRun,
+        [stateKey]: false,
+      },
+      streamingPhaseByRun: {
+        ...state.streamingPhaseByRun,
+        [stateKey]: null,
+      },
     };
   });
 }
 
-function matchesWorkflowEvent(msg, taskId, runId = "") {
-  const eventTaskId = msg?.taskId || msg?.state?.taskId || "";
-  const eventRunId = msg?.runId || msg?.state?.runId || "";
-  if (eventTaskId !== taskId) return false;
-  if (runId && eventRunId !== runId) return false;
-  return true;
-}
-
-function appendPhaseInteraction(set, phase, interaction) {
-  if (!phase || !interaction) return;
-  set((state) => ({
-    phaseInteractions: {
-      ...state.phaseInteractions,
-      [phase]: [...(state.phaseInteractions[phase] || []), interaction],
-    },
-  }));
-}
-
-function markPhaseRunning(set, phaseId) {
+function markPhaseRunning(set, msg, phaseId) {
   if (!phaseId) return;
   set((state) => {
-    if (!state.workflowState) return {};
+    const stateKey = getEventStateKey(msg);
+    if (!stateKey) return {};
+    const existingState = state.workflowStatesByRun[stateKey] || (
+      getWorkflowStateKey(state.workflowState?.taskId, state.workflowState?.runId) === stateKey
+        ? state.workflowState
+        : null
+    );
+    if (!existingState) return {};
+
+    const now = new Date().toISOString();
     const workflowState = {
-      ...state.workflowState,
+      ...existingState,
       currentPhase: phaseId,
       overallStatus: "in_progress",
-      phases: (state.workflowState.phases || []).map((phase) => ({
-        ...phase,
-        status: phase.id === phaseId
-          ? "in_progress"
-          : phase.status === "in_progress"
-            ? "completed"
-            : phase.status,
-      })),
+      updated: now,
+      phases: getPhasesWithRunningPhase(existingState.phases || [], phaseId, now),
     };
-    const stateKey = getWorkflowStateKey(workflowState.taskId, workflowState.runId);
+    const activeStateKey = getWorkflowStateKey(state.workflowState?.taskId, state.workflowState?.runId);
+    const isActiveState = activeStateKey === stateKey;
     return {
-      selectedPhase: phaseId,
-      workflowState,
+      workflowState: isActiveState ? workflowState : state.workflowState,
       workflowStatesByRun: {
         ...state.workflowStatesByRun,
         [stateKey]: workflowState,
+      },
+      selectedPhaseByRun: {
+        ...state.selectedPhaseByRun,
+        [stateKey]: phaseId,
+      },
+      isStreamingByRun: {
+        ...state.isStreamingByRun,
+        [stateKey]: true,
+      },
+      streamingPhaseByRun: {
+        ...state.streamingPhaseByRun,
+        [stateKey]: phaseId,
+      },
+      connectionStateByRun: {
+        ...state.connectionStateByRun,
+        [stateKey]: "connected",
       },
     };
   });
@@ -204,155 +307,318 @@ function markPhaseRunning(set, phaseId) {
 
 function applyDisconnectedState(set, get) {
   const state = get().workflowState;
+  const stateKey = getWorkflowStateKey(state?.taskId, state?.runId);
   if (state) {
     const updated = {
       ...state,
       overallStatus: state.overallStatus,
       phases: state.phases.map((phase) => ({ ...phase })),
     };
-    set({ workflowState: updated, isStreaming: false, streamingPhase: null, connectionState: "disconnected" });
+    set((current) => ({
+      workflowState: updated,
+      isStreamingByRun: {
+        ...current.isStreamingByRun,
+        [stateKey]: false,
+      },
+      streamingPhaseByRun: {
+        ...current.streamingPhaseByRun,
+        [stateKey]: null,
+      },
+      connectionStateByRun: {
+        ...current.connectionStateByRun,
+        [stateKey]: "disconnected",
+      },
+    }));
   } else {
-    set({ isStreaming: false, streamingPhase: null, connectionState: "disconnected" });
+    set({});
   }
 }
 
-function attachWorkflowEvents(set, get, taskId, runId = "") {
-  if (unsubscribeWorkflowEvents) unsubscribeWorkflowEvents();
+function isActiveWorkflowEvent(state, msg) {
+  const eventKey = getEventStateKey(msg);
+  if (!eventKey) return false;
+  return getWorkflowStateKey(state.workflowState?.taskId, state.workflowState?.runId) === eventKey;
+}
+
+function attachWorkflowEvents(set, get) {
+  if (unsubscribeWorkflowEvents) return () => applyDisconnectedState(set, get);
   unsubscribeWorkflowEvents = desktopApi.onWorkflowEvent((msg) => {
     if (!msg) return;
-    if (!matchesWorkflowEvent(msg, taskId, runId)) return;
-    appendDebugEvent(set, msg);
+    appendDebugEvent(set, get, msg);
 
     if (msg.type === "phase_artifact") {
       if (!msg.outputKey) return;
       set((state) => ({
-        phaseOutputArtifacts: {
-          ...state.phaseOutputArtifacts,
-          [msg.phase]: {
-            ...(state.phaseOutputArtifacts[msg.phase] || {}),
-            [msg.outputKey]: msg.content,
+        phaseOutputArtifactsByRun: {
+          ...state.phaseOutputArtifactsByRun,
+          [getEventStateKey(msg)]: {
+            ...(state.phaseOutputArtifactsByRun[getEventStateKey(msg)] || {}),
+            [msg.phase]: {
+              ...(state.phaseOutputArtifactsByRun[getEventStateKey(msg)]?.[msg.phase] || {}),
+              [msg.outputKey]: msg.content,
+            },
           },
         },
       }));
     } else if (msg.type === "backend_selected") {
-      markPhaseRunning(set, msg.phase);
-    } else if (msg.type === "text_delta") {
-      markPhaseRunning(set, msg.phase);
-      set((state) => ({
-        phaseMessages: { ...state.phaseMessages, [msg.phase]: (state.phaseMessages[msg.phase] || "") + msg.text },
-        phaseInteractions: {
-          ...state.phaseInteractions,
-          [msg.phase]: [
-            ...(state.phaseInteractions[msg.phase] || []),
-            {
-              role: "assistant",
-              type: "assistant_delta",
-              text: msg.text,
-              backend: msg.backend,
+      markPhaseRunning(set, msg, msg.phase);
+      set((state) => {
+        const stateKey = getEventStateKey(msg);
+        if (!stateKey || !msg.phase) return {};
+        const existingInteractions = state.phaseInteractionsByRun[stateKey]?.[msg.phase] || [];
+        const lastInteraction = existingInteractions[existingInteractions.length - 1];
+        if (lastInteraction?.type === "phase_start" && lastInteraction.backend === msg.backend) return {};
+        const startIndexes = existingInteractions
+          .filter((item) => item?.type === "phase_start")
+          .map((item) => Number(item.runIndex) || 0);
+        const lastRunIndex = Math.max(0, ...startIndexes);
+        const hasEarlierConversation = existingInteractions.some((item) => item?.type !== "phase_start");
+        const runIndex = lastRunIndex > 0 ? lastRunIndex + 1 : hasEarlierConversation ? 2 : 1;
+        return {
+          phaseInteractionsByRun: {
+            ...state.phaseInteractionsByRun,
+            [stateKey]: {
+              ...(state.phaseInteractionsByRun[stateKey] || {}),
+              [msg.phase]: [
+                ...existingInteractions,
+                {
+                  id: `phase-start-${Date.now()}`,
+                  at: new Date().toISOString(),
+                  phase: msg.phase,
+                  role: "system",
+                  type: "phase_start",
+                  text: "",
+                  backend: msg.backend,
+                  runIndex,
+                },
+              ],
             },
-          ],
+          },
+        };
+      });
+    } else if (msg.type === "text_delta") {
+      markPhaseRunning(set, msg, msg.phase);
+      set((state) => ({
+        phaseMessagesByRun: {
+          ...state.phaseMessagesByRun,
+          [getEventStateKey(msg)]: {
+            ...(state.phaseMessagesByRun[getEventStateKey(msg)] || {}),
+            [msg.phase]: (state.phaseMessagesByRun[getEventStateKey(msg)]?.[msg.phase] || "") + msg.text,
+          },
         },
-        isStreaming: true,
-        streamingPhase: msg.phase,
+        phaseInteractionsByRun: {
+          ...state.phaseInteractionsByRun,
+          [getEventStateKey(msg)]: {
+            ...(state.phaseInteractionsByRun[getEventStateKey(msg)] || {}),
+            [msg.phase]: [
+              ...(state.phaseInteractionsByRun[getEventStateKey(msg)]?.[msg.phase] || []),
+              {
+                role: "assistant",
+                type: "assistant_delta",
+                text: msg.text,
+                backend: msg.backend,
+              },
+            ],
+          },
+        },
       }));
     } else if (msg.type === "state") {
       const state = msg.state;
       const stateKey = getWorkflowStateKey(state.taskId, state.runId);
-      set((current) => ({
-        workflowState: state,
-        workflowStatesByRun: {
-          ...current.workflowStatesByRun,
-          [stateKey]: state,
-        },
-      }));
+      const cachedState = get().workflowStatesByRun[stateKey];
+      const displayState = getLatestWorkflowState(state, cachedState);
+      let isActiveState = false;
+      set((current) => {
+        const activeStateKey = getWorkflowStateKey(current.workflowState?.taskId, current.workflowState?.runId);
+        isActiveState = activeStateKey === stateKey || (!current.workflowState && current.activeTask === displayState.taskId);
+        return {
+          workflowState: isActiveState ? displayState : current.workflowState,
+          workflowStatesByRun: {
+            ...current.workflowStatesByRun,
+            [stateKey]: displayState,
+          },
+          selectedPhaseByRun: {
+            ...current.selectedPhaseByRun,
+            [stateKey]: getSelectedPhaseFromWorkflowState(displayState),
+          },
+        };
+      });
 
-      const prevPhase = prevStatusRef._currentPhase;
+      const prevStatus = prevStatusRef[stateKey] || {};
+      const prevPhase = prevStatus._currentPhase;
+      const selectedPhase = getSelectedPhaseFromWorkflowState(displayState);
 
-      if (state.currentPhase && state.currentPhase !== prevPhase) {
-        if (state.currentPhase !== "completed") set({ selectedPhase: state.currentPhase });
+      if (isActiveState && displayState.currentPhase && displayState.currentPhase !== prevPhase) {
+        if (selectedPhase) {
+          set((state) => ({
+            selectedPhaseByRun: {
+              ...state.selectedPhaseByRun,
+              [stateKey]: selectedPhase,
+            },
+          }));
+        }
         if (prevPhase) playNotificationSound();
       }
 
       let streaming = false;
-      for (const phase of state.phases) {
-        const prevStatus = prevStatusRef[phase.id];
-        if (phase.status === "awaiting_input" && prevStatus !== "awaiting_input") {
+      for (const phase of displayState.phases) {
+        const prevPhaseStatus = prevStatus[phase.id];
+        if (isActiveState && phase.status === "awaiting_input" && prevPhaseStatus !== "awaiting_input") {
           playNotificationSound();
-          set({ selectedPhase: phase.id });
+          set((state) => ({
+            selectedPhaseByRun: {
+              ...state.selectedPhaseByRun,
+              [stateKey]: phase.id,
+            },
+          }));
         }
-        if (phase.status === "paused" && prevStatus !== "paused") {
-          set({ selectedPhase: phase.id });
+        if (isActiveState && phase.status === "paused" && prevPhaseStatus !== "paused") {
+          set((state) => ({
+            selectedPhaseByRun: {
+              ...state.selectedPhaseByRun,
+              [stateKey]: phase.id,
+            },
+          }));
         }
         if (phase.status === "in_progress") streaming = true;
       }
-      if (!streaming) {
-        set({ isStreaming: false, streamingPhase: null });
+      if (isActiveState && !streaming) {
+        set((state) => ({
+          isStreamingByRun: {
+            ...state.isStreamingByRun,
+            [stateKey]: false,
+          },
+          streamingPhaseByRun: {
+            ...state.streamingPhaseByRun,
+            [stateKey]: null,
+          },
+        }));
       }
 
       const statusMap = {};
-      for (const phase of state.phases) statusMap[phase.id] = phase.status;
-      statusMap._currentPhase = state.currentPhase;
-      prevStatusRef = statusMap;
+      for (const phase of displayState.phases) statusMap[phase.id] = phase.status;
+      statusMap._currentPhase = displayState.currentPhase;
+      prevStatusRef = {
+        ...prevStatusRef,
+        [stateKey]: statusMap,
+      };
 
-      if (state.overallStatus === "completed") {
+      if (displayState.overallStatus === "completed") {
         useConfigStore.getState().loadWorkFolders();
       }
     } else if (msg.type === "phase_done") {
-      set({ isStreaming: false, streamingPhase: null });
+      set((state) => {
+        const stateKey = getEventStateKey(msg);
+        if (!stateKey) return {};
+        return {
+          isStreamingByRun: {
+            ...state.isStreamingByRun,
+            [stateKey]: false,
+          },
+          streamingPhaseByRun: {
+            ...state.streamingPhaseByRun,
+            [stateKey]: null,
+          },
+        };
+      });
     } else if (msg.type === DEBUG_EVENT_TYPES.PHASE_PAUSED) {
-      set({ isStreaming: false, streamingPhase: null });
+      set((state) => {
+        const stateKey = getEventStateKey(msg);
+        if (!stateKey) return {};
+        return {
+          isStreamingByRun: {
+            ...state.isStreamingByRun,
+            [stateKey]: false,
+          },
+          streamingPhaseByRun: {
+            ...state.streamingPhaseByRun,
+            [stateKey]: null,
+          },
+        };
+      });
     } else if (msg.type === "phase_content") {
-      set((state) => ({ phaseMessages: { ...state.phaseMessages, [msg.phase]: msg.content } }));
+      set((state) => ({
+        phaseMessagesByRun: {
+          ...state.phaseMessagesByRun,
+          [getEventStateKey(msg)]: {
+            ...(state.phaseMessagesByRun[getEventStateKey(msg)] || {}),
+            [msg.phase]: msg.content,
+          },
+        },
+      }));
     } else if (msg.type === "phase_interaction") {
-      appendPhaseInteraction(set, msg.phase, msg.interaction);
+      set((state) => {
+        if (!msg.phase || !msg.interaction) return {};
+        const nextByRun = {
+          ...state.phaseInteractionsByRun,
+          [getEventStateKey(msg)]: {
+            ...(state.phaseInteractionsByRun[getEventStateKey(msg)] || {}),
+            [msg.phase]: [...(state.phaseInteractionsByRun[getEventStateKey(msg)]?.[msg.phase] || []), msg.interaction],
+          },
+        };
+        return { phaseInteractionsByRun: nextByRun };
+      });
     } else if (msg.type === "user_message") {
       set((state) => ({
-        phaseMessages: {
-          ...state.phaseMessages,
-          [msg.phase]: (state.phaseMessages[msg.phase] || "") + `\n\n---\n\n**You:** ${msg.text}\n\n`,
+        phaseMessagesByRun: {
+          ...state.phaseMessagesByRun,
+          [getEventStateKey(msg)]: {
+            ...(state.phaseMessagesByRun[getEventStateKey(msg)] || {}),
+            [msg.phase]: (state.phaseMessagesByRun[getEventStateKey(msg)]?.[msg.phase] || "") + `\n\n---\n\n**You:** ${msg.text}\n\n`,
+          },
         },
       }));
     } else if (msg.type === "tool_use") {
-      markPhaseRunning(set, msg.phase);
+      markPhaseRunning(set, msg, msg.phase);
       set((state) => ({
-        phaseMessages: {
-          ...state.phaseMessages,
-          [msg.phase]: (state.phaseMessages[msg.phase] || "") + `\n\n*${msg.log || msg.name}*\n\n`,
+        phaseMessagesByRun: {
+          ...state.phaseMessagesByRun,
+          [getEventStateKey(msg)]: {
+            ...(state.phaseMessagesByRun[getEventStateKey(msg)] || {}),
+            [msg.phase]: (state.phaseMessagesByRun[getEventStateKey(msg)]?.[msg.phase] || "") + `\n\n*${msg.log || msg.name}*\n\n`,
+          },
         },
-        phaseInteractions: {
-          ...state.phaseInteractions,
-          [msg.phase]: [
-            ...(state.phaseInteractions[msg.phase] || []),
-            {
-              role: "tool",
-              type: "tool_use",
-              text: msg.log || msg.name || "",
-              backend: msg.name,
-            },
-          ],
+        phaseInteractionsByRun: {
+          ...state.phaseInteractionsByRun,
+          [getEventStateKey(msg)]: {
+            ...(state.phaseInteractionsByRun[getEventStateKey(msg)] || {}),
+            [msg.phase]: [
+              ...(state.phaseInteractionsByRun[getEventStateKey(msg)]?.[msg.phase] || []),
+              {
+                role: "tool",
+                type: "tool_use",
+                text: msg.log || msg.name || "",
+                backend: msg.name,
+              },
+            ],
+          },
         },
       }));
     } else if (msg.type === "session_attached" && msg.phase && msg.sessionId) {
-      set((state) => ({
-        workflowState: state.workflowState
-          ? {
-              ...state.workflowState,
-              phases: state.workflowState.phases.map((phase) =>
-                phase.id === msg.phase ? { ...phase, sessionId: msg.sessionId } : phase
-              ),
-            }
-          : state.workflowState,
-      }));
+      set((state) => {
+        const stateKey = getEventStateKey(msg);
+        const existingState = state.workflowStatesByRun[stateKey] || (
+          isActiveWorkflowEvent(state, msg) ? state.workflowState : null
+        );
+        if (!existingState) return {};
+        const nextWorkflowState = {
+          ...existingState,
+          phases: existingState.phases.map((phase) =>
+            phase.id === msg.phase ? { ...phase, sessionId: msg.sessionId } : phase
+          ),
+        };
+        return {
+          workflowState: isActiveWorkflowEvent(state, msg) ? nextWorkflowState : state.workflowState,
+          workflowStatesByRun: {
+            ...state.workflowStatesByRun,
+            [stateKey]: nextWorkflowState,
+          },
+        };
+      });
     }
   });
 
   return () => {
-    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.CLIENT_DETACH, { taskId, runId }));
-    if (taskId) desktopApi.detachWorkflow(taskId, runId);
-    if (unsubscribeWorkflowEvents) {
-      unsubscribeWorkflowEvents();
-      unsubscribeWorkflowEvents = null;
-    }
     applyDisconnectedState(set, get);
   };
 }
@@ -361,20 +627,27 @@ export const useWorkflowStore = create((set, get) => ({
   activeTask: null,
   workflowState: null,
   workflowStatesByRun: {},
-  selectedPhase: null,
-  phaseMessages: {},
-  phaseOutputArtifacts: {},
-  phaseInteractions: {},
-  isStreaming: false,
-  streamingPhase: null,
-  connectionState: "disconnected",
-  debugEvents: [],
-  lastEventAt: null,
-  lastError: null,
+  selectedPhaseByRun: {},
+  phaseMessagesByRun: {},
+  phaseOutputArtifactsByRun: {},
+  phaseInteractionsByRun: {},
+  isStreamingByRun: {},
+  streamingPhaseByRun: {},
+  connectionStateByRun: {},
+  debugEventsByRun: {},
+  lastEventAtByRun: {},
+  lastErrorByRun: {},
   toast: null,
 
-  setSelectedPhase(phase) {
-    set({ selectedPhase: phase });
+  setSelectedPhase(phase, stateKey = "") {
+    const key = stateKey || getWorkflowStateKey(get().workflowState?.taskId, get().workflowState?.runId);
+    if (!key) return;
+    set((state) => ({
+      selectedPhaseByRun: {
+        ...state.selectedPhaseByRun,
+        [key]: phase,
+      },
+    }));
   },
 
   showToast(message, duration = 3000) {
@@ -382,10 +655,18 @@ export const useWorkflowStore = create((set, get) => ({
     setTimeout(() => set({ toast: null }), duration);
   },
 
+  ensureWorkflowEvents() {
+    attachWorkflowEvents(set, get);
+  },
+
   syncTaskSummaries(tasks) {
     if (!Array.isArray(tasks) || tasks.length === 0) return;
     set((state) => {
       const workflowStatesByRun = { ...state.workflowStatesByRun };
+      const selectedPhaseByRun = { ...state.selectedPhaseByRun };
+      const isStreamingByRun = { ...state.isStreamingByRun };
+      const streamingPhaseByRun = { ...state.streamingPhaseByRun };
+      const connectionStateByRun = { ...state.connectionStateByRun };
       let changed = false;
 
       for (const task of tasks) {
@@ -393,9 +674,18 @@ export const useWorkflowStore = create((set, get) => ({
         if (!summaryState) continue;
         const stateKey = getWorkflowStateKey(summaryState.taskId, summaryState.runId);
         const existingState = workflowStatesByRun[stateKey];
-        if (existingState?.overallStatus === "completed") continue;
-        workflowStatesByRun[stateKey] = mergeWorkflowStates(existingState, summaryState);
-        changed = true;
+        const nextState = getLatestWorkflowState(summaryState, existingState);
+        if (nextState !== existingState) {
+          workflowStatesByRun[stateKey] = nextState;
+          selectedPhaseByRun[stateKey] = getSelectedPhaseFromWorkflowState(nextState);
+          const runningPhase = getRunningPhaseFromWorkflowState(nextState);
+          isStreamingByRun[stateKey] = Boolean(runningPhase);
+          streamingPhaseByRun[stateKey] = runningPhase;
+          connectionStateByRun[stateKey] = nextState.overallStatus === "completed"
+            ? "disconnected"
+            : connectionStateByRun[stateKey] || (runningPhase ? "connected" : "connecting");
+          changed = true;
+        }
       }
 
       if (!changed) return {};
@@ -403,6 +693,10 @@ export const useWorkflowStore = create((set, get) => ({
       const activeKey = getWorkflowStateKey(activeState?.taskId, activeState?.runId);
       return {
         workflowStatesByRun,
+        selectedPhaseByRun,
+        isStreamingByRun,
+        streamingPhaseByRun,
+        connectionStateByRun,
         workflowState: workflowStatesByRun[activeKey] || activeState,
       };
     });
@@ -413,39 +707,77 @@ export const useWorkflowStore = create((set, get) => ({
       const stateKey = getWorkflowStateKey(taskId, runId);
       const cachedState = get().workflowStatesByRun[stateKey];
       if (cachedState) {
-        const selectedPhase = cachedState.currentPhase && cachedState.currentPhase !== "completed"
-          ? cachedState.currentPhase
-          : cachedState.phases?.[0]?.id || null;
+        const selectedPhase = getSelectedPhaseFromWorkflowState(cachedState);
+        const runningPhase = getRunningPhaseFromWorkflowState(cachedState);
         set({
           activeTask: taskId,
           workflowState: cachedState,
-          selectedPhase,
-          connectionState: cachedState.overallStatus === "completed" ? "disconnected" : get().connectionState,
+          selectedPhaseByRun: {
+            ...get().selectedPhaseByRun,
+            [stateKey]: selectedPhase,
+          },
+          isStreamingByRun: {
+            ...get().isStreamingByRun,
+            [stateKey]: Boolean(runningPhase),
+          },
+          streamingPhaseByRun: {
+            ...get().streamingPhaseByRun,
+            [stateKey]: runningPhase,
+          },
+          connectionStateByRun: {
+            ...get().connectionStateByRun,
+            [stateKey]: cachedState.overallStatus === "completed"
+              ? "disconnected"
+              : get().connectionStateByRun[stateKey] || (runningPhase ? "connected" : "connecting"),
+          },
         });
       }
 
       const { state, messages, outputArtifacts, interactions } = await desktopApi.getTaskState(taskId, runId);
       const currentState = get().workflowStatesByRun[stateKey];
       const displayState = getLatestWorkflowState(state, currentState);
-      const selectedPhase = displayState.currentPhase && displayState.currentPhase !== "completed"
-        ? displayState.currentPhase
-        : displayState.phases?.[0]?.id || null;
+      const displayStateKey = getWorkflowStateKey(displayState.taskId, displayState.runId || runId);
+      const selectedPhase = getSelectedPhaseFromWorkflowState(displayState);
+      const runningPhase = getRunningPhaseFromWorkflowState(displayState);
+      const existingMessages = get().phaseMessagesByRun[displayStateKey] || {};
+      const existingOutputArtifacts = get().phaseOutputArtifactsByRun[displayStateKey] || {};
+      const existingInteractions = get().phaseInteractionsByRun[displayStateKey] || {};
       set({
         activeTask: taskId,
         workflowState: displayState,
-        phaseMessages: messages || {},
-        phaseOutputArtifacts: outputArtifacts || {},
-        phaseInteractions: interactions || {},
-        selectedPhase,
-        isStreaming: false,
-        streamingPhase: null,
-        connectionState: displayState.overallStatus === "completed" ? "disconnected" : "connecting",
-        debugEvents: [],
-        lastEventAt: null,
-        lastError: null,
+        selectedPhaseByRun: {
+          ...get().selectedPhaseByRun,
+          [displayStateKey]: selectedPhase,
+        },
+        isStreamingByRun: {
+          ...get().isStreamingByRun,
+          [displayStateKey]: Boolean(runningPhase),
+        },
+        streamingPhaseByRun: {
+          ...get().streamingPhaseByRun,
+          [displayStateKey]: runningPhase,
+        },
+        connectionStateByRun: {
+          ...get().connectionStateByRun,
+          [displayStateKey]: displayState.overallStatus === "completed"
+            ? "disconnected"
+            : get().connectionStateByRun[displayStateKey] || (runningPhase ? "connected" : "connecting"),
+        },
         workflowStatesByRun: {
           ...get().workflowStatesByRun,
-          [stateKey]: displayState,
+          [displayStateKey]: displayState,
+        },
+        phaseMessagesByRun: {
+          ...get().phaseMessagesByRun,
+          [displayStateKey]: Object.keys(existingMessages).length ? existingMessages : messages || {},
+        },
+        phaseOutputArtifactsByRun: {
+          ...get().phaseOutputArtifactsByRun,
+          [displayStateKey]: Object.keys(existingOutputArtifacts).length ? existingOutputArtifacts : outputArtifacts || {},
+        },
+        phaseInteractionsByRun: {
+          ...get().phaseInteractionsByRun,
+          [displayStateKey]: Object.keys(existingInteractions).length ? existingInteractions : interactions || {},
         },
       });
 
@@ -456,8 +788,14 @@ export const useWorkflowStore = create((set, get) => ({
   },
 
   async connectWorkflow(taskId, workFolder, taskInputs, images, runId, worktreeName, workflowFilename) {
-    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.CLIENT_CONNECT, { taskId, workFolder }));
-    set({ connectionState: "connecting" });
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.CLIENT_CONNECT, { taskId, runId, workFolder }));
+    const stateKey = getWorkflowStateKey(taskId, runId || taskId);
+    set((state) => ({
+      connectionStateByRun: {
+        ...state.connectionStateByRun,
+        [stateKey]: "connecting",
+      },
+    }));
     const detach = attachWorkflowEvents(set, get, taskId, runId);
     try {
       await desktopApi.startWorkflow({ taskId, workFolder, taskInputs, images, runId, worktreeName, workflowFilename });
@@ -497,19 +835,51 @@ export const useWorkflowStore = create((set, get) => ({
 
     set({
       activeTask: id,
-      selectedPhase: firstPhase,
-      phaseMessages: {},
-      phaseOutputArtifacts: {},
-      phaseInteractions: {},
       workflowState,
       workflowStatesByRun: {
         ...get().workflowStatesByRun,
         [stateKey]: workflowState,
       },
-      connectionState: "connecting",
-      debugEvents: [],
-      lastEventAt: null,
-      lastError: null,
+      selectedPhaseByRun: {
+        ...get().selectedPhaseByRun,
+        [stateKey]: firstPhase,
+      },
+      phaseMessagesByRun: {
+        ...get().phaseMessagesByRun,
+        [stateKey]: {},
+      },
+      phaseOutputArtifactsByRun: {
+        ...get().phaseOutputArtifactsByRun,
+        [stateKey]: {},
+      },
+      phaseInteractionsByRun: {
+        ...get().phaseInteractionsByRun,
+        [stateKey]: {},
+      },
+      isStreamingByRun: {
+        ...get().isStreamingByRun,
+        [stateKey]: false,
+      },
+      streamingPhaseByRun: {
+        ...get().streamingPhaseByRun,
+        [stateKey]: null,
+      },
+      connectionStateByRun: {
+        ...get().connectionStateByRun,
+        [stateKey]: "connecting",
+      },
+      debugEventsByRun: {
+        ...get().debugEventsByRun,
+        [stateKey]: [],
+      },
+      lastEventAtByRun: {
+        ...get().lastEventAtByRun,
+        [stateKey]: null,
+      },
+      lastErrorByRun: {
+        ...get().lastErrorByRun,
+        [stateKey]: null,
+      },
     });
     prevStatusRef = {};
 
@@ -566,10 +936,20 @@ export const useWorkflowStore = create((set, get) => ({
     const { activeTask, workflowState } = get();
     if (!activeTask || !phase) return;
     pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_RESUME_REQUESTED, { phase, trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR }));
+    const stateKey = getWorkflowStateKey(workflowState?.taskId, workflowState?.runId);
     set((state) => ({
-      isStreaming: true,
-      streamingPhase: phase,
-      lastError: null,
+      isStreamingByRun: {
+        ...state.isStreamingByRun,
+        [stateKey]: true,
+      },
+      streamingPhaseByRun: {
+        ...state.streamingPhaseByRun,
+        [stateKey]: phase,
+      },
+      lastErrorByRun: {
+        ...state.lastErrorByRun,
+        [stateKey]: null,
+      },
       workflowState: state.workflowState
         ? {
             ...state.workflowState,
@@ -608,11 +988,26 @@ export const useWorkflowStore = create((set, get) => ({
             ...state.workflowStatesByRun,
             [getWorkflowStateKey(reverted.taskId, reverted.runId)]: reverted,
           },
-          isStreaming: false,
-          streamingPhase: null,
+          isStreamingByRun: {
+            ...state.isStreamingByRun,
+            [getWorkflowStateKey(reverted.taskId, reverted.runId)]: false,
+          },
+          streamingPhaseByRun: {
+            ...state.streamingPhaseByRun,
+            [getWorkflowStateKey(reverted.taskId, reverted.runId)]: null,
+          },
         }));
       } else {
-        set({ isStreaming: false, streamingPhase: null });
+        set((state) => ({
+          isStreamingByRun: {
+            ...state.isStreamingByRun,
+            [stateKey]: false,
+          },
+          streamingPhaseByRun: {
+            ...state.streamingPhaseByRun,
+            [stateKey]: null,
+          },
+        }));
       }
       pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Resume failed", phase });
     }
@@ -622,10 +1017,20 @@ export const useWorkflowStore = create((set, get) => ({
     const { activeTask, workflowState } = get();
     if (!activeTask || !phase) return;
     pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_RETRY_REQUESTED, { phase, trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR }));
+    const stateKey = getWorkflowStateKey(workflowState?.taskId, workflowState?.runId);
     set((state) => ({
-      isStreaming: true,
-      streamingPhase: phase,
-      lastError: null,
+      isStreamingByRun: {
+        ...state.isStreamingByRun,
+        [stateKey]: true,
+      },
+      streamingPhaseByRun: {
+        ...state.streamingPhaseByRun,
+        [stateKey]: phase,
+      },
+      lastErrorByRun: {
+        ...state.lastErrorByRun,
+        [stateKey]: null,
+      },
       workflowState: state.workflowState
         ? {
             ...state.workflowState,
@@ -664,11 +1069,26 @@ export const useWorkflowStore = create((set, get) => ({
             ...state.workflowStatesByRun,
             [getWorkflowStateKey(reverted.taskId, reverted.runId)]: reverted,
           },
-          isStreaming: false,
-          streamingPhase: null,
+          isStreamingByRun: {
+            ...state.isStreamingByRun,
+            [getWorkflowStateKey(reverted.taskId, reverted.runId)]: false,
+          },
+          streamingPhaseByRun: {
+            ...state.streamingPhaseByRun,
+            [getWorkflowStateKey(reverted.taskId, reverted.runId)]: null,
+          },
         }));
       } else {
-        set({ isStreaming: false, streamingPhase: null });
+        set((state) => ({
+          isStreamingByRun: {
+            ...state.isStreamingByRun,
+            [stateKey]: false,
+          },
+          streamingPhaseByRun: {
+            ...state.streamingPhaseByRun,
+            [stateKey]: null,
+          },
+        }));
       }
       pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Retry failed", phase });
     }
@@ -678,9 +1098,16 @@ export const useWorkflowStore = create((set, get) => ({
     const { activeTask, workflowState } = get();
     if (!activeTask || !phase) return;
     pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_PAUSE_REQUESTED, { phase, trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR }));
+    const stateKey = getWorkflowStateKey(workflowState?.taskId, workflowState?.runId);
     set((state) => ({
-      isStreaming: false,
-      streamingPhase: null,
+      isStreamingByRun: {
+        ...state.isStreamingByRun,
+        [stateKey]: false,
+      },
+      streamingPhaseByRun: {
+        ...state.streamingPhaseByRun,
+        [stateKey]: null,
+      },
       workflowState: state.workflowState
         ? {
             ...state.workflowState,
@@ -736,10 +1163,6 @@ export const useWorkflowStore = create((set, get) => ({
       trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR,
     }));
     try {
-      if (unsubscribeWorkflowEvents) {
-        unsubscribeWorkflowEvents();
-        unsubscribeWorkflowEvents = null;
-      }
       desktopApi.detachWorkflow(targetTaskId, targetRunId);
       await desktopApi.removeTask(targetTaskId, targetRunId, options);
       pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.TASK_DELETED, {
@@ -750,19 +1173,30 @@ export const useWorkflowStore = create((set, get) => ({
       }));
       const stateKey = getWorkflowStateKey(targetTaskId, targetRunId);
       const { [stateKey]: _removed, ...workflowStatesByRun } = get().workflowStatesByRun;
+      const { [stateKey]: _removedSelectedPhase, ...selectedPhaseByRun } = get().selectedPhaseByRun;
+      const { [stateKey]: _removedMessages, ...phaseMessagesByRun } = get().phaseMessagesByRun;
+      const { [stateKey]: _removedArtifacts, ...phaseOutputArtifactsByRun } = get().phaseOutputArtifactsByRun;
+      const { [stateKey]: _removedInteractions, ...phaseInteractionsByRun } = get().phaseInteractionsByRun;
+      const { [stateKey]: _removedStreaming, ...isStreamingByRun } = get().isStreamingByRun;
+      const { [stateKey]: _removedStreamingPhase, ...streamingPhaseByRun } = get().streamingPhaseByRun;
+      const { [stateKey]: _removedConnection, ...connectionStateByRun } = get().connectionStateByRun;
+      const { [stateKey]: _removedDebugEvents, ...debugEventsByRun } = get().debugEventsByRun;
+      const { [stateKey]: _removedLastEventAt, ...lastEventAtByRun } = get().lastEventAtByRun;
+      const { [stateKey]: _removedLastError, ...lastErrorByRun } = get().lastErrorByRun;
       set({
         activeTask: null,
         workflowState: null,
         workflowStatesByRun,
-        phaseMessages: {},
-        phaseOutputArtifacts: {},
-        phaseInteractions: {},
-        isStreaming: false,
-        streamingPhase: null,
-        connectionState: "disconnected",
-        debugEvents: [],
-        lastEventAt: null,
-        lastError: null,
+        selectedPhaseByRun,
+        phaseMessagesByRun,
+        phaseOutputArtifactsByRun,
+        phaseInteractionsByRun,
+        isStreamingByRun,
+        streamingPhaseByRun,
+        connectionStateByRun,
+        debugEventsByRun,
+        lastEventAtByRun,
+        lastErrorByRun,
       });
       await useConfigStore.getState().loadWorkFolders();
       return true;

@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, relative, resolve } from "path";
 import { readAiApiProfileSync, readAiApiProfilesSync } from "../../core-models/config";
-import { appendPhaseInteraction, appendToPhaseFile, readState, taskDir, updatePhaseStatus, writeState } from "../../core-models/state";
+import { appendPhaseInteraction, appendToPhaseFile, readPhaseInteractions, readState, taskDir, updatePhaseStatus, writeState } from "../../core-models/state";
 import { createSdkAgentAdapter } from "./sdk-agent-adapter";
 import { createContentPreview, createContentSummary, createStepOutputMetadata, formatStepOutputForPrompt } from "./artifacts";
 
@@ -72,6 +72,28 @@ function renderAiApiPrompt(step, state, inputSections = []) {
   return parts.filter(Boolean).join("\n\n");
 }
 
+function syncStepsFromPhases(state) {
+  for (const step of state.steps || []) {
+    const phase = state.phases.find((item) => item.id === step.id);
+    if (phase) Object.assign(step, phase);
+  }
+}
+
+function markRunningStepInState(state, phase) {
+  const phaseIndex = (state.phases || []).findIndex((item) => item.id === phase);
+  for (let i = 0; i < (state.phases || []).length; i += 1) {
+    const item = state.phases[i];
+    if (item.id === phase) {
+      updatePhaseStatus(state, item.id, "in_progress", item.sessionId);
+    } else if (phaseIndex >= 0 && i > phaseIndex) {
+      updatePhaseStatus(state, item.id, "pending", item.sessionId);
+    } else if (item.status === "in_progress" || item.status === "awaiting_input" || item.status === "paused") {
+      updatePhaseStatus(state, item.id, "completed", item.sessionId);
+    }
+  }
+  syncStepsFromPhases(state);
+}
+
 async function readInputContent(input, state) {
   if (!input) return "";
   if (input.sourceType === "task_input") return state.taskInputs?.[input.name] || "";
@@ -116,6 +138,38 @@ async function publishCheckpointOutput({ taskId, runId, step, state, rule }) {
 }
 
 export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, taskRunDir, imagePaths = [], abortController, aiBackendOverride = "" }) {
+  async function markStepRunning(phase) {
+    if (!phase) return;
+    const state = await readState(taskId, runId);
+    state.currentPhase = phase;
+    state.currentStep = phase;
+    state.overallStatus = "in_progress";
+
+    markRunningStepInState(state, phase);
+
+    await writeState(taskId, state);
+  }
+
+  async function appendPhaseStart(phase, backend) {
+    try {
+      const existingInteractions = await readPhaseInteractions(taskId, phase, runId);
+      const startIndexes = existingInteractions
+        .filter((item) => item?.type === "phase_start")
+        .map((item) => Number(item.runIndex) || 0);
+      const lastRunIndex = Math.max(0, ...startIndexes);
+      const hasEarlierConversation = existingInteractions.some((item) => item?.type !== "phase_start");
+      const runIndex = lastRunIndex > 0 ? lastRunIndex + 1 : hasEarlierConversation ? 2 : 1;
+      const interaction = await appendPhaseInteraction(taskId, phase, {
+        role: "system",
+        type: "phase_start",
+        text: "",
+        backend,
+        runIndex,
+      }, runId);
+      if (interaction) send({ type: "phase_interaction", phase, interaction });
+    } catch {}
+  }
+
   const adapter = createSdkAgentAdapter({
     workFolder,
     taskDir: taskRunDir,
@@ -166,6 +220,8 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
     if (!profile.model) throw new Error(`AI API profile ${profile.name} is missing a model`);
 
     const backend = `ai-api:${profile.name || profile.id}`;
+    await markStepRunning(step.id);
+    await appendPhaseStart(step.id, backend);
     send({ type: "backend_selected", phase: step.id, backend, mode: "workflow" });
     const inputSections = [];
     for (const input of step.inputs || []) {
@@ -277,6 +333,8 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
       const useBackendOverride = Boolean(aiBackendOverride && !hasStepBackend && agent.backend !== "ai_api");
       const runtimeAgent = useBackendOverride ? { ...agent, backend: aiBackendOverride, model: "" } : agent;
       if (runtimeAgent.backend === "ai_api") return runAiApiStep({ step, state });
+      await markStepRunning(step.id);
+      await appendPhaseStart(step.id, runtimeAgent.backend);
       send({ type: "backend_selected", phase: step.id, backend: runtimeAgent.backend, mode: useBackendOverride ? "app" : "workflow" });
       const result = await adapter.runAgent({
         step,

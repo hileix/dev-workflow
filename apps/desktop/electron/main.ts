@@ -64,8 +64,11 @@ if (!gotSingleInstanceLock) {
 
 function spawnDetached(command, args) {
   return new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    delete env.NODE_OPTIONS;
     const child = spawn(command, args, {
       detached: true,
+      env,
       stdio: "ignore",
     });
     child.once("error", reject);
