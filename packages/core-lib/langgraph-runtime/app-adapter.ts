@@ -72,6 +72,28 @@ function renderAiApiPrompt(step, state, inputSections = []) {
   return parts.filter(Boolean).join("\n\n");
 }
 
+function syncStepsFromPhases(state) {
+  for (const step of state.steps || []) {
+    const phase = state.phases.find((item) => item.id === step.id);
+    if (phase) Object.assign(step, phase);
+  }
+}
+
+function markRunningStepInState(state, phase) {
+  const phaseIndex = (state.phases || []).findIndex((item) => item.id === phase);
+  for (let i = 0; i < (state.phases || []).length; i += 1) {
+    const item = state.phases[i];
+    if (item.id === phase) {
+      updatePhaseStatus(state, item.id, "in_progress", item.sessionId);
+    } else if (phaseIndex >= 0 && i > phaseIndex) {
+      updatePhaseStatus(state, item.id, "pending", item.sessionId);
+    } else if (item.status === "in_progress" || item.status === "awaiting_input" || item.status === "paused") {
+      updatePhaseStatus(state, item.id, "completed", item.sessionId);
+    }
+  }
+  syncStepsFromPhases(state);
+}
+
 async function readInputContent(input, state) {
   if (!input) return "";
   if (input.sourceType === "task_input") return state.taskInputs?.[input.name] || "";
@@ -123,13 +145,7 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
     state.currentStep = phase;
     state.overallStatus = "in_progress";
 
-    for (const item of state.phases || []) {
-      if (item.id === phase) {
-        updatePhaseStatus(state, item.id, "in_progress", item.sessionId);
-      } else if (item.status === "in_progress") {
-        updatePhaseStatus(state, item.id, "completed", item.sessionId);
-      }
-    }
+    markRunningStepInState(state, phase);
 
     await writeState(taskId, state);
   }

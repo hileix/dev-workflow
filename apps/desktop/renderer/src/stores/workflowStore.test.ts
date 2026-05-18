@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { getSelectedPhaseFromWorkflowState } from "./workflowStore";
+import { getPhasesWithRunningPhase, getSelectedPhaseFromWorkflowState } from "./workflowStore";
 
 describe("getSelectedPhaseFromWorkflowState", () => {
   test("prefers the active phase over a stale currentPhase", () => {
@@ -30,5 +30,21 @@ describe("getSelectedPhaseFromWorkflowState", () => {
         { id: "code_review", status: "pending" },
       ],
     })).toBe("code_review");
+  });
+
+  test("resets later phases when an earlier phase starts running again", () => {
+    expect(getPhasesWithRunningPhase([
+      { id: "implement", status: "completed" },
+      { id: "code_review", status: "completed" },
+      { id: "risk_gate", status: "completed" },
+      { id: "review", status: "awaiting_input" },
+      { id: "commit", status: "pending" },
+    ], "implement", "now")).toEqual([
+      { id: "implement", status: "in_progress", updated: "now" },
+      { id: "code_review", status: "pending", updated: "now" },
+      { id: "risk_gate", status: "pending", updated: "now" },
+      { id: "review", status: "pending", updated: "now" },
+      { id: "commit", status: "pending", updated: undefined },
+    ]);
   });
 });

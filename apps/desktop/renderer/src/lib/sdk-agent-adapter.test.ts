@@ -6,6 +6,7 @@ import { PassThrough } from "stream";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  execFile: vi.fn(),
   query: vi.fn(),
   spawn: vi.fn(),
 }));
@@ -15,8 +16,10 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 }));
 
 vi.mock("child_process", () => ({
+  execFile: mocks.execFile,
   spawn: mocks.spawn,
   default: {
+    execFile: mocks.execFile,
     spawn: mocks.spawn,
   },
 }));
@@ -62,6 +65,8 @@ function buildRun(overrides = {}) {
 describe("createSdkAgentAdapter output artifacts", () => {
   beforeEach(async () => {
     taskDir = await mkdir(join(tmpdir(), `sdk-agent-adapter-${Date.now()}-`), { recursive: true });
+    mocks.execFile.mockReset();
+    mocks.execFile.mockImplementation((_file, _args, _options, callback) => callback(null, "__DEV_WORKFLOW_SHELL_ENV__\0PATH=/usr/bin\0"));
     mocks.query.mockReset();
     mocks.spawn.mockReset();
   });
@@ -123,6 +128,9 @@ describe("createSdkAgentAdapter output artifacts", () => {
       },
     }));
 
+    await vi.waitFor(() => {
+      expect(mocks.spawn).toHaveBeenCalled();
+    });
     child.stdout.write(`${JSON.stringify({ type: "thread.started", thread_id: "codex-thread" })}\n`);
     child.stdout.write(`${JSON.stringify({ type: "item.completed", item: { id: "msg-1", type: "agent_message", text: "Codex response" } })}\n`);
     child.stdout.write(`${JSON.stringify({ type: "turn.completed", usage: null })}\n`);

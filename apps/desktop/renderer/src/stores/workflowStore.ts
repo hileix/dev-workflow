@@ -24,6 +24,7 @@ function playNotificationSound() {
 
 let prevStatusRef = {};
 let unsubscribeWorkflowEvents = null;
+const ACTIVE_PHASE_STATUSES = new Set(["in_progress", "awaiting_input", "paused"]);
 
 export function getWorkflowStateKey(taskId, runId = "") {
   const id = taskId || "";
@@ -66,6 +67,26 @@ export function getSelectedPhaseFromWorkflowState(state) {
 function getRunningPhaseFromWorkflowState(state) {
   const runningPhase = (state?.phases || []).find((phase) => phase.status === "in_progress");
   return runningPhase?.id || runningPhase?.name || null;
+}
+
+export function getPhasesWithRunningPhase(phases = [], phaseId, now = new Date().toISOString()) {
+  const phaseIndex = phases.findIndex((phase) => (phase.id || phase.name) === phaseId);
+  return phases.map((phase, index) => {
+    const id = phase.id || phase.name;
+    let status = phase.status;
+    if (id === phaseId) {
+      status = "in_progress";
+    } else if (phaseIndex >= 0 && index > phaseIndex) {
+      status = "pending";
+    } else if (ACTIVE_PHASE_STATUSES.has(phase.status)) {
+      status = "completed";
+    }
+    return {
+      ...phase,
+      status,
+      updated: id === phaseId || status !== phase.status ? now : phase.updated,
+    };
+  });
 }
 
 function getWorkflowStateFromTask(task) {
@@ -254,15 +275,7 @@ function markPhaseRunning(set, msg, phaseId) {
       currentPhase: phaseId,
       overallStatus: "in_progress",
       updated: now,
-      phases: (existingState.phases || []).map((phase) => ({
-        ...phase,
-        status: phase.id === phaseId
-          ? "in_progress"
-          : phase.status === "in_progress"
-            ? "completed"
-            : phase.status,
-        updated: phase.id === phaseId || phase.status === "in_progress" ? now : phase.updated,
-      })),
+      phases: getPhasesWithRunningPhase(existingState.phases || [], phaseId, now),
     };
     const activeStateKey = getWorkflowStateKey(state.workflowState?.taskId, state.workflowState?.runId);
     const isActiveState = activeStateKey === stateKey;
