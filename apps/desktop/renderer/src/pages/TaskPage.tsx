@@ -12,7 +12,7 @@ import WorkflowDebugPanel from "../components/WorkflowDebugPanel";
 import { getAppApi } from "../lib/api-client";
 import { buildClientDebugPayload, DEBUG_EVENT_TRIGGERS, DEBUG_EVENT_TYPES } from "../lib/debug-events";
 import { cn } from "../lib/utils";
-import { pushClientDebugEvent, useWorkflowStore } from "../stores/workflowStore";
+import { getWorkflowStateKey, pushClientDebugEvent, useWorkflowStore } from "../stores/workflowStore";
 import { useConfigStore } from "../stores/configStore";
 
 const appApi = getAppApi();
@@ -384,24 +384,27 @@ export default function TaskPage() {
   const activeTask = useWorkflowStore((s) => s.activeTask);
   const loadTask = useWorkflowStore((s) => s.loadTask);
   const showToast = useWorkflowStore((s) => s.showToast);
-  const workflowState = useWorkflowStore((s) => s.workflowState);
+  const workflowStatesByRun = useWorkflowStore((s) => s.workflowStatesByRun);
+  const taskId = urlTaskId || activeTask;
+  const routeStateKey = getWorkflowStateKey(taskId, urlRunId || taskId);
+  const workflowState = workflowStatesByRun[routeStateKey] || null;
 
   useEffect(() => {
     if (urlTaskId && (urlTaskId !== activeTask || workflowState?.taskId !== urlTaskId || (urlRunId && workflowState?.runId !== urlRunId))) {
       loadTask(urlTaskId, urlRunId);
     }
   }, [urlTaskId, urlRunId, activeTask, workflowState?.taskId, workflowState?.runId]);
-  const selectedPhase = useWorkflowStore((s) => s.selectedPhase);
+  const selectedPhaseByRun = useWorkflowStore((s) => s.selectedPhaseByRun);
   const setSelectedPhase = useWorkflowStore((s) => s.setSelectedPhase);
-  const phaseMessages = useWorkflowStore((s) => s.phaseMessages);
-  const phaseOutputArtifacts = useWorkflowStore((s) => s.phaseOutputArtifacts);
-  const phaseInteractions = useWorkflowStore((s) => s.phaseInteractions);
-  const isStreaming = useWorkflowStore((s) => s.isStreaming);
-  const streamingPhase = useWorkflowStore((s) => s.streamingPhase);
-  const debugEvents = useWorkflowStore((s) => s.debugEvents);
-  const connectionState = useWorkflowStore((s) => s.connectionState);
-  const lastEventAt = useWorkflowStore((s) => s.lastEventAt);
-  const lastError = useWorkflowStore((s) => s.lastError);
+  const phaseMessagesByRun = useWorkflowStore((s) => s.phaseMessagesByRun);
+  const phaseOutputArtifactsByRun = useWorkflowStore((s) => s.phaseOutputArtifactsByRun);
+  const phaseInteractionsByRun = useWorkflowStore((s) => s.phaseInteractionsByRun);
+  const isStreamingByRun = useWorkflowStore((s) => s.isStreamingByRun);
+  const streamingPhaseByRun = useWorkflowStore((s) => s.streamingPhaseByRun);
+  const debugEventsByRun = useWorkflowStore((s) => s.debugEventsByRun);
+  const connectionStateByRun = useWorkflowStore((s) => s.connectionStateByRun);
+  const lastEventAtByRun = useWorkflowStore((s) => s.lastEventAtByRun);
+  const lastErrorByRun = useWorkflowStore((s) => s.lastErrorByRun);
   const approve = useWorkflowStore((s) => s.approve);
   const reject = useWorkflowStore((s) => s.reject);
   const sendMessage = useWorkflowStore((s) => s.sendMessage);
@@ -413,7 +416,6 @@ export default function TaskPage() {
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
   const runWorkflowConfig = workflowState?.workflowConfig || workflowConfig;
 
-  const taskId = urlTaskId || activeTask;
   const [cleanedWorktree, setCleanedWorktree] = useState(null);
   const visibleWorktree = workflowState?.worktree || cleanedWorktree;
   const worktreeDisplayName = getWorktreeDisplayName(visibleWorktree);
@@ -421,6 +423,19 @@ export default function TaskPage() {
   const isWorktreeCleaned = Boolean(visibleWorktree?.cleaned);
   const hasWorktree = Boolean(visibleWorktree?.enabled);
   const currentPhase = workflowState?.currentPhase;
+  const currentStateKey = workflowState
+    ? getWorkflowStateKey(workflowState.taskId, workflowState.runId)
+    : routeStateKey;
+  const selectedPhase = selectedPhaseByRun[currentStateKey] || null;
+  const phaseMessages = phaseMessagesByRun[currentStateKey] || {};
+  const phaseOutputArtifacts = phaseOutputArtifactsByRun[currentStateKey] || {};
+  const phaseInteractions = phaseInteractionsByRun[currentStateKey] || {};
+  const isStreaming = Boolean(isStreamingByRun[currentStateKey]);
+  const streamingPhase = streamingPhaseByRun[currentStateKey] || null;
+  const debugEvents = debugEventsByRun[currentStateKey] || [];
+  const connectionState = connectionStateByRun[currentStateKey] || "disconnected";
+  const lastEventAt = lastEventAtByRun[currentStateKey] || null;
+  const lastError = lastErrorByRun[currentStateKey] || null;
   const phases = workflowState?.phases || [];
   const selectedRunPhase = selectedPhase;
   const activePhase = selectedRunPhase || currentPhase || phases[0]?.id || null;
@@ -742,7 +757,7 @@ export default function TaskPage() {
                 phases={phases}
                 workflowConfig={runWorkflowConfig}
                 selectedPhase={detailPhase}
-                onSelect={setSelectedPhase}
+                onSelect={(phase) => setSelectedPhase(phase, currentStateKey)}
               />
             </div>
           </aside>

@@ -1,18 +1,24 @@
 import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { EventEmitter } from "events";
+import { PassThrough } from "stream";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
+  spawn: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: mocks.query,
 }));
 
-vi.mock("@openai/codex-sdk", () => ({
-  Codex: vi.fn(),
+vi.mock("child_process", () => ({
+  spawn: mocks.spawn,
+  default: {
+    spawn: mocks.spawn,
+  },
 }));
 
 import { createSdkAgentAdapter } from "../../../../../packages/core-lib/langgraph-runtime";
@@ -57,6 +63,7 @@ describe("createSdkAgentAdapter output artifacts", () => {
   beforeEach(async () => {
     taskDir = await mkdir(join(tmpdir(), `sdk-agent-adapter-${Date.now()}-`), { recursive: true });
     mocks.query.mockReset();
+    mocks.spawn.mockReset();
   });
 
   afterEach(async () => {
@@ -90,5 +97,54 @@ describe("createSdkAgentAdapter output artifacts", () => {
       artifactPath: join(taskDir, "review.md"),
       summary: "Written by the agent tool",
     });
+  });
+
+  test("runs read-only Codex steps with a writable task directory", async () => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    mocks.spawn.mockReturnValue(child);
+    const adapter = createSdkAgentAdapter({ workFolder: "/project", taskDir });
+
+    const runPromise = adapter.runAgent(buildRun({
+      agent: {
+        backend: "codex",
+        workspaceAccess: "read",
+        options: { thread: { modelReasoningEffort: "low" } },
+      },
+      state: {
+        taskId: "task-1",
+        runId: "run-1",
+        workFolder: "/project",
+        taskDir,
+        taskInputs: {},
+        stepOutputs: {},
+      },
+    }));
+
+    child.stdout.write(`${JSON.stringify({ type: "thread.started", thread_id: "codex-thread" })}\n`);
+    child.stdout.write(`${JSON.stringify({ type: "item.completed", item: { id: "msg-1", type: "agent_message", text: "Codex response" } })}\n`);
+    child.stdout.write(`${JSON.stringify({ type: "turn.completed", usage: null })}\n`);
+    child.stdout.end();
+    child.emit("exit", 0, null);
+
+    await runPromise;
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      expect.stringContaining("@openai/codex"),
+      expect.arrayContaining([
+        "exec",
+        "--json",
+        "--sandbox",
+        "workspace-write",
+        "--cd",
+        taskDir,
+        "--skip-git-repo-check",
+        "--config",
+        "model_reasoning_effort=\"low\"",
+      ]),
+      expect.objectContaining({ env: expect.any(Object), signal: expect.any(AbortSignal) }),
+    );
   });
 });

@@ -346,7 +346,6 @@ export default function HomePage() {
   const activeWorkflowFile = useConfigStore((s) => s.activeWorkflowFile);
   const workflowConfig = useConfigStore((s) => s.workflowConfig);
   const loadWorkFolders = useConfigStore((s) => s.loadWorkFolders);
-  const workflowState = useWorkflowStore((s) => s.workflowState);
   const workflowStatesByRun = useWorkflowStore((s) => s.workflowStatesByRun);
   const syncTaskSummaries = useWorkflowStore((s) => s.syncTaskSummaries);
   const startWorkflow = useWorkflowStore((s) => s.startWorkflow);
@@ -368,13 +367,12 @@ export default function HomePage() {
   const tasks = taskSummaries.map((task) => {
     const taskRunId = task.runId || task.taskId || "";
     const sharedState = workflowStatesByRun[`${task.taskId}:${taskRunId}`];
-    const state = sharedState || workflowState;
+    const state = sharedState;
     const stateRunId = state?.runId || "";
     if (
       state &&
       task.taskId === state.taskId &&
-      taskRunId === stateRunId &&
-      state.overallStatus !== "completed"
+      taskRunId === stateRunId
     ) {
       return {
         ...task,

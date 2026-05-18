@@ -226,7 +226,7 @@ function setRunningStep(state, workflow, stepId) {
   }
 }
 
-function markCompletedBeforeCurrent(state, workflow) {
+function syncPhaseStatusesAroundCurrent(state, workflow) {
   const order = getWorkflowStepOrder(workflow);
   const currentIndex = order.indexOf(state.currentPhase);
   for (let i = 0; i < order.length; i += 1) {
@@ -235,7 +235,14 @@ function markCompletedBeforeCurrent(state, workflow) {
     if (!phase) continue;
     if (state.overallStatus === "completed" || (currentIndex >= 0 && i < currentIndex)) {
       phase.status = "completed";
+    } else if (currentIndex >= 0 && i > currentIndex) {
+      phase.status = "pending";
     }
+  }
+
+  for (const step of state.steps || []) {
+    const phase = state.phases.find((item) => item.id === step.id);
+    if (phase) Object.assign(step, phase);
   }
 }
 
@@ -251,13 +258,14 @@ async function persistLangGraphState(taskId, runId, langState, workflow) {
     next.currentStep = stepId;
     next.overallStatus = "awaiting_input";
     updatePhaseStatus(next, stepId, "awaiting_input");
+    syncPhaseStatusesAroundCurrent(next, runtimeWorkflow);
   } else if (next.overallStatus === "completed") {
     next.currentPhase = "completed";
     next.currentStep = "completed";
     for (const phase of next.phases) updatePhaseStatus(next, phase.id, "completed", phase.sessionId);
   } else {
     setRunningStep(next, runtimeWorkflow, next.currentPhase);
-    markCompletedBeforeCurrent(next, runtimeWorkflow);
+    syncPhaseStatusesAroundCurrent(next, runtimeWorkflow);
   }
 
   await writeState(taskId, next);
@@ -350,7 +358,12 @@ function createGraph(taskId, runId, wf, imagePaths = []) {
   const adapter = createAppSdkAgentAdapter({
     taskId,
     runId,
-    send: (message) => wf.send?.(message),
+    send: (message) => {
+      if (message?.type === "backend_selected" && message.phase) {
+        wf.currentPhase = message.phase;
+      }
+      wf.send?.(message);
+    },
     workFolder: wf.workFolder,
     taskRunDir: wf.taskRunDir,
     imagePaths,
@@ -427,13 +440,19 @@ async function ensureCheckpointReady(taskId, runId, state) {
 
 async function markWorkflowFailed(taskId, runId, phase, error, sender) {
   const state = await readState(taskId, runId);
+  const failedPhase = phase || state.currentPhase;
   const message = error?.message || "Workflow run failed";
-  updatePhaseStatus(state, phase || state.currentPhase, "failed");
+  if (failedPhase) {
+    state.currentPhase = failedPhase;
+    state.currentStep = failedPhase;
+  }
+  syncPhaseStatusesAroundCurrent(state, getRuntimeWorkflow(activeWorkflows.get(taskId), state));
+  updatePhaseStatus(state, failedPhase, "failed");
   state.overallStatus = "failed";
-  state.logs = [...(state.logs || []), `failed:${phase || state.currentPhase}:${message}`];
+  state.logs = [...(state.logs || []), `failed:${failedPhase}:${message}`];
   await writeState(taskId, state);
   await upsertTask(state.originalWorkFolder || state.workFolder, taskId, "failed", state.runId || runId, { create: false }).catch(() => {});
-  sender?.({ type: "phase_failed", phase: phase || state.currentPhase, message });
+  sender?.({ type: "phase_failed", phase: failedPhase, message });
   sender?.({ type: "state", state });
   return state;
 }
@@ -452,14 +471,20 @@ export async function startWorkflowSession(taskId, workFolder, taskInputs, image
   if (existingState && existingState.overallStatus !== "completed") {
     const existingRunId = existingState.runId || runId || "";
     const send = createEmitter(sender, taskId, existingRunId);
-    activeWorkflows.set(taskId, {
-      workFolder: existingState.workFolder,
-      taskRunDir: await taskDir(taskId, existingRunId),
-      send,
-      abortController: null,
-      runId: existingRunId,
-      workflow: existingState.workflowDefinition,
-    });
+    const activeWorkflow = activeWorkflows.get(taskId);
+    if (activeWorkflow && (!activeWorkflow.runId || activeWorkflow.runId === existingRunId)) {
+      activeWorkflow.send = send;
+    } else {
+      activeWorkflows.set(taskId, {
+        workFolder: existingState.workFolder,
+        taskRunDir: await taskDir(taskId, existingRunId),
+        send,
+        abortController: null,
+        runId: existingRunId,
+        workflow: existingState.workflowDefinition,
+        currentPhase: existingState.currentPhase,
+      });
+    }
     send({ type: "state", state: existingState });
     await emitExistingTaskFiles(taskId, existingState, send);
     return;
@@ -527,6 +552,7 @@ export async function startWorkflowSession(taskId, workFolder, taskInputs, image
     abortController: null,
     runId: finalRunId,
     workflow,
+    currentPhase: stepOrder[0],
   });
   await upsertTask(workFolder, taskId, "in_progress", finalRunId);
   send({ type: "state", state });
@@ -534,8 +560,7 @@ export async function startWorkflowSession(taskId, workFolder, taskInputs, image
   const safeImages = await getSafeRunImagePaths(taskId, finalRunId, images);
   const graph = createGraph(taskId, finalRunId, activeWorkflows.get(taskId), safeImages);
   activeGraphs.set(getThreadId(taskId, finalRunId), graph);
-  try {
-    await invokeGraph(taskId, finalRunId, {
+  void invokeGraph(taskId, finalRunId, {
       taskId,
       runId: finalRunId,
       workFolder: runtimeWorkFolder,
@@ -543,11 +568,9 @@ export async function startWorkflowSession(taskId, workFolder, taskInputs, image
       currentStep: stepOrder[0],
       overallStatus: "in_progress",
       taskInputs: taskInputs || {},
-    });
-  } catch (err) {
-    await markWorkflowFailed(taskId, finalRunId, stepOrder[0], err, send);
-    throw err;
-  }
+    })
+    .catch((err) => markWorkflowFailed(taskId, finalRunId, activeWorkflows.get(taskId)?.currentPhase || stepOrder[0], err, send))
+    .catch(() => {});
 }
 
 export async function approveWorkflow(taskId, sender, runId = "") {
@@ -703,11 +726,15 @@ export async function retryWorkflowPhase(taskId, phase, sender, runId = "") {
   wf.send({ type: "phase_retried", phase, requestedBy: "user", trigger: "toolbar" });
   wf.send({ type: "state", state });
   try {
-    await invokeGraph(taskId, stateRunId, {
-      ...state,
-      currentStep: phase,
-      overallStatus: "in_progress",
-    });
+    await invokeGraph(taskId, stateRunId, new Command({
+      update: {
+        ...state,
+        currentStep: phase,
+        currentPhase: phase,
+        overallStatus: "in_progress",
+      },
+      goto: phase,
+    }));
   } catch (err) {
     await markWorkflowFailed(taskId, stateRunId, phase, err, wf.send);
     throw err;
@@ -741,10 +768,6 @@ export function detachWorkflowSender(taskId, runId = "") {
   if (!wf) return;
   if (runId && wf.runId && wf.runId !== runId) return;
   wf.send = null;
-  if (wf.abortController) {
-    try { wf.abortController.abort(); } catch {}
-    wf.abortController = null;
-  }
 }
 
 export async function cleanupWorkflowWorktree(taskId, options = {}) {

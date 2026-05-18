@@ -118,6 +118,8 @@ StepDetail Terminal Tab
 - SDK 模式：继续用于结构化 workflow 执行、artifact、state、mobile relay
 - CLI/PTY 模式：用于高级 terminal 体验和调试
 
+TODO：评估并实现用 Codex CLI / Claude Code CLI 直接替换当前 `@openai/codex-sdk` / `@anthropic-ai/claude-agent-sdk` adapter。目标是拿到 CLI 原生能力和最新 flags，例如 Codex `--dangerously-bypass-approvals-and-sandbox`、Claude Code `--dangerously-skip-permissions`，同时保持 workflow state、artifact、session resume 和 debug event 的回写能力。
+
 注意：PTY 模式不能绕开 workflow state。即使 terminal 显示原生 CLI 输出，最终 step 状态、artifact、session id、错误信息仍然要回写到当前 task run。
 
 ### Resume 策略
