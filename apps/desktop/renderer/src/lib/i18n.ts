@@ -1,7 +1,10 @@
 export const messages = {
   en: {
     "nav.settings": "Settings",
-    "theme.toggle": "Toggle theme",
+    "theme.toggle": "Choose theme",
+    "theme.light": "Light",
+    "theme.dark": "Dark",
+    "theme.system": "System",
     "language.switch": "Switch language",
     "status.completed": "Completed",
     "status.paused": "Paused",
@@ -358,7 +361,10 @@ export const messages = {
   },
   "zh-CN": {
     "nav.settings": "设置",
-    "theme.toggle": "切换主题",
+    "theme.toggle": "选择主题",
+    "theme.light": "浅色",
+    "theme.dark": "深色",
+    "theme.system": "系统",
     "language.switch": "切换语言",
     "status.completed": "已完成",
     "status.paused": "已暂停",
