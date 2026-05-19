@@ -3,7 +3,7 @@ import { basename, resolve, join } from "path";
 import { stat, mkdir } from "fs/promises";
 import { spawn } from "child_process";
 import multer from "multer";
-import { readWorkfolders, saveWorkfolders, deleteTask } from "../../../packages/core-models/workfolders";
+import { readWorkfolders, saveWorkfolders, deleteTask, removeWorkfolder } from "../../../packages/core-models/workfolders";
 import { getBaseDir } from "../../../packages/core-models/config";
 import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state";
 import { getPhaseContent, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude";
@@ -69,10 +69,7 @@ router.post("/workfolders", async (req, res) => {
 router.delete("/workfolders", async (req, res) => {
   const { path: folderPath } = req.body;
   if (!folderPath) return res.status(400).json({ error: "path required" });
-  let folders = await readWorkfolders();
-  folders = folders.filter((f) => f.path !== folderPath);
-  await saveWorkfolders(folders);
-  res.json(folders);
+  res.json(await removeWorkfolder(folderPath));
 });
 
 router.get("/tasks/:taskId/state", async (req, res) => {
