@@ -8,6 +8,7 @@ let homeDir = "";
 let originalUserDataDir;
 let originalHome;
 let originalAppData;
+let originalXdgConfigHome;
 
 async function loadModules() {
   vi.resetModules();
@@ -26,11 +27,13 @@ describe("workfolders storage", () => {
     originalUserDataDir = process.env.DEV_WORKFLOW_USER_DATA_DIR;
     originalHome = process.env.HOME;
     originalAppData = process.env.APPDATA;
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
     userDataDir = await mkdtemp(join(tmpdir(), "dev-workflow-user-data-"));
     homeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
     process.env.DEV_WORKFLOW_USER_DATA_DIR = userDataDir;
     process.env.HOME = homeDir;
     process.env.APPDATA = join(homeDir, "AppData", "Roaming");
+    process.env.XDG_CONFIG_HOME = join(homeDir, ".config");
   });
 
   afterEach(async () => {
@@ -48,6 +51,11 @@ describe("workfolders storage", () => {
       delete process.env.APPDATA;
     } else {
       process.env.APPDATA = originalAppData;
+    }
+    if (originalXdgConfigHome === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
     }
     if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
     if (homeDir) await rm(homeDir, { recursive: true, force: true });

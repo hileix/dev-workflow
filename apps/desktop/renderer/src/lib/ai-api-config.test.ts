@@ -8,6 +8,7 @@ let testHomeDir = "";
 let originalUserDataDir;
 let originalHome;
 let originalAppData;
+let originalXdgConfigHome;
 
 async function loadConfigModule() {
   vi.resetModules();
@@ -21,7 +22,7 @@ function getTestAppDataDir(homeDir) {
   if (process.platform === "win32") {
     return join(homeDir, "AppData", "Roaming", "dev-Workflow");
   }
-  return join(homeDir, ".config", "dev-Workflow");
+  return join(process.env.XDG_CONFIG_HOME || join(homeDir, ".config"), "dev-Workflow");
 }
 
 describe("AI API config", () => {
@@ -29,11 +30,13 @@ describe("AI API config", () => {
     originalUserDataDir = process.env.DEV_WORKFLOW_USER_DATA_DIR;
     originalHome = process.env.HOME;
     originalAppData = process.env.APPDATA;
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
     configDir = await mkdtemp(join(tmpdir(), "dev-workflow-config-"));
     testHomeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
     process.env.DEV_WORKFLOW_USER_DATA_DIR = configDir;
     process.env.HOME = testHomeDir;
     process.env.APPDATA = join(testHomeDir, "AppData", "Roaming");
+    process.env.XDG_CONFIG_HOME = join(testHomeDir, ".config");
   });
 
   afterEach(async () => {
@@ -51,6 +54,11 @@ describe("AI API config", () => {
       delete process.env.APPDATA;
     } else {
       process.env.APPDATA = originalAppData;
+    }
+    if (originalXdgConfigHome === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
     }
     if (configDir) await rm(configDir, { recursive: true, force: true });
     if (testHomeDir) await rm(testHomeDir, { recursive: true, force: true });
