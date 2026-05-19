@@ -9,7 +9,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, "..", "..");
 let runtimeBaseDir = "";
 let runtimeStorageDir = "";
-export const LEGACY_WORKFLOW_DIR = join(PROJECT_ROOT, "workflows");
 
 function getPlatformUserDataDir() {
   switch (process.platform) {
@@ -50,6 +49,11 @@ export function getDefaultDesktopUserDataDir() {
   return isDevelopmentCheckout() ? getWorktreeScopedUserDataDir(baseDir) : baseDir;
 }
 
+export function getSystemDesktopUserDataDir() {
+  return getSharedDesktopUserDataDir();
+}
+
+export const SYSTEM_CONFIG_FILE = join(getSystemDesktopUserDataDir(), "config.json");
 export const CONFIG_FILE = join(getDefaultDesktopUserDataDir(), "config.json");
 
 function parseJson(raw) {
@@ -76,21 +80,111 @@ async function readJsonFile(path) {
   }
 }
 
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function mergeAiApiProfiles(systemProfiles = [], userProfiles = [], deletedProfileIds = []) {
+  const deleted = new Set((Array.isArray(deletedProfileIds) ? deletedProfileIds : []).map((id) => slugifyConfigId(id, "")));
+  const merged = normalizeAiApiProfiles(systemProfiles).filter((profile) => !deleted.has(profile.id));
+  const byId = new Map(merged.map((profile, index) => [profile.id, index]));
+
+  for (const profile of normalizeAiApiProfiles(userProfiles)) {
+    const index = byId.get(profile.id);
+    if (index === undefined) {
+      byId.set(profile.id, merged.length);
+      merged.push(profile);
+    } else {
+      merged[index] = profile;
+    }
+  }
+
+  return merged;
+}
+
+function mergeConfigLayers(systemConfig = {}, userConfig = {}) {
+  const merged = {
+    ...systemConfig,
+    ...userConfig,
+  };
+  merged.aiApiProfiles = mergeAiApiProfiles(
+    systemConfig.aiApiProfiles,
+    userConfig.aiApiProfiles,
+    userConfig.deletedAiApiProfileIds
+  );
+  return merged;
+}
+
+function sameAiApiProfile(a, b) {
+  return (
+    a.id === b.id &&
+    a.name === b.name &&
+    a.baseUrl === b.baseUrl &&
+    a.apiKey === b.apiKey &&
+    a.model === b.model
+  );
+}
+
+function buildUserConfig(config, systemConfig) {
+  const userConfig = {};
+  const systemProfiles = normalizeAiApiProfiles(systemConfig.aiApiProfiles);
+  const nextProfiles = normalizeAiApiProfiles(config.aiApiProfiles);
+  const nextProfileIds = new Set(nextProfiles.map((profile) => profile.id));
+  const systemProfileById = new Map(systemProfiles.map((profile) => [profile.id, profile]));
+  const userProfiles = nextProfiles.filter((profile) => {
+    const systemProfile = systemProfileById.get(profile.id);
+    return !systemProfile || !sameAiApiProfile(profile, systemProfile);
+  });
+  const deletedAiApiProfileIds = systemProfiles
+    .filter((profile) => !nextProfileIds.has(profile.id))
+    .map((profile) => profile.id);
+
+  for (const key of ["activeWorkflow", "mobileAccessEnabled", "aiBackendOverride"]) {
+    if (hasOwn(config, key) && config[key] !== systemConfig[key]) {
+      userConfig[key] = config[key];
+    }
+  }
+  if (Array.isArray(config.deletedWorkflowFiles) && config.deletedWorkflowFiles.length > 0) {
+    userConfig.deletedWorkflowFiles = config.deletedWorkflowFiles;
+  }
+  if (userProfiles.length > 0) userConfig.aiApiProfiles = userProfiles;
+  if (deletedAiApiProfileIds.length > 0) userConfig.deletedAiApiProfileIds = deletedAiApiProfileIds;
+  return userConfig;
+}
+
 async function ensureConfigDir() {
   await mkdir(dirname(CONFIG_FILE), { recursive: true });
 }
 
-export function readConfigSync() {
+export function readSystemConfigSync() {
+  return readJsonFileSync(SYSTEM_CONFIG_FILE) || {};
+}
+
+export async function readSystemConfig() {
+  return (await readJsonFile(SYSTEM_CONFIG_FILE)) || {};
+}
+
+export function readUserConfigSync() {
   return readJsonFileSync(CONFIG_FILE) || {};
 }
 
-export async function readConfig() {
+export async function readUserConfig() {
   return (await readJsonFile(CONFIG_FILE)) || {};
 }
 
+export function readConfigSync() {
+  return mergeConfigLayers(readSystemConfigSync(), readUserConfigSync());
+}
+
+export async function readConfig() {
+  return mergeConfigLayers(await readSystemConfig(), await readUserConfig());
+}
+
 export async function saveConfig(config) {
+  const systemConfig = await readSystemConfig();
+  const userConfig = buildUserConfig(config || {}, systemConfig);
   await ensureConfigDir();
-  await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
+  await writeFile(CONFIG_FILE, JSON.stringify(userConfig, null, 2));
 }
 
 export async function readMobileAccessEnabled() {
@@ -207,7 +301,7 @@ export async function saveAiApiProfile(profile) {
   nextProfiles.push(normalized);
   config.aiApiProfiles = nextProfiles;
   await saveConfig(config);
-  return nextProfiles.map(redactAiApiProfile);
+  return readAiApiProfilesForUi();
 }
 
 export async function deleteAiApiProfile(id) {
@@ -216,7 +310,7 @@ export async function deleteAiApiProfile(id) {
   const config = await readConfig();
   config.aiApiProfiles = normalizeAiApiProfiles(config.aiApiProfiles).filter((profile) => profile.id !== profileId);
   await saveConfig(config);
-  return config.aiApiProfiles.map(redactAiApiProfile);
+  return readAiApiProfilesForUi();
 }
 
 export function setRuntimeBaseDir(baseDir) {
@@ -235,12 +329,36 @@ export async function getBaseDir() {
   return runtimeBaseDir || join(getStorageDir(), "tasks");
 }
 
+export function getSystemBaseDir() {
+  return join(getSystemDesktopUserDataDir(), "tasks");
+}
+
 export function getSkillsDir() {
   return join(getStorageDir(), "skills");
 }
 
+export function getSystemSkillsDir() {
+  return join(getSystemDesktopUserDataDir(), "skills");
+}
+
+export function getSkillsDirs() {
+  const userDir = getSkillsDir();
+  const systemDir = getSystemSkillsDir();
+  return userDir === systemDir ? [userDir] : [userDir, systemDir];
+}
+
 export function getWorkflowDir() {
-  return join(getSharedDesktopUserDataDir(), "workflows");
+  return join(getStorageDir(), "workflows");
+}
+
+export function getSystemWorkflowDir() {
+  return join(getSystemDesktopUserDataDir(), "workflows");
+}
+
+export function getWorkflowDirs() {
+  const userDir = getWorkflowDir();
+  const systemDir = getSystemWorkflowDir();
+  return userDir === systemDir ? [userDir] : [userDir, systemDir];
 }
 
 export function getWorkfoldersFile(baseDir) {

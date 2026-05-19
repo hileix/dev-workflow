@@ -6,6 +6,7 @@ import {
   readConfig,
   saveConfig,
   getWorkflowDir,
+  getWorkflowDirs,
   readAiBackendOverride,
   readAiApiProfilesForUi,
   readMobileAccessEnabled,
@@ -18,7 +19,7 @@ import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManaged
 import {
   assertSafeWorkflowFilename,
   getWorkflow, getActiveWorkflowFile, setActiveWorkflowFile,
-  deriveTaskInputFields, getWorkflowConfigShape, loadWorkflow, unloadWorkflow,
+  deriveTaskInputFields, getWorkflowConfigShape, getWorkflowFilePath, loadWorkflow, unloadWorkflow,
 } from "../../../packages/core-models/workflow";
 import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index";
 
@@ -49,6 +50,9 @@ async function writeWorkflowFile(filename, workflow, isDraft) {
   const workflowDir = await ensureWorkflowDir();
   const data = isDraft ? workflow : validateWorkflowDsl(workflow);
   await writeFile(join(workflowDir, filename), JSON.stringify(data, null, 2));
+  const config = await readConfig();
+  config.deletedWorkflowFiles = (config.deletedWorkflowFiles || []).filter((file) => file !== filename);
+  await saveConfig(config);
   if (!isDraft && filename === getActiveWorkflowFile()) {
     loadWorkflow(join(workflowDir, filename));
   }
@@ -222,14 +226,18 @@ router.delete("/settings/ai-api-profiles/:id", async (req, res) => {
 // --- Workflow CRUD ---
 
 router.get("/workflows", async (req, res) => {
-  const workflowDir = await ensureWorkflowDir();
+  await ensureWorkflowDir();
   try {
-    const files = await readdir(workflowDir);
+    const config = await readConfig();
+    const deletedWorkflowFiles = new Set(Array.isArray(config.deletedWorkflowFiles) ? config.deletedWorkflowFiles : []);
+    const files = Array.from(new Set((await Promise.all(
+      getWorkflowDirs().map((dir) => readdir(dir).catch(() => []))
+    )).flat())).filter((file) => !deletedWorkflowFiles.has(file)).sort();
     const workflows = [];
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
       try {
-        const raw = JSON.parse(await readFile(join(workflowDir, f), "utf-8"));
+        const raw = JSON.parse(await readFile(getWorkflowFilePath(f), "utf-8"));
         const workflowConfig = getWorkflowConfigShape(raw);
         workflows.push({
           filename: f,
@@ -253,7 +261,7 @@ router.get("/workflows", async (req, res) => {
 router.get("/workflows/:filename", async (req, res) => {
   try {
     const filename = assertSafeWorkflowFilename(req.params.filename);
-    const raw = await readFile(join(await ensureWorkflowDir(), filename), "utf-8");
+    const raw = await readFile(getWorkflowFilePath(filename), "utf-8");
     res.json(JSON.parse(raw));
   } catch {
     res.status(400).json({ error: "workflow not found" });
@@ -265,7 +273,7 @@ router.put("/workflows/:filename/visibility", async (req, res) => {
     const filename = assertSafeWorkflowFilename(req.params.filename);
     const workflowDir = await ensureWorkflowDir();
     const filepath = join(workflowDir, filename);
-    const workflow = JSON.parse(await readFile(filepath, "utf-8"));
+    const workflow = JSON.parse(await readFile(getWorkflowFilePath(filename), "utf-8"));
     workflow.visible = req.body?.visible === true;
     await writeFile(filepath, JSON.stringify(workflow, null, 2));
     if (filename === getActiveWorkflowFile()) loadWorkflow(filepath);
@@ -291,18 +299,22 @@ router.post("/workflows", async (req, res) => {
   }
   const workflowDir = await ensureWorkflowDir();
   const filepath = join(workflowDir, filename);
+  const config = await readConfig();
+  const deletedWorkflowFiles = Array.isArray(config.deletedWorkflowFiles) ? config.deletedWorkflowFiles : [];
   try {
-    await stat(filepath);
-    return res.status(409).json({ error: "workflow with this name already exists" });
+    await stat(getWorkflowFilePath(filename));
+    if (!deletedWorkflowFiles.includes(filename)) {
+      return res.status(409).json({ error: "workflow with this name already exists" });
+    }
   } catch {}
   await writeFile(filepath, JSON.stringify(workflow, null, 2));
+  config.deletedWorkflowFiles = deletedWorkflowFiles.filter((file) => file !== filename);
   if (!isDraft && !getWorkflow()) {
     loadWorkflow(filepath);
     setActiveWorkflowFile(filename);
-    const config = await readConfig();
     config.activeWorkflow = filename;
-    await saveConfig(config);
   }
+  await saveConfig(config);
   res.json({ filename, name: workflow.name });
 });
 
@@ -332,23 +344,37 @@ router.delete("/workflows/:filename", async (req, res) => {
     const filename = assertSafeWorkflowFilename(req.params.filename);
     const workflowDir = await ensureWorkflowDir();
     const files = (await readdir(workflowDir)).filter((file) => file.endsWith(".json"));
-    if (!files.includes(filename)) return res.status(404).json({ error: "workflow not found" });
+    const userFileExists = files.includes(filename);
+    const targetExists = await stat(getWorkflowFilePath(filename)).catch(() => null);
+    const systemFileExists = await Promise.all(
+      getWorkflowDirs().slice(1).map((dir) => stat(join(dir, filename)).catch(() => null))
+    ).then((stats) => stats.some(Boolean));
+    if (!targetExists) return res.status(404).json({ error: "workflow not found" });
 
-    await unlink(join(workflowDir, filename));
+    if (userFileExists) {
+      await unlink(join(workflowDir, filename));
+    }
+    const config = await readConfig();
+    if (!userFileExists || systemFileExists) {
+      config.deletedWorkflowFiles = Array.from(new Set([...(config.deletedWorkflowFiles || []), filename]));
+    }
     if (getActiveWorkflowFile() === filename) {
-      const remaining = files.filter((file) => file !== filename).sort();
-      const config = await readConfig();
+      const remaining = Array.from(new Set((await Promise.all(
+        getWorkflowDirs().map((dir) => readdir(dir).catch(() => []))
+      )).flat()))
+        .filter((file) => file.endsWith(".json") && file !== filename && !(config.deletedWorkflowFiles || []).includes(file))
+        .sort();
       if (remaining.length > 0) {
         const nextWorkflow = remaining[0];
         setActiveWorkflowFile(nextWorkflow);
-        loadWorkflow(join(workflowDir, nextWorkflow));
+        loadWorkflow(getWorkflowFilePath(nextWorkflow));
         config.activeWorkflow = nextWorkflow;
       } else {
         unloadWorkflow();
         delete config.activeWorkflow;
       }
-      await saveConfig(config);
     }
+    await saveConfig(config);
     res.json({ ok: true });
   } catch {
     res.status(404).json({ error: "workflow not found" });
@@ -358,8 +384,8 @@ router.delete("/workflows/:filename", async (req, res) => {
 router.put("/workflows/:filename/activate", async (req, res) => {
   try {
     const filename = assertSafeWorkflowFilename(req.params.filename);
-    const workflowDir = await ensureWorkflowDir();
-    loadWorkflow(join(workflowDir, filename));
+    await ensureWorkflowDir();
+    loadWorkflow(getWorkflowFilePath(filename));
     setActiveWorkflowFile(filename);
     const config = await readConfig();
     config.activeWorkflow = filename;

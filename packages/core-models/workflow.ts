@@ -1,6 +1,6 @@
 import { join } from "path";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from "fs";
-import { readConfigSync, LEGACY_WORKFLOW_DIR, getWorkflowDir } from "./config";
+import { existsSync, readFileSync, readdirSync } from "fs";
+import { readConfigSync, getWorkflowDir, getWorkflowDirs } from "./config";
 import { validateWorkflowDsl } from "../core-lib/langgraph-runtime/index";
 
 let WORKFLOW = null;
@@ -40,24 +40,17 @@ export function assertSafeWorkflowFilename(filename) {
 }
 
 export function readWorkflowFileSync(filename) {
-  const safeFilename = assertSafeWorkflowFilename(filename);
-  const raw = JSON.parse(readFileSync(join(getWorkflowDir(), safeFilename), "utf-8"));
+  const raw = JSON.parse(readFileSync(getWorkflowFilePath(filename), "utf-8"));
   return validateWorkflowDsl(raw);
 }
 
-function migrateLegacyWorkflowsSync() {
-  const workflowDir = getWorkflowDir();
-  mkdirSync(workflowDir, { recursive: true });
-
-  const legacyFiles = listWorkflowFilesSync(LEGACY_WORKFLOW_DIR);
-  for (const file of legacyFiles) {
-    const sourcePath = join(LEGACY_WORKFLOW_DIR, file);
-    const targetPath = join(workflowDir, file);
-    if (existsSync(targetPath)) continue;
-    try {
-      renameSync(sourcePath, targetPath);
-    } catch {}
+export function getWorkflowFilePath(filename) {
+  const safeFilename = assertSafeWorkflowFilename(filename);
+  for (const dir of getWorkflowDirs()) {
+    const filepath = join(dir, safeFilename);
+    if (existsSync(filepath)) return filepath;
   }
+  return join(getWorkflowDir(), safeFilename);
 }
 
 function getStepBackend(workflow, step) {
@@ -282,14 +275,16 @@ try {
 } catch {}
 
 try {
-  migrateLegacyWorkflowsSync();
-  const workflowDir = getWorkflowDir();
-  const files = listWorkflowFilesSync(workflowDir);
+  const startupConfig = readConfigSync();
+  const deletedWorkflowFiles = new Set(Array.isArray(startupConfig.deletedWorkflowFiles) ? startupConfig.deletedWorkflowFiles : []);
+  const files = Array.from(new Set(getWorkflowDirs().flatMap(listWorkflowFilesSync)))
+    .filter((file) => !deletedWorkflowFiles.has(file))
+    .sort();
   if (!files.includes(ACTIVE_WORKFLOW_FILE)) {
     ACTIVE_WORKFLOW_FILE = files[0] || "";
   }
   if (ACTIVE_WORKFLOW_FILE) {
-    loadWorkflow(join(workflowDir, ACTIVE_WORKFLOW_FILE));
+    loadWorkflow(getWorkflowFilePath(ACTIVE_WORKFLOW_FILE));
   } else {
     clearWorkflowState();
   }

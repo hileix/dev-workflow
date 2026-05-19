@@ -7,6 +7,7 @@ import {
   saveConfig,
   getBaseDir,
   getWorkflowDir,
+  getWorkflowDirs,
   readAiBackendOverride,
   readAiApiProfilesForUi,
   readMobileAccessEnabled,
@@ -22,11 +23,12 @@ import {
   setActiveWorkflowFile,
   deriveTaskInputFields,
   getWorkflowConfigShape,
+  getWorkflowFilePath,
   loadWorkflow,
   unloadWorkflow,
 } from "../../../packages/core-models/workflow";
 import { validateWorkflowDsl } from "../../../packages/core-lib/langgraph-runtime/index";
-import { readWorkfolders, saveWorkfolders, deleteTask, removeTaskWorktree } from "../../../packages/core-models/workfolders";
+import { readWorkfolders, saveWorkfolders, deleteTask, removeTaskWorktree, removeWorkfolder } from "../../../packages/core-models/workfolders";
 import { assertSafeRunId, readState, getTaskRunId, readPhaseInteractions } from "../../../packages/core-models/state";
 import { deleteManagedSkill, importManagedSkills, listManagedSkills, saveManagedSkill } from "../../../packages/core-models/skills";
 import { getPhaseContent, getPhaseOutputArtifactPath, readPhaseOutputArtifacts, stopActiveWorkflow } from "../../../packages/core-lib/claude";
@@ -99,14 +101,18 @@ export async function deleteAiApi(id) {
 }
 
 export async function listWorkflows() {
-  const workflowDir = await ensureWorkflowDir();
+  await ensureWorkflowDir();
   try {
-    const files = await readdir(workflowDir);
+    const config = await readConfig();
+    const deletedWorkflowFiles = new Set(Array.isArray(config.deletedWorkflowFiles) ? config.deletedWorkflowFiles : []);
+    const files = Array.from(new Set((await Promise.all(
+      getWorkflowDirs().map((dir) => readdir(dir).catch(() => []))
+    )).flat())).filter((file) => !deletedWorkflowFiles.has(file)).sort();
     const workflows = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
       try {
-        const raw = JSON.parse(await readFile(join(workflowDir, file), "utf-8"));
+        const raw = JSON.parse(await readFile(getWorkflowFilePath(file), "utf-8"));
         const workflowConfig = getWorkflowConfigShape(raw);
         workflows.push({
           filename: file,
@@ -129,7 +135,7 @@ export async function listWorkflows() {
 
 export async function getWorkflowByFilename(filename) {
   const safeFilename = assertSafeWorkflowFilename(filename);
-  const raw = await readFile(join(await ensureWorkflowDir(), safeFilename), "utf-8");
+  const raw = await readFile(getWorkflowFilePath(safeFilename), "utf-8");
   return JSON.parse(raw);
 }
 
@@ -137,7 +143,7 @@ export async function setWorkflowVisible(filename, visible) {
   const safeFilename = assertSafeWorkflowFilename(filename);
   const workflowDir = await ensureWorkflowDir();
   const filepath = join(workflowDir, safeFilename);
-  const raw = JSON.parse(await readFile(filepath, "utf-8"));
+  const raw = JSON.parse(await readFile(getWorkflowFilePath(safeFilename), "utf-8"));
   raw.visible = visible === true;
   await writeFile(filepath, JSON.stringify(raw, null, 2));
   if (safeFilename === getActiveWorkflowFile()) loadWorkflow(filepath);
@@ -158,16 +164,18 @@ async function createWorkflowFile(workflow, isDraft) {
   const filename = data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".json";
   const workflowDir = await ensureWorkflowDir();
   const filepath = join(workflowDir, filename);
-  const existing = await stat(filepath).catch(() => null);
-  if (existing) throw new Error("workflow with this name already exists");
+  const config = await readConfig();
+  const deletedWorkflowFiles = Array.isArray(config.deletedWorkflowFiles) ? config.deletedWorkflowFiles : [];
+  const existing = await stat(getWorkflowFilePath(filename)).catch(() => null);
+  if (existing && !deletedWorkflowFiles.includes(filename)) throw new Error("workflow with this name already exists");
   await writeFile(filepath, JSON.stringify(data, null, 2));
+  config.deletedWorkflowFiles = deletedWorkflowFiles.filter((file) => file !== filename);
   if (!isDraft && !getWorkflow()) {
     loadWorkflow(filepath);
     setActiveWorkflowFile(filename);
-    const config = await readConfig();
     config.activeWorkflow = filename;
-    await saveConfig(config);
   }
+  await saveConfig(config);
   return { filename, name: data.name };
 }
 
@@ -262,6 +270,9 @@ async function updateWorkflowFile(filename, workflow, isDraft) {
   if (!String(data.name || "").trim()) throw new Error("workflow name is required");
   const workflowDir = await ensureWorkflowDir();
   await writeFile(join(workflowDir, safeFilename), JSON.stringify(data, null, 2));
+  const config = await readConfig();
+  config.deletedWorkflowFiles = (config.deletedWorkflowFiles || []).filter((file) => file !== safeFilename);
+  await saveConfig(config);
   if (!isDraft && safeFilename === getActiveWorkflowFile()) {
     loadWorkflow(join(workflowDir, safeFilename));
   }
@@ -272,30 +283,40 @@ export async function removeWorkflow(filename) {
   const safeFilename = assertSafeWorkflowFilename(filename);
   const workflowDir = await ensureWorkflowDir();
   const files = (await readdir(workflowDir)).filter((file) => file.endsWith(".json"));
-  if (!files.includes(safeFilename)) throw new Error("workflow not found");
+  const userFileExists = files.includes(safeFilename);
+  const targetExists = await stat(getWorkflowFilePath(safeFilename)).catch(() => null);
+  const systemFileExists = await Promise.all(
+    getWorkflowDirs().slice(1).map((dir) => stat(join(dir, safeFilename)).catch(() => null))
+  ).then((stats) => stats.some(Boolean));
+  if (!targetExists) throw new Error("workflow not found");
 
-  await unlink(join(workflowDir, safeFilename));
+  if (userFileExists) {
+    await unlink(join(workflowDir, safeFilename));
+  }
+  const config = await readConfig();
+  if (!userFileExists || systemFileExists) {
+    config.deletedWorkflowFiles = Array.from(new Set([...(config.deletedWorkflowFiles || []), safeFilename]));
+  }
   if (getActiveWorkflowFile() === safeFilename) {
-    const remaining = files.filter((file) => file !== safeFilename).sort();
-    const config = await readConfig();
+    const remaining = (await listWorkflows()).workflows.map((workflow) => workflow.filename).filter((file) => file !== safeFilename).sort();
     if (remaining.length > 0) {
       const nextWorkflow = remaining[0];
       setActiveWorkflowFile(nextWorkflow);
-      loadWorkflow(join(workflowDir, nextWorkflow));
+      loadWorkflow(getWorkflowFilePath(nextWorkflow));
       config.activeWorkflow = nextWorkflow;
     } else {
       unloadWorkflow();
       delete config.activeWorkflow;
     }
-    await saveConfig(config);
   }
+  await saveConfig(config);
   return { ok: true };
 }
 
 export async function activateWorkflow(filename) {
   const safeFilename = assertSafeWorkflowFilename(filename);
-  const workflowDir = await ensureWorkflowDir();
-  loadWorkflow(join(workflowDir, safeFilename));
+  await ensureWorkflowDir();
+  loadWorkflow(getWorkflowFilePath(safeFilename));
   setActiveWorkflowFile(safeFilename);
   const config = await readConfig();
   config.activeWorkflow = safeFilename;
@@ -339,10 +360,7 @@ export async function addWorkFolder(folderPath) {
 
 export async function removeWorkFolder(folderPath) {
   if (!folderPath) throw new Error("path required");
-  let folders = await readWorkfolders();
-  folders = folders.filter((folder) => folder.path !== folderPath);
-  await saveWorkfolders(folders);
-  return folders;
+  return removeWorkfolder(folderPath);
 }
 
 export async function getTaskState(taskId, runId = "") {

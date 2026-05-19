@@ -1,7 +1,7 @@
 import { basename, join } from "path";
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "fs/promises";
 import { existsSync, readFileSync } from "fs";
-import { getSkillsDir } from "./config";
+import { getSkillsDir, getSkillsDirs, getSystemSkillsDir } from "./config";
 
 function slugify(name) {
   return String(name || "")
@@ -17,14 +17,33 @@ function normalizeContent(content) {
     .replace(/\r\n/g, "\n");
 }
 
-function skillDir(slug) {
+const DELETED_MARKER = ".deleted";
+
+function skillDir(slug, root = getSkillsDir()) {
   const cleanSlug = slugify(slug);
   if (!cleanSlug) throw new Error("skill name is required");
-  return join(getSkillsDir(), cleanSlug);
+  return join(root, cleanSlug);
 }
 
-function skillFile(slug) {
-  return join(skillDir(slug), "SKILL.md");
+function skillFile(slug, root = getSkillsDir()) {
+  return join(skillDir(slug, root), "SKILL.md");
+}
+
+function deletedSkillMarker(slug) {
+  return join(skillDir(slug), DELETED_MARKER);
+}
+
+function isSkillDeleted(slug) {
+  return existsSync(deletedSkillMarker(slug));
+}
+
+function findSkillFile(slug) {
+  if (isSkillDeleted(slug)) return "";
+  for (const root of getSkillsDirs()) {
+    const file = skillFile(slug, root);
+    if (existsSync(file)) return file;
+  }
+  return "";
 }
 
 function parseSkillContent(content) {
@@ -86,17 +105,17 @@ const DEFAULT_MANAGED_SKILLS = [
 ];
 
 async function ensureDefaultManagedSkills() {
-  await mkdir(getSkillsDir(), { recursive: true });
+  await mkdir(getSystemSkillsDir(), { recursive: true });
   for (const skill of DEFAULT_MANAGED_SKILLS) {
-    const targetFile = skillFile(skill.slug);
+    const targetFile = skillFile(skill.slug, getSystemSkillsDir());
     if (existsSync(targetFile)) continue;
-    await mkdir(skillDir(skill.slug), { recursive: true });
+    await mkdir(skillDir(skill.slug, getSystemSkillsDir()), { recursive: true });
     await writeFile(targetFile, buildSkillContent(skill));
   }
 }
 
-async function readSkill(slug) {
-  const content = await readFile(skillFile(slug), "utf-8");
+async function readSkill(slug, file = findSkillFile(slug)) {
+  const content = await readFile(file, "utf-8");
   const parsed = parseSkillContent(content);
 
   return {
@@ -137,7 +156,7 @@ async function copySkillDir(sourceDir) {
 
   let slug = baseSlug;
   let suffix = 2;
-  while (existsSync(skillDir(slug))) {
+  while (existsSync(skillDir(slug)) || findSkillFile(slug)) {
     slug = `${baseSlug}-${suffix}`;
     suffix += 1;
   }
@@ -149,25 +168,36 @@ async function copySkillDir(sourceDir) {
 
 export async function listManagedSkills() {
   await ensureDefaultManagedSkills();
-  const root = getSkillsDir();
-  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
-  const skills = [];
+  const skillsBySlug = new Map();
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    try {
-      skills.push(await readSkill(entry.name));
-    } catch {}
+  for (const root of getSkillsDirs().slice().reverse()) {
+    const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const slug = slugify(entry.name);
+      if (!slug) continue;
+      if (isSkillDeleted(slug)) {
+        skillsBySlug.delete(slug);
+        continue;
+      }
+      const file = skillFile(slug, root);
+      if (!existsSync(file)) continue;
+      try {
+        skillsBySlug.set(slug, await readSkill(slug, file));
+      } catch {}
+    }
   }
 
-  return skills.sort((a, b) => a.name.localeCompare(b.name));
+  return Array.from(skillsBySlug.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function readManagedSkillContentSync(ref) {
   const slug = slugify(ref);
   if (!slug) return "";
+  const file = findSkillFile(slug);
+  if (!file) return "";
   try {
-    const content = readFileSync(skillFile(slug), "utf-8");
+    const content = readFileSync(file, "utf-8");
     const parsed = parseSkillContent(content);
     return buildSkillContent({
       name: parsed.name || slug,
@@ -196,14 +226,21 @@ export async function saveManagedSkill(input) {
 
   await mkdir(getSkillsDir(), { recursive: true });
 
-  if (oldDir && oldDir !== targetDir && existsSync(oldDir)) {
-    if (existsSync(targetDir)) {
+  if (oldSlug && oldSlug !== slug) {
+    if (findSkillFile(slug)) {
       throw new Error("skill with this name already exists");
     }
-    await rm(oldDir, { recursive: true, force: true });
+    if (existsSync(oldDir)) {
+      await rm(oldDir, { recursive: true, force: true });
+    }
+    if (existsSync(skillDir(oldSlug, getSystemSkillsDir()))) {
+      await mkdir(oldDir, { recursive: true });
+      await writeFile(deletedSkillMarker(oldSlug), "");
+    }
   }
 
   await mkdir(targetDir, { recursive: true });
+  await rm(deletedSkillMarker(slug), { force: true });
   await writeFile(targetFile, content);
   return readSkill(slug);
 }
@@ -212,6 +249,10 @@ export async function deleteManagedSkill(slug) {
   const cleanSlug = slugify(slug);
   if (!cleanSlug) throw new Error("skill name is required");
   await rm(skillDir(cleanSlug), { recursive: true, force: true });
+  if (existsSync(skillDir(cleanSlug, getSystemSkillsDir()))) {
+    await mkdir(skillDir(cleanSlug), { recursive: true });
+    await writeFile(deletedSkillMarker(cleanSlug), "");
+  }
 }
 
 export async function importManagedSkills(sourcePath) {
