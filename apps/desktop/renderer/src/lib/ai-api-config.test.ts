@@ -1,9 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-let configDir = "";
 let testHomeDir = "";
 let originalUserDataDir;
 let originalHome;
@@ -21,9 +20,8 @@ describe("AI API config", () => {
     originalHome = process.env.HOME;
     originalAppData = process.env.APPDATA;
     originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
-    configDir = await mkdtemp(join(tmpdir(), "dev-workflow-config-"));
     testHomeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
-    process.env.DEV_WORKFLOW_USER_DATA_DIR = configDir;
+    delete process.env.DEV_WORKFLOW_USER_DATA_DIR;
     process.env.HOME = testHomeDir;
     process.env.APPDATA = join(testHomeDir, "AppData", "Roaming");
     process.env.XDG_CONFIG_HOME = join(testHomeDir, ".config");
@@ -50,9 +48,7 @@ describe("AI API config", () => {
     } else {
       process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
     }
-    if (configDir) await rm(configDir, { recursive: true, force: true });
     if (testHomeDir) await rm(testHomeDir, { recursive: true, force: true });
-    configDir = "";
     testHomeDir = "";
   });
 
@@ -121,90 +117,10 @@ describe("AI API config", () => {
     expect(await readAiApiProfiles()).toHaveLength(1);
   });
 
-  test("merges system AI API profiles with user overrides", async () => {
-    const homeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
-    process.env.HOME = homeDir;
-    process.env.APPDATA = join(homeDir, "AppData", "Roaming");
-    process.env.XDG_CONFIG_HOME = join(homeDir, ".config");
-    delete process.env.DEV_WORKFLOW_USER_DATA_DIR;
-    const { CONFIG_FILE, SYSTEM_CONFIG_FILE, readAiApiProfilesForUi, readAiBackendOverride, saveAiApiProfile } = await loadConfigModule();
-    await mkdir(join(SYSTEM_CONFIG_FILE, ".."), { recursive: true });
-    await writeFile(
-      SYSTEM_CONFIG_FILE,
-      JSON.stringify({
-        aiBackendOverride: "codex",
-        aiApiProfiles: [
-          {
-            id: "deepseek",
-            name: "deepseek",
-            baseUrl: "https://api.deepseek.com",
-            apiKey: "sk-deepseek",
-            model: "deepseek-v4-flash",
-          },
-        ],
-      }, null, 2)
-    );
+  test("uses one shared config file for user and system settings", async () => {
+    const { CONFIG_FILE, SYSTEM_CONFIG_FILE, getDefaultDesktopUserDataDir, getSystemDesktopUserDataDir } = await loadConfigModule();
 
-    expect(await readAiBackendOverride()).toBe("codex");
-    expect(await readAiApiProfilesForUi()).toEqual([
-      {
-        id: "deepseek",
-        name: "deepseek",
-        baseUrl: "https://api.deepseek.com",
-        model: "deepseek-v4-flash",
-        hasApiKey: true,
-      },
-    ]);
-
-    await saveAiApiProfile({
-      id: "deepseek",
-      name: "deepseek",
-      baseUrl: "https://gateway.example/v1",
-      apiKey: "",
-      model: "deepseek-chat",
-    });
-
-    expect(await readAiApiProfilesForUi()).toEqual([
-      {
-        id: "deepseek",
-        name: "deepseek",
-        baseUrl: "https://gateway.example/v1",
-        model: "deepseek-chat",
-        hasApiKey: true,
-      },
-    ]);
-    expect(JSON.parse(await readFile(CONFIG_FILE, "utf-8")).aiApiProfiles).toHaveLength(1);
-
-    await rm(homeDir, { recursive: true, force: true });
-  });
-
-  test("stores a user deletion marker for system AI API profiles", async () => {
-    const homeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
-    process.env.HOME = homeDir;
-    process.env.APPDATA = join(homeDir, "AppData", "Roaming");
-    process.env.XDG_CONFIG_HOME = join(homeDir, ".config");
-    delete process.env.DEV_WORKFLOW_USER_DATA_DIR;
-    const { CONFIG_FILE, SYSTEM_CONFIG_FILE, deleteAiApiProfile, readAiApiProfilesForUi } = await loadConfigModule();
-    await mkdir(join(SYSTEM_CONFIG_FILE, ".."), { recursive: true });
-    await writeFile(
-      SYSTEM_CONFIG_FILE,
-      JSON.stringify({
-        aiApiProfiles: [
-          {
-            id: "deepseek",
-            name: "deepseek",
-            baseUrl: "https://api.deepseek.com",
-            apiKey: "sk-deepseek",
-            model: "deepseek-v4-flash",
-          },
-        ],
-      }, null, 2)
-    );
-
-    expect(await deleteAiApiProfile("deepseek")).toEqual([]);
-    expect(await readAiApiProfilesForUi()).toEqual([]);
-    expect(JSON.parse(await readFile(CONFIG_FILE, "utf-8")).deletedAiApiProfileIds).toEqual(["deepseek"]);
-
-    await rm(homeDir, { recursive: true, force: true });
+    expect(getSystemDesktopUserDataDir()).toBe(getDefaultDesktopUserDataDir());
+    expect(SYSTEM_CONFIG_FILE).toBe(CONFIG_FILE);
   });
 });

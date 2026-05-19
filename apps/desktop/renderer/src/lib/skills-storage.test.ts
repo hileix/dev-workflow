@@ -1,9 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-let userDataDir = "";
 let homeDir = "";
 let originalUserDataDir;
 let originalHome;
@@ -40,9 +39,8 @@ describe("managed skills storage", () => {
     originalHome = process.env.HOME;
     originalAppData = process.env.APPDATA;
     originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
-    userDataDir = await mkdtemp(join(tmpdir(), "dev-workflow-user-data-"));
     homeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
-    process.env.DEV_WORKFLOW_USER_DATA_DIR = userDataDir;
+    delete process.env.DEV_WORKFLOW_USER_DATA_DIR;
     process.env.HOME = homeDir;
     process.env.APPDATA = join(homeDir, "AppData", "Roaming");
     process.env.XDG_CONFIG_HOME = join(homeDir, ".config");
@@ -69,15 +67,14 @@ describe("managed skills storage", () => {
     } else {
       process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
     }
-    if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
     if (homeDir) await rm(homeDir, { recursive: true, force: true });
-    userDataDir = "";
     homeDir = "";
   });
 
-  test("merges system skills with user overrides", async () => {
+  test("reads managed skills from the shared storage directory", async () => {
     const { config, skills } = await loadModules();
-    await writeSkill(config.getSystemSkillsDir(), "review", "review", "System review", "system body");
+    expect(config.getSystemSkillsDir()).toBe(config.getSkillsDir());
+
     await writeSkill(config.getSkillsDir(), "review", "review", "User review", "user body");
     await writeSkill(config.getSkillsDir(), "local", "local", "Local only", "local body");
 
@@ -90,15 +87,14 @@ describe("managed skills storage", () => {
     expect(skills.readManagedSkillContentSync("review")).toContain("user body");
   });
 
-  test("stores user deletion markers for system skills", async () => {
+  test("deletes managed skills directly from the shared storage directory", async () => {
     const { config, skills } = await loadModules();
-    await writeSkill(config.getSystemSkillsDir(), "review", "review", "System review", "system body");
+    await writeSkill(config.getSkillsDir(), "review", "review", "System review", "system body");
 
     await skills.deleteManagedSkill("review");
 
     expect((await skills.listManagedSkills()).some((skill) => skill.slug === "review")).toBe(false);
-    await expect(stat(join(config.getSystemSkillsDir(), "review", "SKILL.md"))).resolves.toBeTruthy();
-    expect(await readFile(join(config.getSkillsDir(), "review", ".deleted"), "utf-8")).toBe("");
+    await expect(stat(join(config.getSkillsDir(), "review", "SKILL.md"))).rejects.toBeTruthy();
 
     await skills.saveManagedSkill({
       name: "review",
@@ -107,6 +103,5 @@ describe("managed skills storage", () => {
     });
 
     expect(skills.readManagedSkillContentSync("review")).toContain("restored body");
-    await expect(stat(join(config.getSkillsDir(), "review", ".deleted"))).rejects.toBeTruthy();
   });
 });

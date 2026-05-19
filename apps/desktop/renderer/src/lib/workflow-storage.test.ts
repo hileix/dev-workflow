@@ -3,7 +3,6 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-let userDataDir = "";
 let homeDir = "";
 let originalUserDataDir;
 let originalHome;
@@ -49,9 +48,8 @@ describe("workflow storage", () => {
     originalHome = process.env.HOME;
     originalAppData = process.env.APPDATA;
     originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
-    userDataDir = await mkdtemp(join(tmpdir(), "dev-workflow-user-data-"));
     homeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
-    process.env.DEV_WORKFLOW_USER_DATA_DIR = userDataDir;
+    delete process.env.DEV_WORKFLOW_USER_DATA_DIR;
     process.env.HOME = homeDir;
     process.env.APPDATA = join(homeDir, "AppData", "Roaming");
     process.env.XDG_CONFIG_HOME = join(homeDir, ".config");
@@ -78,20 +76,18 @@ describe("workflow storage", () => {
     } else {
       process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
     }
-    if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
     if (homeDir) await rm(homeDir, { recursive: true, force: true });
-    userDataDir = "";
     homeDir = "";
   });
 
-  test("uses user workflows before system workflows", async () => {
+  test("uses the shared workflow directory", async () => {
     const { config, workflow } = await loadModules();
-    await writeWorkflow(config.getSystemWorkflowDir(), "default.json", "System Default");
+
+    expect(config.getSystemWorkflowDir()).toBe(config.getWorkflowDir());
+
     await writeWorkflow(config.getWorkflowDir(), "default.json", "User Default");
-    await writeWorkflow(config.getSystemWorkflowDir(), "system-only.json", "System Only");
 
     expect(workflow.getWorkflowFilePath("default.json")).toBe(join(config.getWorkflowDir(), "default.json"));
-    expect(workflow.getWorkflowFilePath("system-only.json")).toBe(join(config.getSystemWorkflowDir(), "system-only.json"));
     expect(workflow.readWorkflowFileSync("default.json").name).toBe("User Default");
   });
 });

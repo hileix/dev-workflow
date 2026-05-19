@@ -1,7 +1,6 @@
 import { spawn } from "child_process";
 import net from "net";
-import { basename, join } from "path";
-import { mkdirSync } from "fs";
+import { basename } from "path";
 
 type Options = {
   name: string;
@@ -121,12 +120,6 @@ async function main() {
   }
   const { rendererPort, localServerPort, backendPort } = getPorts(portOffset);
   const name = options.name;
-  const userDataDir = options.customName
-    ? join(process.cwd(), ".dev-instances", name)
-    : process.env.DEV_WORKFLOW_USER_DATA_DIR || "";
-
-  if (userDataDir) mkdirSync(userDataDir, { recursive: true });
-
   const env = {
     ...process.env,
     RENDERER_PORT: String(rendererPort),
@@ -141,14 +134,13 @@ async function main() {
     DEVICE_NAME: `Desktop ${name}`,
     DEV_WORKFLOW_INSTANCE_NAME: name,
   };
-  if (userDataDir) env.DEV_WORKFLOW_USER_DATA_DIR = userDataDir;
 
   console.log(`[dev-instance] name: ${name}`);
   console.log(`[dev-instance] port offset: ${portOffset}${options.autoPortOffset ? " (auto)" : ""}`);
   console.log(`[dev-instance] renderer: http://127.0.0.1:${rendererPort}`);
   console.log(`[dev-instance] local server: http://127.0.0.1:${localServerPort}`);
   console.log(`[dev-instance] backend: http://127.0.0.1:${backendPort}`);
-  console.log(`[dev-instance] user data: ${userDataDir || "default worktree-scoped directory"}`);
+  console.log("[dev-instance] user data: shared app directory");
 
   const child = spawn("pnpm", ["run", "dev:all:raw"], {
     env,
