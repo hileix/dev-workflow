@@ -1,12 +1,8 @@
-import { basename, join, dirname } from "path";
+import { dirname, join } from "path";
 import { readFile, writeFile, mkdir } from "fs/promises";
-import { existsSync, readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { createHash } from "crypto";
+import { readFileSync } from "fs";
 import os from "os";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = join(__dirname, "..", "..");
 let runtimeBaseDir = "";
 let runtimeStorageDir = "";
 
@@ -28,29 +24,12 @@ export function getSharedDesktopUserDataDir() {
   return getPlatformUserDataDir();
 }
 
-function isDevelopmentCheckout() {
-  return (
-    existsSync(join(PROJECT_ROOT, "package.json")) &&
-    existsSync(join(PROJECT_ROOT, "apps", "desktop", "electron", "main.ts"))
-  );
-}
-
-function getWorktreeScopedUserDataDir(baseDir) {
-  const hash = createHash("sha256").update(PROJECT_ROOT).digest("hex").slice(0, 8);
-  return join(baseDir, "worktrees", `${basename(PROJECT_ROOT)}-${hash}`);
-}
-
 export function getDefaultDesktopUserDataDir() {
-  if (process.env.DEV_WORKFLOW_USER_DATA_DIR) {
-    return process.env.DEV_WORKFLOW_USER_DATA_DIR;
-  }
-
-  const baseDir = getPlatformUserDataDir();
-  return isDevelopmentCheckout() ? getWorktreeScopedUserDataDir(baseDir) : baseDir;
+  return getPlatformUserDataDir();
 }
 
 export function getSystemDesktopUserDataDir() {
-  return getSharedDesktopUserDataDir();
+  return getDefaultDesktopUserDataDir();
 }
 
 export const SYSTEM_CONFIG_FILE = join(getSystemDesktopUserDataDir(), "config.json");
@@ -80,78 +59,6 @@ async function readJsonFile(path) {
   }
 }
 
-function hasOwn(object, key) {
-  return Object.prototype.hasOwnProperty.call(object, key);
-}
-
-function mergeAiApiProfiles(systemProfiles = [], userProfiles = [], deletedProfileIds = []) {
-  const deleted = new Set((Array.isArray(deletedProfileIds) ? deletedProfileIds : []).map((id) => slugifyConfigId(id, "")));
-  const merged = normalizeAiApiProfiles(systemProfiles).filter((profile) => !deleted.has(profile.id));
-  const byId = new Map(merged.map((profile, index) => [profile.id, index]));
-
-  for (const profile of normalizeAiApiProfiles(userProfiles)) {
-    const index = byId.get(profile.id);
-    if (index === undefined) {
-      byId.set(profile.id, merged.length);
-      merged.push(profile);
-    } else {
-      merged[index] = profile;
-    }
-  }
-
-  return merged;
-}
-
-function mergeConfigLayers(systemConfig = {}, userConfig = {}) {
-  const merged = {
-    ...systemConfig,
-    ...userConfig,
-  };
-  merged.aiApiProfiles = mergeAiApiProfiles(
-    systemConfig.aiApiProfiles,
-    userConfig.aiApiProfiles,
-    userConfig.deletedAiApiProfileIds
-  );
-  return merged;
-}
-
-function sameAiApiProfile(a, b) {
-  return (
-    a.id === b.id &&
-    a.name === b.name &&
-    a.baseUrl === b.baseUrl &&
-    a.apiKey === b.apiKey &&
-    a.model === b.model
-  );
-}
-
-function buildUserConfig(config, systemConfig) {
-  const userConfig = {};
-  const systemProfiles = normalizeAiApiProfiles(systemConfig.aiApiProfiles);
-  const nextProfiles = normalizeAiApiProfiles(config.aiApiProfiles);
-  const nextProfileIds = new Set(nextProfiles.map((profile) => profile.id));
-  const systemProfileById = new Map(systemProfiles.map((profile) => [profile.id, profile]));
-  const userProfiles = nextProfiles.filter((profile) => {
-    const systemProfile = systemProfileById.get(profile.id);
-    return !systemProfile || !sameAiApiProfile(profile, systemProfile);
-  });
-  const deletedAiApiProfileIds = systemProfiles
-    .filter((profile) => !nextProfileIds.has(profile.id))
-    .map((profile) => profile.id);
-
-  for (const key of ["activeWorkflow", "mobileAccessEnabled", "aiBackendOverride"]) {
-    if (hasOwn(config, key) && config[key] !== systemConfig[key]) {
-      userConfig[key] = config[key];
-    }
-  }
-  if (Array.isArray(config.deletedWorkflowFiles) && config.deletedWorkflowFiles.length > 0) {
-    userConfig.deletedWorkflowFiles = config.deletedWorkflowFiles;
-  }
-  if (userProfiles.length > 0) userConfig.aiApiProfiles = userProfiles;
-  if (deletedAiApiProfileIds.length > 0) userConfig.deletedAiApiProfileIds = deletedAiApiProfileIds;
-  return userConfig;
-}
-
 async function ensureConfigDir() {
   await mkdir(dirname(CONFIG_FILE), { recursive: true });
 }
@@ -173,18 +80,16 @@ export async function readUserConfig() {
 }
 
 export function readConfigSync() {
-  return mergeConfigLayers(readSystemConfigSync(), readUserConfigSync());
+  return readUserConfigSync();
 }
 
 export async function readConfig() {
-  return mergeConfigLayers(await readSystemConfig(), await readUserConfig());
+  return readUserConfig();
 }
 
 export async function saveConfig(config) {
-  const systemConfig = await readSystemConfig();
-  const userConfig = buildUserConfig(config || {}, systemConfig);
   await ensureConfigDir();
-  await writeFile(CONFIG_FILE, JSON.stringify(userConfig, null, 2));
+  await writeFile(CONFIG_FILE, JSON.stringify(config || {}, null, 2));
 }
 
 export async function readMobileAccessEnabled() {

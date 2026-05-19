@@ -1,9 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-let userDataDir = "";
 let homeDir = "";
 let originalUserDataDir;
 let originalHome;
@@ -28,9 +27,8 @@ describe("workfolders storage", () => {
     originalHome = process.env.HOME;
     originalAppData = process.env.APPDATA;
     originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
-    userDataDir = await mkdtemp(join(tmpdir(), "dev-workflow-user-data-"));
     homeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
-    process.env.DEV_WORKFLOW_USER_DATA_DIR = userDataDir;
+    delete process.env.DEV_WORKFLOW_USER_DATA_DIR;
     process.env.HOME = homeDir;
     process.env.APPDATA = join(homeDir, "AppData", "Roaming");
     process.env.XDG_CONFIG_HOME = join(homeDir, ".config");
@@ -57,54 +55,42 @@ describe("workfolders storage", () => {
     } else {
       process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
     }
-    if (userDataDir) await rm(userDataDir, { recursive: true, force: true });
     if (homeDir) await rm(homeDir, { recursive: true, force: true });
-    userDataDir = "";
     homeDir = "";
   });
 
-  test("merges system workfolders with user folders", async () => {
+  test("reads workfolders from the shared storage directory", async () => {
     const { config, workfolders } = await loadModules();
     const userBaseDir = await config.getBaseDir();
     const systemBaseDir = config.getSystemBaseDir();
-    await writeWorkfolders(config.getWorkfoldersFile(systemBaseDir), [
-      { name: "System", path: "/tmp/system", tasks: [{ taskId: "system-task", status: "running" }] },
-      { name: "Shared", path: "/tmp/shared", tasks: [] },
-    ]);
+
+    expect(systemBaseDir).toBe(userBaseDir);
+
     await writeWorkfolders(config.getWorkfoldersFile(userBaseDir), [
       { name: "Shared User", path: "/tmp/shared", tasks: [{ taskId: "user-task", status: "done" }] },
       { name: "User", path: "/tmp/user", tasks: [] },
     ]);
 
     expect(await workfolders.readWorkfolders()).toEqual([
-      { name: "System", path: "/tmp/system", tasks: [] },
       { name: "Shared User", path: "/tmp/shared", tasks: [{ taskId: "user-task", runId: "user-task", status: "done" }] },
       { name: "User", path: "/tmp/user", tasks: [] },
     ]);
   });
 
-  test("stores user deletion markers for system workfolders", async () => {
+  test("removes workfolders directly from the shared storage file", async () => {
     const { config, workfolders } = await loadModules();
     const userBaseDir = await config.getBaseDir();
-    const systemBaseDir = config.getSystemBaseDir();
-    await writeWorkfolders(config.getWorkfoldersFile(systemBaseDir), [
+    await writeWorkfolders(config.getWorkfoldersFile(userBaseDir), [
       { name: "System", path: "/tmp/system", tasks: [] },
     ]);
 
     expect(await workfolders.removeWorkfolder("/tmp/system")).toEqual([]);
-    expect(JSON.parse(await readFile(config.getWorkfoldersFile(userBaseDir), "utf-8"))).toEqual([
-      { name: "System", path: "/tmp/system", tasks: [], deleted: true },
-    ]);
 
     await workfolders.saveWorkfolders([
       { name: "User", path: "/tmp/user", tasks: [] },
     ]);
 
     expect(await workfolders.readWorkfolders()).toEqual([
-      { name: "User", path: "/tmp/user", tasks: [] },
-    ]);
-    expect(JSON.parse(await readFile(config.getWorkfoldersFile(userBaseDir), "utf-8"))).toEqual([
-      { name: "System", path: "/tmp/system", tasks: [], deleted: true },
       { name: "User", path: "/tmp/user", tasks: [] },
     ]);
   });
