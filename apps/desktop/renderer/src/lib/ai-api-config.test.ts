@@ -15,16 +15,6 @@ async function loadConfigModule() {
   return import("../../../../../packages/core-models/config");
 }
 
-function getTestAppDataDir(homeDir) {
-  if (process.platform === "darwin") {
-    return join(homeDir, "Library", "Application Support", "dev-Workflow");
-  }
-  if (process.platform === "win32") {
-    return join(homeDir, "AppData", "Roaming", "dev-Workflow");
-  }
-  return join(process.env.XDG_CONFIG_HOME || join(homeDir, ".config"), "dev-Workflow");
-}
-
 describe("AI API config", () => {
   beforeEach(async () => {
     originalUserDataDir = process.env.DEV_WORKFLOW_USER_DATA_DIR;
@@ -135,11 +125,12 @@ describe("AI API config", () => {
     const homeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
     process.env.HOME = homeDir;
     process.env.APPDATA = join(homeDir, "AppData", "Roaming");
+    process.env.XDG_CONFIG_HOME = join(homeDir, ".config");
     delete process.env.DEV_WORKFLOW_USER_DATA_DIR;
-    const appDataDir = getTestAppDataDir(homeDir);
-    await mkdir(appDataDir, { recursive: true });
+    const { CONFIG_FILE, SYSTEM_CONFIG_FILE, readAiApiProfilesForUi, readAiBackendOverride, saveAiApiProfile } = await loadConfigModule();
+    await mkdir(join(SYSTEM_CONFIG_FILE, ".."), { recursive: true });
     await writeFile(
-      join(appDataDir, "config.json"),
+      SYSTEM_CONFIG_FILE,
       JSON.stringify({
         aiBackendOverride: "codex",
         aiApiProfiles: [
@@ -153,8 +144,6 @@ describe("AI API config", () => {
         ],
       }, null, 2)
     );
-
-    const { CONFIG_FILE, readAiApiProfilesForUi, readAiBackendOverride, saveAiApiProfile } = await loadConfigModule();
 
     expect(await readAiBackendOverride()).toBe("codex");
     expect(await readAiApiProfilesForUi()).toEqual([
@@ -193,11 +182,12 @@ describe("AI API config", () => {
     const homeDir = await mkdtemp(join(tmpdir(), "dev-workflow-home-"));
     process.env.HOME = homeDir;
     process.env.APPDATA = join(homeDir, "AppData", "Roaming");
+    process.env.XDG_CONFIG_HOME = join(homeDir, ".config");
     delete process.env.DEV_WORKFLOW_USER_DATA_DIR;
-    const appDataDir = getTestAppDataDir(homeDir);
-    await mkdir(appDataDir, { recursive: true });
+    const { CONFIG_FILE, SYSTEM_CONFIG_FILE, deleteAiApiProfile, readAiApiProfilesForUi } = await loadConfigModule();
+    await mkdir(join(SYSTEM_CONFIG_FILE, ".."), { recursive: true });
     await writeFile(
-      join(appDataDir, "config.json"),
+      SYSTEM_CONFIG_FILE,
       JSON.stringify({
         aiApiProfiles: [
           {
@@ -210,8 +200,6 @@ describe("AI API config", () => {
         ],
       }, null, 2)
     );
-
-    const { CONFIG_FILE, deleteAiApiProfile, readAiApiProfilesForUi } = await loadConfigModule();
 
     expect(await deleteAiApiProfile("deepseek")).toEqual([]);
     expect(await readAiApiProfilesForUi()).toEqual([]);

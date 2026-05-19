@@ -1,6 +1,6 @@
-import { basename, join, dirname } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { readFile, writeFile, mkdir } from "fs/promises";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import { fileURLToPath } from "url";
 import { createHash } from "crypto";
 import os from "os";
@@ -35,9 +35,35 @@ function isDevelopmentCheckout() {
   );
 }
 
-function getWorktreeScopedUserDataDir(baseDir) {
-  const hash = createHash("sha256").update(PROJECT_ROOT).digest("hex").slice(0, 8);
-  return join(baseDir, "worktrees", `${basename(PROJECT_ROOT)}-${hash}`);
+function getWorktreeScopedUserDataDir(baseDir, projectRoot = PROJECT_ROOT) {
+  const hash = createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+  return join(baseDir, "worktrees", `${basename(projectRoot)}-${hash}`);
+}
+
+function getCommonGitDir() {
+  const gitPath = join(PROJECT_ROOT, ".git");
+  try {
+    if (statSync(gitPath).isDirectory()) return gitPath;
+  } catch {
+    return "";
+  }
+
+  const match = readFileSync(gitPath, "utf-8").match(/^gitdir:\s*(.+)\s*$/m);
+  if (!match) return "";
+  const gitDir = resolve(PROJECT_ROOT, match[1]);
+
+  try {
+    const rawCommonDir = readFileSync(join(gitDir, "commondir"), "utf-8").trim();
+    if (rawCommonDir) return resolve(gitDir, rawCommonDir);
+  } catch {}
+
+  return resolve(gitDir, "..", "..");
+}
+
+function getSystemDevelopmentCheckoutDir(baseDir) {
+  const commonGitDir = getCommonGitDir();
+  const mainProjectRoot = basename(commonGitDir) === ".git" ? dirname(commonGitDir) : PROJECT_ROOT;
+  return getWorktreeScopedUserDataDir(baseDir, mainProjectRoot);
 }
 
 export function getDefaultDesktopUserDataDir() {
@@ -50,7 +76,8 @@ export function getDefaultDesktopUserDataDir() {
 }
 
 export function getSystemDesktopUserDataDir() {
-  return getSharedDesktopUserDataDir();
+  const baseDir = getSharedDesktopUserDataDir();
+  return isDevelopmentCheckout() ? getSystemDevelopmentCheckoutDir(baseDir) : baseDir;
 }
 
 export const SYSTEM_CONFIG_FILE = join(getSystemDesktopUserDataDir(), "config.json");
