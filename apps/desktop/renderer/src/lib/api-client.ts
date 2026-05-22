@@ -118,6 +118,7 @@ function createWebApi() {
       if (!response.ok) throw new Error(data.error || "upload failed");
       return data;
     },
+    getTerminalBridgeUrl: async () => "",
     startWorkflow: async (payload) => {
       activeTaskId = payload.taskId;
       activeRunId = payload.runId || "";

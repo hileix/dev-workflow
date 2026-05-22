@@ -204,6 +204,47 @@ function appendDebugEvent(set, get, payload, source = "workflow") {
   });
 }
 
+async function toUploadPayload(image) {
+  if (image?.name && Array.isArray(image.data)) return image;
+  if (typeof File !== "undefined" && image instanceof File) {
+    return {
+      name: image.name || `image-${Date.now()}.png`,
+      data: Array.from(new Uint8Array(await image.arrayBuffer())),
+      type: image.type || "application/octet-stream",
+    };
+  }
+  if (image?.file && typeof image.file.arrayBuffer === "function") {
+    const file = image.file;
+    return {
+      name: file.name || `image-${Date.now()}.png`,
+      data: Array.from(new Uint8Array(await file.arrayBuffer())),
+      type: file.type || "application/octet-stream",
+    };
+  }
+  return null;
+}
+
+async function normalizeMessageImages(images, runId) {
+  if (!Array.isArray(images) || images.length === 0) return [];
+  const paths = [];
+  const uploads = [];
+
+  for (const image of images) {
+    if (typeof image === "string" && image.trim()) {
+      paths.push(image.trim());
+      continue;
+    }
+    const payload = await toUploadPayload(image);
+    if (payload) uploads.push(payload);
+  }
+
+  if (uploads.length === 0) return paths;
+  if (!runId) return false;
+
+  const data = await desktopApi.saveTaskUploads(runId, uploads);
+  return [...paths, ...((data?.paths || []).filter(Boolean))];
+}
+
 export function pushClientDebugEvent(payload) {
   useWorkflowStore.setState((state) => {
     const event = createDebugEvent(payload, "client");
@@ -916,26 +957,52 @@ export const useWorkflowStore = create((set, get) => ({
     }
   },
 
-  async sendMessage(text, images) {
+  async sendMessage(text, images, options = {}) {
     const { activeTask, workflowState } = get();
-    if (!activeTask) return;
+    if (!activeTask) return false;
     pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_MESSAGE_REQUESTED, {
       phase: workflowState?.currentPhase || null,
       text,
       imageCount: Array.isArray(images) ? images.length : 0,
-      trigger: DEBUG_EVENT_TRIGGERS.CHAT,
+      trigger: options.trigger || DEBUG_EVENT_TRIGGERS.CHAT,
     }));
     try {
       await desktopApi.sendWorkflowMessage(activeTask, text, images, workflowState?.runId || "");
+      return true;
     } catch (err) {
       pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Send message failed" });
+      return false;
     }
   },
 
-  async resumePhase(phase) {
+  async sendTerminalMessage(text, images) {
+    const { activeTask, workflowState, streamingPhaseByRun } = get();
+    if (!activeTask || !workflowState?.currentPhase) return false;
+
+    const phase = workflowState.currentPhase;
+    const stateKey = getWorkflowStateKey(workflowState.taskId, workflowState.runId);
+    const phaseState = (workflowState.phases || []).find((item) => (item.id || item.name) === phase);
+    const phaseStatus = phaseState?.status || "";
+    const isPaused = phaseStatus === "paused" || workflowState.overallStatus === "paused";
+    const isRunning = !isPaused && (phaseStatus === "in_progress" || streamingPhaseByRun[stateKey] === phase);
+
+    if (!isRunning && !isPaused) return false;
+    if (isRunning) {
+      const paused = await get().pausePhase(phase, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL });
+      if (!paused) return false;
+    }
+
+    const imagePaths = await normalizeMessageImages(images, workflowState?.runId || "");
+    if (imagePaths === false) return false;
+    const sent = await get().sendMessage(text, imagePaths, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL });
+    if (!sent) return false;
+    return await get().resumePhase(phase, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL });
+  },
+
+  async resumePhase(phase, options = {}) {
     const { activeTask, workflowState } = get();
-    if (!activeTask || !phase) return;
-    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_RESUME_REQUESTED, { phase, trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR }));
+    if (!activeTask || !phase) return false;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_RESUME_REQUESTED, { phase, trigger: options.trigger || DEBUG_EVENT_TRIGGERS.TOOLBAR }));
     const stateKey = getWorkflowStateKey(workflowState?.taskId, workflowState?.runId);
     set((state) => ({
       isStreamingByRun: {
@@ -972,6 +1039,7 @@ export const useWorkflowStore = create((set, get) => ({
     }
     try {
       await desktopApi.resumeWorkflowPhase(activeTask, phase, workflowState?.runId || "");
+      return true;
     } catch (err) {
       const currentState = get().workflowState;
       if (currentState) {
@@ -1010,6 +1078,7 @@ export const useWorkflowStore = create((set, get) => ({
         }));
       }
       pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Resume failed", phase });
+      return false;
     }
   },
 
@@ -1094,10 +1163,10 @@ export const useWorkflowStore = create((set, get) => ({
     }
   },
 
-  async pausePhase(phase) {
+  async pausePhase(phase, options = {}) {
     const { activeTask, workflowState } = get();
-    if (!activeTask || !phase) return;
-    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_PAUSE_REQUESTED, { phase, trigger: DEBUG_EVENT_TRIGGERS.TOOLBAR }));
+    if (!activeTask || !phase) return false;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_PAUSE_REQUESTED, { phase, trigger: options.trigger || DEBUG_EVENT_TRIGGERS.TOOLBAR }));
     const stateKey = getWorkflowStateKey(workflowState?.taskId, workflowState?.runId);
     set((state) => ({
       isStreamingByRun: {
@@ -1129,6 +1198,7 @@ export const useWorkflowStore = create((set, get) => ({
     }
     try {
       await desktopApi.pauseWorkflowPhase(activeTask, phase, workflowState?.runId || "");
+      return true;
     } catch (err) {
       const currentState = get().workflowState;
       if (currentState) {
@@ -1148,6 +1218,7 @@ export const useWorkflowStore = create((set, get) => ({
         }));
       }
       pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Pause failed", phase });
+      return false;
     }
   },
 

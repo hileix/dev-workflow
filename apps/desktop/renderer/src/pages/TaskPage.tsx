@@ -60,6 +60,21 @@ function getWorktreeDisplayName(worktree) {
   return "";
 }
 
+function getPhaseModelLabel(phaseId, workflowState, workflowConfig, backendLabel) {
+  const workflowDefinition = workflowState?.workflowDefinition;
+  const phase = workflowDefinition?.steps?.find((step) => step.id === phaseId);
+  const runtimeModel = phase?.model || workflowDefinition?.runtime?.model || "";
+  const backend = String(backendLabel || "");
+
+  if (backend.startsWith("ai-api:")) {
+    const profileName = backend.slice("ai-api:".length).trim();
+    const profile = (workflowConfig?.aiApiProfiles || []).find((item) => item.id === profileName || item.name === profileName);
+    return profile?.model || runtimeModel || "";
+  }
+
+  return runtimeModel;
+}
+
 function getPhaseOutputDocument(phaseId, workflowConfig, phaseOutputArtifacts) {
   const output = (workflowConfig?.phaseOutputs?.[phaseId] || [])[0];
   if (!output?.key) return "";
@@ -396,7 +411,6 @@ export default function TaskPage() {
   }, [urlTaskId, urlRunId, activeTask, workflowState?.taskId, workflowState?.runId]);
   const selectedPhaseByRun = useWorkflowStore((s) => s.selectedPhaseByRun);
   const setSelectedPhase = useWorkflowStore((s) => s.setSelectedPhase);
-  const phaseMessagesByRun = useWorkflowStore((s) => s.phaseMessagesByRun);
   const phaseOutputArtifactsByRun = useWorkflowStore((s) => s.phaseOutputArtifactsByRun);
   const phaseInteractionsByRun = useWorkflowStore((s) => s.phaseInteractionsByRun);
   const isStreamingByRun = useWorkflowStore((s) => s.isStreamingByRun);
@@ -407,7 +421,7 @@ export default function TaskPage() {
   const lastErrorByRun = useWorkflowStore((s) => s.lastErrorByRun);
   const approve = useWorkflowStore((s) => s.approve);
   const reject = useWorkflowStore((s) => s.reject);
-  const sendMessage = useWorkflowStore((s) => s.sendMessage);
+  const sendTerminalMessage = useWorkflowStore((s) => s.sendTerminalMessage);
   const resumePhase = useWorkflowStore((s) => s.resumePhase);
   const retryPhase = useWorkflowStore((s) => s.retryPhase);
   const pausePhase = useWorkflowStore((s) => s.pausePhase);
@@ -427,7 +441,6 @@ export default function TaskPage() {
     ? getWorkflowStateKey(workflowState.taskId, workflowState.runId)
     : routeStateKey;
   const selectedPhase = selectedPhaseByRun[currentStateKey] || null;
-  const phaseMessages = phaseMessagesByRun[currentStateKey] || {};
   const phaseOutputArtifacts = phaseOutputArtifactsByRun[currentStateKey] || {};
   const phaseInteractions = phaseInteractionsByRun[currentStateKey] || {};
   const isStreaming = Boolean(isStreamingByRun[currentStateKey]);
@@ -454,10 +467,10 @@ export default function TaskPage() {
   const detailStatus = phases.find((p) => (p.id || p.name) === detailPhase)?.status;
   const isPhaseStreaming = isStreaming && detailPhase === streamingPhase;
   const isPhaseRunning = detailStatus === "in_progress";
+  const isPhasePaused = detailStatus === "paused";
   const isPhaseAwaiting = detailStatus === "awaiting_input";
   const isPhaseFailed = detailStatus === "failed";
   const isCheckpointPhase = runWorkflowConfig?.phaseTypes?.[detailPhase] === "checkpoint";
-  const activePhaseContent = detailPhase ? phaseMessages[detailPhase] || "" : "";
   const activePhaseInputDocument = detailPhase
     ? getCheckpointInputDocument(detailPhase, runWorkflowConfig, phaseOutputArtifacts, workflowState?.taskInputs)
     : "";
@@ -474,6 +487,7 @@ export default function TaskPage() {
   const activePhaseInteractions = detailPhase ? phaseInteractions[detailPhase] || [] : [];
   const activePhaseBackend = activePhaseInteractions.findLast?.((interaction) => interaction.backend)?.backend
     || runWorkflowConfig?.phaseBackends?.[detailPhase];
+  const activePhaseModel = getPhaseModelLabel(detailPhase, workflowState, runWorkflowConfig, activePhaseBackend);
   const emptyDocumentMessage = getMissingDocumentMessage({
     t,
     phaseId: detailPhase,
@@ -787,20 +801,26 @@ export default function TaskPage() {
               </div>
             </div>
             <StepDetail
+              taskId={taskId}
+              runId={workflowState?.runId || urlRunId || ""}
+              workFolder={workflowState?.workFolder || ""}
+              taskInputs={workflowState?.taskInputs || {}}
               phase={detailPhase}
-              content={activePhaseContent}
               artifact={activePhaseArtifact}
               interactions={activePhaseInteractions}
               emptyDocumentMessage={emptyDocumentMessage}
               activeBackend={activePhaseBackend}
               isStreaming={isPhaseStreaming}
               isRunning={isPhaseRunning}
+              isPaused={isPhasePaused}
               isAwaiting={isPhaseAwaiting}
               isFailed={isPhaseFailed}
               onApprove={approve}
               onReject={reject}
-              onSendMessage={sendMessage}
+              onSendMessage={sendTerminalMessage}
+              onInterrupt={(phase) => pausePhase(phase, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL })}
               onOpenDocument={documentOpenTarget ? handleOpenDocument : undefined}
+              phaseModel={activePhaseModel}
               phaseLabels={runWorkflowConfig?.phaseLabels || {}}
               phaseTypes={runWorkflowConfig?.phaseTypes || {}}
               rejectTargets={runWorkflowConfig?.rejectTargets || {}}

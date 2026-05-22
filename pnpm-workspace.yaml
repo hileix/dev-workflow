@@ -3,5 +3,6 @@ allowBuilds:
   esbuild: true
   fs-xattr: true
   macos-alias: true
+  node-pty: true
 packages:
   - "apps/desktop/renderer"

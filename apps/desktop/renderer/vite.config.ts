@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-const localServerPort = process.env.LOCAL_SERVER_PORT || process.env.PORT || "3000";
+const localServerPort = process.env.LOCAL_SERVER_PORT || process.env.PORT || "3900";
 const localServerUrl = `http://localhost:${localServerPort}`;
 
 export default defineConfig({

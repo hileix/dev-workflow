@@ -35,6 +35,7 @@ export const DEBUG_EVENT_TRIGGERS = {
   TOOLBAR: "toolbar",
   CHECKPOINT: "checkpoint",
   CHAT: "chat",
+  TERMINAL: "terminal",
 } as const;
 
 export const DEBUG_EVENT_REQUESTED_BY = {

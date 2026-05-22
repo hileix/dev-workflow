@@ -473,7 +473,7 @@ fastify.get("/ws/mobile", { websocket: true }, (socket) => {
   });
 });
 
-const port = Number(process.env.BACKEND_PORT || process.env.PORT || 8787);
+const port = Number(process.env.BACKEND_PORT || process.env.PORT || 8900);
 const host = process.env.BACKEND_HOST || "0.0.0.0";
 
 fastify.listen({ port, host }).catch((error) => {

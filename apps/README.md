@@ -46,5 +46,5 @@ pnpm dev:mobile
 Set backend URL in the app to:
 
 ```txt
-http://<your-host>:8787
+http://<your-host>:8900
 ```

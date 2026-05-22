@@ -165,7 +165,7 @@ class _WorkflowHomePageState extends State<WorkflowHomePage> {
   final Dio _dio = Dio();
   final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _baseUrlController =
-      TextEditingController(text: "http://127.0.0.1:8787");
+      TextEditingController(text: "http://127.0.0.1:8900");
   final TextEditingController _messageController = TextEditingController();
 
   WebSocketChannel? _channel;

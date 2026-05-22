@@ -9,9 +9,9 @@ type Options = {
   autoPortOffset: boolean;
 };
 
-const BASE_RENDERER_PORT = 5173;
-const BASE_LOCAL_SERVER_PORT = 3000;
-const BASE_BACKEND_PORT = 8787;
+const BASE_RENDERER_PORT = 5900;
+const BASE_LOCAL_SERVER_PORT = 3900;
+const BASE_BACKEND_PORT = 8900;
 const MAX_PORT_OFFSET = 200;
 
 function printUsage() {

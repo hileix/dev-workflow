@@ -31,6 +31,7 @@ function formatControlSource(payload, t) {
     if (payload?.trigger === DEBUG_EVENT_TRIGGERS.TOOLBAR) return t("debug.summaryToolbar");
     if (payload?.trigger === DEBUG_EVENT_TRIGGERS.CHECKPOINT) return t("debug.summaryCheckpoint");
     if (payload?.trigger === DEBUG_EVENT_TRIGGERS.CHAT) return t("debug.summaryChat");
+    if (payload?.trigger === DEBUG_EVENT_TRIGGERS.TERMINAL) return t("debug.summaryTerminal");
     return t("debug.summaryUser");
   }
   return "";

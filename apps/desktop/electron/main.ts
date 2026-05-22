@@ -5,6 +5,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { killAllChildren } from "../../../packages/core-lib/claude";
 import { getDefaultDesktopUserDataDir, setRuntimeBaseDir, setRuntimeStorageDir } from "../../../packages/core-models/config";
+import { startTerminalBridge } from "./terminal-bridge";
 import {
   pickFolder,
   getWorkflowConfig,
@@ -48,6 +49,7 @@ import {
 } from "./workflow-runtime";
 
 let mainWindow: BrowserWindow | null = null;
+let terminalBridge: { close: () => Promise<void>; getUrl: () => string } | null = null;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rendererDevServerUrl = process.env.ELECTRON_RENDERER_URL;
 const isDev = Boolean(rendererDevServerUrl);
@@ -204,6 +206,7 @@ function registerIpcHandlers() {
   ipcMain.handle("app:remove-task", (_event, taskId, runId, options) => removeTask(taskId, runId, options));
   ipcMain.handle("app:remove-task-worktree", (_event, taskId, runId) => removeTaskWorktreeOnly(taskId, runId));
   ipcMain.handle("app:save-task-uploads", (_event, taskId, filePaths) => saveTaskUploads(taskId, filePaths));
+  ipcMain.handle("app:get-terminal-bridge-url", () => terminalBridge?.getUrl() || "");
   ipcMain.handle("app:start-workflow", (event, payload) =>
     startWorkflowSession(
       payload.taskId,
@@ -249,6 +252,10 @@ if (gotSingleInstanceLock) {
     const userDataDir = app.getPath("userData");
     setRuntimeStorageDir(userDataDir);
     setRuntimeBaseDir(join(userDataDir, "tasks"));
+    terminalBridge = await startTerminalBridge().catch((error) => {
+      console.error(error);
+      return null;
+    });
     registerIpcHandlers();
     try {
       await createWindow();
@@ -256,6 +263,10 @@ if (gotSingleInstanceLock) {
       console.error(err);
       app.quit();
     }
+  });
+
+  app.on("before-quit", () => {
+    void terminalBridge?.close().catch(() => {});
   });
 }
 

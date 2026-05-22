@@ -2,9 +2,9 @@ import { basename } from "path";
 import WebSocket from "ws";
 import { readMobileAccessEnabled } from "../../../../packages/core-models/config";
 
-const backendUrl = process.env.CLOUD_BACKEND_WS_URL || "ws://127.0.0.1:8787/ws/desktop";
-const localWsUrl = process.env.LOCAL_WORKFLOW_WS_URL || "ws://127.0.0.1:3000/ws";
-const localApiBase = process.env.LOCAL_WORKFLOW_API_BASE || "http://127.0.0.1:3000/api";
+const backendUrl = process.env.CLOUD_BACKEND_WS_URL || "ws://127.0.0.1:8900/ws/desktop";
+const localWsUrl = process.env.LOCAL_WORKFLOW_WS_URL || "ws://127.0.0.1:3900/ws";
+const localApiBase = process.env.LOCAL_WORKFLOW_API_BASE || "http://127.0.0.1:3900/api";
 const deviceId = process.env.DEVICE_ID || "desktop-local";
 const deviceName = process.env.DEVICE_NAME || "Desktop Local";
 const defaultWorkFolder = process.env.DEFAULT_WORK_FOLDER || "";
