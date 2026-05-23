@@ -2,6 +2,7 @@ import { WebSocketServer } from "ws";
 import { wsSend } from "../../../packages/core-lib/claude";
 import {
   approveWorkflow,
+  interruptWorkflowPhase,
   pauseWorkflowPhase,
   rejectWorkflow,
   resumeWorkflowPhase,
@@ -32,6 +33,8 @@ export function setupWebSocket(server) {
           await rejectWorkflow(msg.taskId, msg.rejectTo, msg.reason, send, msg.runId);
         } else if (msg.type === "message") {
           await sendWorkflowMessage(msg.taskId, msg.text, msg.images, send, msg.runId);
+        } else if (msg.type === "interrupt_phase") {
+          await interruptWorkflowPhase(msg.taskId, msg.phase, send, msg.runId);
         } else if (msg.type === "resume_phase") {
           await resumeWorkflowPhase(msg.taskId, msg.phase, send, msg.runId);
         } else if (msg.type === "retry_phase") {

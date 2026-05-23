@@ -143,6 +143,9 @@ function createWebApi() {
     sendWorkflowMessage: async (taskId, text, images, runId) => {
       sendSocket({ type: "message", taskId, text, images, runId });
     },
+    interruptWorkflowPhase: async (taskId, phase, runId) => {
+      sendSocket({ type: "interrupt_phase", taskId, phase, runId });
+    },
     resumeWorkflowPhase: async (taskId, phase, runId) => {
       sendSocket({ type: "resume_phase", taskId, phase, runId });
     },

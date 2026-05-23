@@ -10,7 +10,7 @@ import { Button } from "../components/ui/button";
 import { WindowChrome } from "../components/window-chrome";
 import WorkflowDebugPanel from "../components/WorkflowDebugPanel";
 import { getAppApi } from "../lib/api-client";
-import { buildClientDebugPayload, DEBUG_EVENT_TRIGGERS, DEBUG_EVENT_TYPES } from "../lib/debug-events";
+import { buildClientDebugPayload, DEBUG_EVENT_TYPES, DEBUG_EVENT_TRIGGERS } from "../lib/debug-events";
 import { cn } from "../lib/utils";
 import { getWorkflowStateKey, pushClientDebugEvent, useWorkflowStore } from "../stores/workflowStore";
 import { useConfigStore } from "../stores/configStore";
@@ -421,7 +421,6 @@ export default function TaskPage() {
   const lastErrorByRun = useWorkflowStore((s) => s.lastErrorByRun);
   const approve = useWorkflowStore((s) => s.approve);
   const reject = useWorkflowStore((s) => s.reject);
-  const sendTerminalMessage = useWorkflowStore((s) => s.sendTerminalMessage);
   const resumePhase = useWorkflowStore((s) => s.resumePhase);
   const retryPhase = useWorkflowStore((s) => s.retryPhase);
   const pausePhase = useWorkflowStore((s) => s.pausePhase);
@@ -485,6 +484,11 @@ export default function TaskPage() {
       : getPhaseOutputTarget(detailPhase, runWorkflowConfig, phaseOutputArtifacts)
     : null;
   const activePhaseInteractions = detailPhase ? phaseInteractions[detailPhase] || [] : [];
+
+  console.log("[TaskPage] detailPhase:", detailPhase);
+  console.log("[TaskPage] phaseInteractions keys:", Object.keys(phaseInteractions));
+  console.log("[TaskPage] activePhaseInteractions length:", activePhaseInteractions.length);
+
   const activePhaseBackend = activePhaseInteractions.findLast?.((interaction) => interaction.backend)?.backend
     || runWorkflowConfig?.phaseBackends?.[detailPhase];
   const activePhaseModel = getPhaseModelLabel(detailPhase, workflowState, runWorkflowConfig, activePhaseBackend);
@@ -742,17 +746,6 @@ export default function TaskPage() {
               </Button>
             )}
             <ThemeToggle />
-            <WorkflowDebugPanel
-              taskId={taskId}
-              workflowState={workflowState}
-              activePhase={activePhase}
-              activeStatus={activeStatus}
-              debugEvents={debugEvents}
-              lastEventAt={lastEventAt}
-              lastError={lastError}
-              phaseLabels={runWorkflowConfig?.phaseLabels || {}}
-              onCopy={handleCopyDebugInfo}
-            />
           </div>
         </div>
         <div className="grid flex-1 min-h-0 grid-cols-[340px_minmax(0,1fr)] bg-background/55">
@@ -780,9 +773,6 @@ export default function TaskPage() {
                   <h2 className="truncate text-sm font-semibold text-foreground">Run details</h2>
                   <p className="truncate text-xs text-muted-foreground">Selected workflow step output and conversation.</p>
                 </div>
-                <Badge variant={workflowState?.overallStatus === "completed" ? "success" : workflowState?.overallStatus === "awaiting_input" || workflowState?.overallStatus === "paused" ? "warning" : "outline"}>
-                  {workflowState?.overallStatus || "unknown"}
-                </Badge>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <Button
@@ -817,8 +807,6 @@ export default function TaskPage() {
               isFailed={isPhaseFailed}
               onApprove={approve}
               onReject={reject}
-              onSendMessage={sendTerminalMessage}
-              onInterrupt={(phase) => pausePhase(phase, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL })}
               onOpenDocument={documentOpenTarget ? handleOpenDocument : undefined}
               phaseModel={activePhaseModel}
               phaseLabels={runWorkflowConfig?.phaseLabels || {}}

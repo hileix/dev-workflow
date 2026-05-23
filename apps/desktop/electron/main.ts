@@ -42,14 +42,22 @@ import {
   approveWorkflow,
   rejectWorkflow,
   sendWorkflowMessage,
+  interruptWorkflowPhase,
   resumeWorkflowPhase,
   retryWorkflowPhase,
   pauseWorkflowPhase,
   detachWorkflowSender,
+  setWorkflowTerminalBridge,
 } from "./workflow-runtime";
 
 let mainWindow: BrowserWindow | null = null;
-let terminalBridge: { close: () => Promise<void>; getUrl: () => string } | null = null;
+let terminalBridge: {
+  appendToSession: (sessionId: string, cwd: string, chunk: string) => void;
+  close: () => Promise<void>;
+  closeSession: (sessionId: string, exitCode?: number | null) => void;
+  clearSession: (sessionId: string, cwd?: string) => void;
+  getUrl: () => string;
+} | null = null;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rendererDevServerUrl = process.env.ELECTRON_RENDERER_URL;
 const isDev = Boolean(rendererDevServerUrl);
@@ -105,13 +113,22 @@ const EDITOR_OPENERS = {
 async function openInEditor(targetPath, editor = "code") {
   if (!targetPath) throw new Error("path required");
   const opener = EDITOR_OPENERS[editor] || EDITOR_OPENERS.code;
+  console.log(`[openInEditor] Attempting to open ${targetPath} with ${editor}`);
   try {
     await spawnDetached(opener.command, opener.args(targetPath));
+    console.log(`[openInEditor] Successfully opened with command: ${opener.command}`);
     return { ok: true };
   } catch (error) {
+    console.log(`[openInEditor] Command failed, trying macOS open:`, error?.message);
     if (process.platform === "darwin") {
-      await spawnDetached("open", ["-a", opener.darwinApp, targetPath]);
-      return { ok: true };
+      try {
+        await spawnDetached("open", ["-a", opener.darwinApp, targetPath]);
+        console.log(`[openInEditor] Successfully opened with macOS open -a ${opener.darwinApp}`);
+        return { ok: true };
+      } catch (openError) {
+        console.error(`[openInEditor] macOS open also failed:`, openError?.message);
+        throw new Error(openError?.message || `failed to open ${opener.label}`);
+      }
     }
     throw new Error(error?.message || `failed to open ${opener.label}`);
   }
@@ -227,6 +244,9 @@ function registerIpcHandlers() {
   ipcMain.handle("app:send-workflow-message", (event, taskId, text, images, runId) =>
     sendWorkflowMessage(taskId, text, images, (message) => event.sender.send("workflow:event", message), runId)
   );
+  ipcMain.handle("app:interrupt-workflow-phase", (event, taskId, phase, runId) =>
+    interruptWorkflowPhase(taskId, phase, (message) => event.sender.send("workflow:event", message), runId)
+  );
   ipcMain.handle("app:resume-workflow-phase", (event, taskId, phase, runId) =>
     resumeWorkflowPhase(taskId, phase, (message) => event.sender.send("workflow:event", message), runId)
   );
@@ -256,6 +276,7 @@ if (gotSingleInstanceLock) {
       console.error(error);
       return null;
     });
+    setWorkflowTerminalBridge(terminalBridge);
     registerIpcHandlers();
     try {
       await createWindow();

@@ -1,19 +1,103 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { execFile, spawn } from "child_process";
+import { randomUUID } from "crypto";
+import { PassThrough, Writable } from "stream";
+import { execFile } from "child_process";
 import { createRequire } from "module";
 import readline from "readline";
-import { mkdir, readFile, writeFile } from "fs/promises";
-import { basename, dirname, extname, join, relative, resolve } from "path";
+import { readFile } from "fs/promises";
+import { extname, join, relative, resolve } from "path";
+import { spawn as spawnPty } from "node-pty";
+import { EventEmitter } from "events";
 import { createContentPreview, createContentSummary, formatStepOutputForPrompt } from "./artifacts";
+import { getStorageDir } from "../../core-models/config";
 
 const SDK_BACKENDS = {
   CLAUDE: "claude",
   CODEX: "codex",
 };
 const require = createRequire(import.meta.url);
+const PTY_TERM_NAME = "xterm-256color";
+const AGENT_ENV_EXCLUDES = new Set([
+  "NODE_OPTIONS",
+  "ELECTRON_RUN_AS_NODE",
+  "CODEX_API_KEY",
+  "CODEX_CI",
+  "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+  "CODEX_MANAGED_BY_BUN",
+  "CODEX_MANAGED_PACKAGE_ROOT",
+  "CODEX_THREAD_ID",
+]);
 const SHELL_ENV_MARKER = "__DEV_WORKFLOW_SHELL_ENV__";
 const SHELL_ENV_TIMEOUT_MS = 5000;
 const shellEnvCache = new Map();
+const liveAgentSessions = new Map();
+
+function createLiveAgentSession(sessionId, processHandle, backend) {
+  const session = {
+    backend,
+    process: processHandle,
+    sessionId,
+  };
+  liveAgentSessions.set(sessionId, session);
+  return session;
+}
+
+function getLiveAgentSession(sessionId) {
+  return liveAgentSessions.get(sessionId) || null;
+}
+
+function dropLiveAgentSession(sessionId) {
+  liveAgentSessions.delete(sessionId);
+}
+
+export function sendInteractiveSessionInput(sessionId, value) {
+  const session = getLiveAgentSession(sessionId);
+  if (!session?.process?.stdin || session.process.stdin.destroyed) return false;
+  const text = String(value || "");
+  if (!text) return true;
+  session.process.stdin.write(text.endsWith("\r") || text.endsWith("\n") ? text : `${text}\r`);
+  return true;
+}
+
+export function writeInteractiveSessionInput(sessionId, value) {
+  const session = getLiveAgentSession(sessionId);
+  if (!session?.process?.stdin || session.process.stdin.destroyed) return false;
+  const text = String(value || "");
+  if (!text) return true;
+  session.process.stdin.write(text);
+  return true;
+}
+
+export function resizeInteractiveSession(sessionId, cols, rows) {
+  const session = getLiveAgentSession(sessionId);
+  if (!session?.process?.resize) return false;
+  session.process.resize(cols, rows);
+  return true;
+}
+
+export function interruptInteractiveSession(sessionId) {
+  const session = getLiveAgentSession(sessionId);
+  if (!session?.process?.stdin || session.process.stdin.destroyed) return false;
+  try {
+    session.process.stdin.write("\x03");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function closeInteractiveSession(sessionId) {
+  const session = getLiveAgentSession(sessionId);
+  if (!session) return false;
+  try {
+    session.process.kill("SIGTERM");
+  } catch {}
+  dropLiveAgentSession(sessionId);
+  return true;
+}
+
+export async function runInteractiveAgentSession(options = {}) {
+  return await streamInteractiveCli(options);
+}
 
 function isPathInside(parent, child) {
   const rel = relative(resolve(parent), resolve(child));
@@ -111,6 +195,18 @@ function buildWorkspaceAccessPrompt(workspaceWrite, workFolder, taskDir) {
   ].join("\n");
 }
 
+function buildInteractivePrompt(prompt, imagePaths = []) {
+  const parts = [String(prompt || "").trim()].filter(Boolean);
+  if (Array.isArray(imagePaths) && imagePaths.length > 0) {
+    parts.push([
+      "# Attached images",
+      "",
+      ...imagePaths.map((imagePath, index) => `${index + 1}. ${imagePath}`),
+    ].join("\n"));
+  }
+  return parts.join("\n\n");
+}
+
 function guessImageMediaType(filePath) {
   const ext = extname(filePath).toLowerCase();
   if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
@@ -119,50 +215,25 @@ function guessImageMediaType(filePath) {
   return "image/png";
 }
 
-async function buildClaudePrompt(prompt, imagePaths) {
-  if (!imagePaths || imagePaths.length === 0) return prompt;
-
-  const content = [];
-  if (prompt) content.push({ type: "text", text: prompt });
-
-  for (const imagePath of imagePaths) {
-    const data = await readFile(imagePath, "base64");
-    content.push({
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: guessImageMediaType(imagePath),
-        data,
-      },
-    });
-  }
-
-  return (async function* messageStream() {
-    yield {
-      type: "user",
-      parent_tool_use_id: null,
-      message: {
-        role: "user",
-        content,
-      },
-    };
-  })();
+function getShellArgs(shell, command) {
+  return ["-lc", command];
 }
 
-function getShellArgs(shell, command) {
-  const name = basename(shell || "");
-  if (name.includes("bash") || name.includes("zsh")) return ["-lc", command];
-  if (name.includes("fish")) return ["-lc", command];
-  return ["-lc", command];
+function sanitizeAgentEnv(source = {}) {
+  const env = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined || AGENT_ENV_EXCLUDES.has(key)) continue;
+    env[key] = value;
+  }
+  return env;
 }
 
 function parseShellEnv(raw) {
   const entries = String(raw || "").split("\0");
   const markerIndex = entries.indexOf(SHELL_ENV_MARKER);
   if (markerIndex < 0) return {};
-  const envEntries = entries.slice(markerIndex + 1);
   const env = {};
-  for (const entry of envEntries) {
+  for (const entry of entries.slice(markerIndex + 1)) {
     const index = entry.indexOf("=");
     if (index <= 0) continue;
     env[entry.slice(0, index)] = entry.slice(index + 1);
@@ -176,13 +247,11 @@ function readUserShellEnv(workFolder) {
   const cacheKey = `${shell}:${cwd}`;
   if (shellEnvCache.has(cacheKey)) return shellEnvCache.get(cacheKey);
 
-  const env = { ...process.env };
-  delete env.NODE_OPTIONS;
   const command = `printf '${SHELL_ENV_MARKER}\\0'; env -0`;
   const promise = new Promise((resolve) => {
     execFile(shell, getShellArgs(shell, command), {
       cwd,
-      env,
+      env: sanitizeAgentEnv(process.env),
       maxBuffer: 1024 * 1024,
       timeout: SHELL_ENV_TIMEOUT_MS,
     }, (error, stdout) => {
@@ -197,24 +266,219 @@ function readUserShellEnv(workFolder) {
   return promise;
 }
 
-async function buildCodexEnv(workFolder) {
-  const env = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && key !== "CODEX_API_KEY" && key !== "NODE_OPTIONS") env[key] = value;
-  }
+async function buildAgentEnv(workFolder, extraEnv = {}) {
   const shellEnv = await readUserShellEnv(workFolder);
-  for (const [key, value] of Object.entries(shellEnv)) {
-    if (value !== undefined && key !== "CODEX_API_KEY") env[key] = value;
+  return sanitizeAgentEnv({
+    ...process.env,
+    ...shellEnv,
+    ...extraEnv,
+  });
+}
+
+function createSpawnedProcessFromPty(command, args, options = {}) {
+  const pty = spawnPty(command, args, {
+    cwd: options.cwd || process.cwd(),
+    env: sanitizeAgentEnv(options.env || process.env),
+    name: PTY_TERM_NAME,
+    cols: 80,
+    rows: 24,
+  });
+  const emitter = new EventEmitter();
+  const stdout = new PassThrough();
+  let killed = false;
+  let exitCode = null;
+  let closed = false;
+
+  const closeStdout = () => {
+    if (closed) return;
+    closed = true;
+    stdout.end();
+  };
+
+  const killPty = (signal = "SIGTERM") => {
+    if (closed) return true;
+    closed = true;
+    closeStdout();
+    try {
+      pty.kill(signal);
+      return true;
+    } catch (error) {
+      emitter.emit("error", error);
+      return false;
+    }
+  };
+
+  const stdin = new Writable({
+    write(chunk, _encoding, callback) {
+      if (closed) {
+        callback(new Error("PTY process is closed"));
+        return;
+      }
+      try {
+        pty.write(chunk);
+        callback();
+      } catch (error) {
+        callback(error);
+      }
+    },
+    final(callback) {
+      try {
+        pty.write("\x04");
+      } catch {}
+      callback();
+    },
+  });
+
+  pty.onData((chunk) => {
+    if (closed || stdout.destroyed) return;
+    stdout.write(chunk);
+  });
+
+  pty.onExit((event) => {
+    killed = true;
+    exitCode = event.exitCode ?? null;
+    closeStdout();
+    emitter.emit("exit", exitCode, event.signal ?? null);
+  });
+
+  if (options.signal) {
+    if (options.signal.aborted) {
+      killPty("SIGINT");
+    } else {
+      options.signal.addEventListener("abort", () => {
+        killPty("SIGINT");
+      }, { once: true });
+    }
   }
-  return env;
+
+  return {
+    stdin,
+    stdout,
+    get killed() {
+      return killed;
+    },
+    get exitCode() {
+      return exitCode;
+    },
+    kill: killPty,
+    resize(cols, rows) {
+      try {
+        pty.resize(Math.max(1, Math.floor(cols)), Math.max(1, Math.floor(rows)));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    on(event, listener) {
+      emitter.on(event, listener);
+    },
+    once(event, listener) {
+      emitter.once(event, listener);
+    },
+    off(event, listener) {
+      emitter.off(event, listener);
+    },
+  };
+}
+
+function createCodexSpawnedProcess(command, args, options = {}) {
+  return createSpawnedProcessFromPty(command, args, options);
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function createPipedPtyProcess(command, args, input, options = {}) {
+  const shell = process.env.SHELL || "/bin/sh";
+  const script = [
+    "printf '%s\\n'",
+    shellQuote(input),
+    "|",
+    shellQuote(command),
+    ...args.map(shellQuote),
+  ].join(" ");
+  return createSpawnedProcessFromPty(shell, ["-lc", script], options);
+}
+
+async function buildClaudeUserMessage(prompt, imagePaths) {
+  const content = [];
+  if (prompt) content.push({ type: "text", text: prompt });
+
+  for (const imagePath of imagePaths || []) {
+    const data = await readFile(imagePath, "base64");
+    content.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: guessImageMediaType(imagePath),
+        data,
+      },
+    });
+  }
+
+  return {
+    type: "user",
+    session_id: "",
+    parent_tool_use_id: null,
+    message: {
+      role: "user",
+      content,
+    },
+  };
+}
+
+function getClaudeCliPath() {
+  const platformPackage = {
+    "darwin-arm64": "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+    "darwin-x64": "@anthropic-ai/claude-agent-sdk-darwin-x64",
+    "linux-arm64": "@anthropic-ai/claude-agent-sdk-linux-arm64",
+    "linux-x64": "@anthropic-ai/claude-agent-sdk-linux-x64",
+    "win32-arm64": "@anthropic-ai/claude-agent-sdk-win32-arm64",
+    "win32-x64": "@anthropic-ai/claude-agent-sdk-win32-x64",
+  }[`${process.platform}-${process.arch}`];
+
+  if (!platformPackage) return "claude";
+
+  try {
+    const packagePath = require.resolve(`${platformPackage}/package.json`);
+    return join(packagePath, "..", process.platform === "win32" ? "claude.exe" : "claude");
+  } catch {
+    return "claude";
+  }
 }
 
 function getCodexCliPath() {
-  return require.resolve("@openai/codex/bin/codex.js");
-}
+  const platformPackage = {
+    "darwin-arm64": "@openai/codex-darwin-arm64",
+    "darwin-x64": "@openai/codex-darwin-x64",
+    "linux-arm64": "@openai/codex-linux-arm64",
+    "linux-x64": "@openai/codex-linux-x64",
+    "win32-arm64": "@openai/codex-win32-arm64",
+    "win32-x64": "@openai/codex-win32-x64",
+  }[`${process.platform}-${process.arch}`];
 
-function getToolFilePath(input) {
-  return input?.file_path || input?.path || input?.notebook_path || "";
+  if (!platformPackage) return "codex";
+
+  try {
+    const packagePath = require.resolve(`${platformPackage}/package.json`);
+    const targetTriple = {
+      "darwin-arm64": "aarch64-apple-darwin",
+      "darwin-x64": "x86_64-apple-darwin",
+      "linux-arm64": "aarch64-unknown-linux-musl",
+      "linux-x64": "x86_64-unknown-linux-musl",
+      "win32-arm64": "aarch64-pc-windows-msvc",
+      "win32-x64": "x86_64-pc-windows-msvc",
+    }[`${process.platform}-${process.arch}`];
+    if (!targetTriple) return "codex";
+    return join(packagePath, "..", "vendor", targetTriple, "codex", process.platform === "win32" ? "codex.exe" : "codex");
+  } catch {
+    try {
+      return require.resolve("@openai/codex/bin/codex.js");
+    } catch {
+      return "codex";
+    }
+  }
 }
 
 function formatClaudeToolLog(name, input) {
@@ -249,183 +513,260 @@ function canWriteWorkspace(step, agent) {
   return step.workspaceAccess === "write" || (!step.workspaceAccess && agent.workspaceAccess === "write");
 }
 
-function createReadOnlyClaudeToolGuard(workFolder, taskDir) {
-  const readTools = new Set(["Read", "Grep", "Glob", "LS"]);
-  const writeTools = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+async function streamInteractiveCli({
+  backend,
+  prompt,
+  workFolder,
+  taskDir,
+  sessionId,
+  imagePaths,
+  abortController,
+  workspaceWrite,
+  agent,
+  onText,
+  onSession,
+}) {
+  const env = await buildAgentEnv(workFolder);
+  const liveSessionId = sessionId || randomUUID();
+  const command = backend === SDK_BACKENDS.CODEX ? getCodexCliPath() : getClaudeCliPath();
+  const args = [];
 
-  return async (toolName, input) => {
-    if (readTools.has(toolName)) {
-      const filePath = String(getToolFilePath(input) || "");
-      if (!filePath || isPathInside(workFolder, filePath) || isPathInside(taskDir, filePath)) {
-        return { behavior: "allow" };
+  // 为 Codex 和 Claude 创建项目级别的 Stop hook 来检测完成
+  let projectHooksPath = null;
+  let hookCompletionPromise = null;
+  let completionMarkerPath = null;
+  let actualSessionId = null;
+
+  // 两者都支持项目级别的 hooks
+  const { writeFile, mkdir, access, unlink } = await import("fs/promises");
+  const { tmpdir } = await import("os");
+
+  const hookDir = join(tmpdir(), "dev-workflow-hooks");
+  await mkdir(hookDir, { recursive: true });
+  completionMarkerPath = join(hookDir, `completed-${liveSessionId}.txt`);
+
+  // 在项目目录下创建 .claude/settings.json（不是 hooks.json）
+  const projectConfigDir = backend === SDK_BACKENDS.CODEX
+    ? join(workFolder, ".codex")
+    : join(workFolder, ".claude");
+  projectHooksPath = join(projectConfigDir, "settings.json");
+
+  try {
+    await mkdir(projectConfigDir, { recursive: true });
+
+    // 创建项目级别的 hooks 配置
+    // 根据官方文档，hooks 应该在 settings.json 中，并且需要额外的 hooks 数组嵌套
+    const projectHooksConfig = {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: `touch "${completionMarkerPath}"`,
+                timeout: 5
+              }
+            ]
+          }
+        ]
       }
-      return { behavior: "deny", message: "This step can only read the project workspace and task files." };
-    }
+    };
 
-    if (writeTools.has(toolName)) {
-      const filePath = String(getToolFilePath(input) || "");
-      if (filePath && isPathInside(taskDir, filePath)) return { behavior: "allow" };
-      return { behavior: "deny", message: "This step can only write its own task artifact files." };
-    }
-
-    return { behavior: "deny", message: "This step is read-only for the workspace." };
-  };
-}
-
-async function streamClaudeSdk({ prompt, workFolder, taskDir, sessionId, imagePaths, abortController, workspaceWrite, agent, onText, onTool, onSession }) {
-  const promptInput = await buildClaudePrompt(prompt, imagePaths);
-  const stream = query({
-    prompt: promptInput,
-    options: {
-      cwd: workFolder,
-      resume: sessionId || undefined,
-      abortController,
-      additionalDirectories: workspaceWrite ? undefined : [taskDir],
-      includePartialMessages: true,
-      permissionMode: workspaceWrite ? "bypassPermissions" : "dontAsk",
-      allowDangerouslySkipPermissions: workspaceWrite ? true : undefined,
-      canUseTool: workspaceWrite ? undefined : createReadOnlyClaudeToolGuard(workFolder, taskDir),
-      systemPrompt: { type: "preset", preset: "claude_code" },
-      tools: workspaceWrite ? { type: "preset", preset: "claude_code" } : ["Read", "Grep", "Glob", "LS", "Write", "Edit", "MultiEdit", "NotebookEdit"],
-      settingSources: ["user", "project", "local"],
-      model: agent.model || undefined,
-      ...(agent.options || {}),
-    },
-  });
-
-  let currentTool = null;
-  let toolInputJson = "";
-  let fallbackResult = "";
-  let nextSessionId = "";
-
-  for await (const message of stream) {
-    if (message.type === "stream_event") {
-      const inner = message.event;
-      if (inner.type === "content_block_delta" && inner.delta?.type === "text_delta") {
-        if (inner.delta.text) await onText(inner.delta.text);
-      } else if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
-        currentTool = inner.content_block.name;
-        toolInputJson = "";
-      } else if (inner.type === "content_block_delta" && inner.delta?.type === "input_json_delta") {
-        toolInputJson += inner.delta.partial_json || "";
-      } else if (inner.type === "content_block_stop" && currentTool) {
-        await onTool(formatClaudeToolLog(currentTool, toolInputJson));
-        currentTool = null;
-        toolInputJson = "";
-      }
-      continue;
-    }
-
-      if (message.type === "result") {
-        if (message.session_id) {
-          nextSessionId = message.session_id;
-          await onSession(nextSessionId);
-        }
-      if (message.subtype !== "success") {
-        const details = Array.isArray(message.errors) && message.errors.length > 0
-          ? message.errors.join("; ")
-          : message.result || "Claude run failed";
-        throw new Error(details);
-      }
-      fallbackResult = message.result || "";
-    }
+    await writeFile(projectHooksPath, JSON.stringify(projectHooksConfig, null, 2));
+  } catch (error) {
+    console.warn("Failed to create project hooks:", error);
   }
 
-  return { sessionId: nextSessionId || sessionId || "", fallbackResult };
-}
+  // 创建一个 Promise 来监听完成标记文件
+  hookCompletionPromise = new Promise((resolve) => {
+    const checkInterval = setInterval(async () => {
+      try {
+        // 如果我们已经知道了实际的 sessionId，也检查那个文件
+        if (actualSessionId && actualSessionId !== liveSessionId) {
+          const actualMarkerPath = join(hookDir, `completed-${actualSessionId}.txt`);
+          try {
+            await access(actualMarkerPath);
+            clearInterval(checkInterval);
+            resolve({ code: 0, signal: null, reason: "hook_completed" });
+            return;
+          } catch {}
+        }
 
-async function streamCodexCli({ prompt, workFolder, taskDir, sessionId, imagePaths, abortController, workspaceWrite, agent, onText, onTool, onSession }) {
-  const workingDirectory = workspaceWrite ? workFolder : taskDir;
-  const args = [
-    "exec",
-    "--json",
-    "--sandbox",
-    workspaceWrite ? "danger-full-access" : "workspace-write",
-    "--cd",
-    workingDirectory,
-    "--skip-git-repo-check",
-    "--config",
-    "approval_policy=\"never\"",
-    "--config",
-    "sandbox_workspace_write.network_access=true",
-  ];
+        // 检查原始的 liveSessionId 文件
+        await access(completionMarkerPath);
+        clearInterval(checkInterval);
+        resolve({ code: 0, signal: null, reason: "hook_completed" });
+      } catch {
+        // 文件还不存在，继续等待
+      }
+    }, 500);
 
-  const modelReasoningEffort = agent.options?.thread?.modelReasoningEffort || "";
-  if (agent.model) args.push("--model", agent.model);
-  if (modelReasoningEffort) args.push("--config", `model_reasoning_effort="${modelReasoningEffort}"`);
-  for (const imagePath of imagePaths || []) args.push("--image", imagePath);
-  if (sessionId) args.push("resume", sessionId);
+    // 30分钟超时
+    setTimeout(() => {
+      console.warn("[Hook Debug] ⏰ Hook completion timeout (30 minutes)");
+      clearInterval(checkInterval);
+      resolve({ code: 0, signal: null, reason: "hook_timeout" });
+    }, 30 * 60 * 1000);
+  });
 
-  const child = spawn(getCodexCliPath(), args, {
-    env: await buildCodexEnv(workFolder),
+  if (backend === SDK_BACKENDS.CODEX) {
+    args.push(
+      "--no-alt-screen",
+      "--sandbox",
+      "danger-full-access",
+      "--cd",
+      workFolder || process.cwd(),
+      "--config",
+      "approval_policy=\"never\"",
+      "--config",
+      "sandbox_workspace_write.network_access=true",
+    );
+    const modelReasoningEffort = agent.options?.thread?.modelReasoningEffort || "";
+    if (agent.model) args.push("--model", agent.model);
+    if (modelReasoningEffort) args.push("--config", `model_reasoning_effort="${modelReasoningEffort}"`);
+    for (const imagePath of imagePaths || []) args.push("--image", imagePath);
+  } else {
+    args.push(
+      "--permission-mode",
+      "bypassPermissions",
+      "--setting-sources",
+      "user,project,local",
+      "--dangerously-skip-permissions",
+    );
+    if (agent.model) args.push("--model", agent.model);
+    const maxTurns = agent.options?.maxTurns ?? 50;
+    args.push("--max-turns", String(maxTurns));
+  }
+
+  const interactivePrompt = buildInteractivePrompt(prompt, backend === SDK_BACKENDS.CODEX ? imagePaths : []);
+  if (interactivePrompt) args.push(interactivePrompt);
+
+  const child = createSpawnedProcessFromPty(command, args, {
+    cwd: workFolder || process.cwd(),
+    env,
     signal: abortController.signal,
   });
-  let spawnError = null;
-  const stderrChunks = [];
-  child.once("error", (error) => { spawnError = error; });
-  child.stderr?.on("data", (chunk) => stderrChunks.push(chunk));
-  if (!child.stdin) throw new Error("Codex CLI has no stdin");
-  if (!child.stdout) throw new Error("Codex CLI has no stdout");
+  if (!child.stdout) throw new Error(`${backend} CLI has no stdout`);
 
-  child.stdin.write(prompt);
-  child.stdin.end();
+  createLiveAgentSession(liveSessionId, child, backend);
+  await onSession(liveSessionId);
 
+  // 监听输出以捕获实际的 session ID
+  // Claude Code 在启动时会输出 session ID
+  let sessionIdCaptured = false;
+
+  let transcript = "";
+  const output = [];
   const exitPromise = new Promise((resolve) => {
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
-  const events = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-  const seenItemText = new Map();
-  const seenToolItems = new Set();
+
+  const stdout = child.stdout;
+  const onData = async (chunk) => {
+    const text = String(chunk || "");
+    if (!text) return;
+    output.push(text);
+    transcript += text;
+
+    // 尝试从输出中捕获 session ID
+    // Claude Code 输出格式可能包含 session ID
+    if (!sessionIdCaptured) {
+      // 匹配 UUID 格式的 session ID
+      const sessionIdMatch = text.match(/session[_\s-]?id[:\s]+([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+      if (sessionIdMatch) {
+        const capturedSessionId = sessionIdMatch[1];
+        if (capturedSessionId !== liveSessionId) {
+          actualSessionId = capturedSessionId;
+          sessionIdCaptured = true;
+
+          // 更新 hook 配置
+          const actualMarkerPath = join(hookDir, `completed-${actualSessionId}.txt`);
+
+          try {
+            const projectHooksConfig = {
+              hooks: {
+                Stop: [
+                  {
+                    hooks: [
+                      {
+                        type: "command",
+                        command: `touch "${actualMarkerPath}"`,
+                        timeout: 5
+                      }
+                    ]
+                  }
+                ]
+              }
+            };
+            await writeFile(projectHooksPath, JSON.stringify(projectHooksConfig, null, 2));
+          } catch (error) {
+            console.warn("Failed to update hooks with captured sessionId:", error);
+          }
+        }
+      }
+    }
+
+    await onText(text);
+  };
+  const onDataListener = (chunk) => {
+    void onData(chunk);
+  };
+
+  stdout.on("data", onDataListener);
 
   try {
-    for await (const line of events) {
-      if (!String(line || "").trim()) continue;
-      const event = JSON.parse(line);
-      if (event.type === "turn.completed") break;
+    const promises = [exitPromise];
 
-      if (event.type === "thread.started") {
-        await onSession(event.thread_id);
-        continue;
-      }
-
-      if (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") {
-        const item = event.item;
-        if (item.type === "agent_message") {
-          const previous = seenItemText.get(item.id) || "";
-          const next = item.text || "";
-          if (next.startsWith(previous)) {
-            const delta = next.slice(previous.length);
-            if (delta) await onText(delta);
-          } else if (next && next !== previous) {
-            await onText(next);
-          }
-          seenItemText.set(item.id, next);
-          continue;
-        }
-
-        if (
-          (item.type === "command_execution" || item.type === "mcp_tool_call" || item.type === "web_search" || item.type === "file_change" || item.type === "todo_list")
-          && !seenToolItems.has(item.id)
-        ) {
-          seenToolItems.add(item.id);
-          await onTool(formatCodexToolLog(item));
-        }
-        continue;
-      }
-
-      if (event.type === "turn.failed") throw new Error(event.error?.message || "Codex CLI run failed");
-      if (event.type === "error") throw new Error(event.message || "Codex CLI run failed");
+    // 只使用 hook 检测
+    if (hookCompletionPromise) {
+      promises.push(hookCompletionPromise);
     }
 
-    if (spawnError) throw spawnError;
-    const { code, signal } = await exitPromise;
-    if (code !== 0 || signal) {
-      const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
-      throw new Error(`Codex CLI exited with ${detail}: ${Buffer.concat(stderrChunks).toString("utf8")}`);
+    const result = await Promise.race(promises);
+
+    if (result.reason === "hook_completed") {
+      // Hook 检测到完成，主动关闭进程
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+    } else if (result.reason === "hook_timeout") {
+      // Hook 超时（30分钟）
+      console.warn("Hook completion timeout, force closing process");
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+    } else if (result.code !== 0 || result.signal) {
+      const detail = result.signal ? `signal ${result.signal}` : `code ${result.code ?? 1}`;
+      throw new Error(`${backend} CLI exited with ${detail}: ${output.join("")}`);
     }
   } finally {
-    events.close();
+    stdout.off("data", onDataListener);
+    dropLiveAgentSession(liveSessionId);
+
+    // 清理项目级别的 settings.json 文件
+    if (projectHooksPath) {
+      try {
+        const { unlink } = await import("fs/promises");
+        await unlink(projectHooksPath);
+      } catch {}
+    }
+
+    // 清理标记文件（可能有两个：liveSessionId 和 actualSessionId）
+    try {
+      const { unlink } = await import("fs/promises");
+      await unlink(completionMarkerPath);
+    } catch {}
+
+    if (actualSessionId && actualSessionId !== liveSessionId) {
+      try {
+        const { unlink } = await import("fs/promises");
+        const actualMarkerPath = join(hookDir, `completed-${actualSessionId}.txt`);
+        await unlink(actualMarkerPath);
+      } catch {}
+    }
   }
+
+  return { sessionId: liveSessionId, fallbackResult: transcript };
 }
 
 function resolveOutputPath(taskDir, step, state) {
@@ -490,8 +831,9 @@ export function createSdkAgentAdapter(options = {}) {
         },
       };
 
-      if (backend === SDK_BACKENDS.CLAUDE) {
-        const result = await streamClaudeSdk({
+      if (backend === SDK_BACKENDS.CLAUDE || backend === SDK_BACKENDS.CODEX) {
+        const result = await runInteractiveAgentSession({
+          backend,
           prompt,
           workFolder,
           taskDir,
@@ -504,18 +846,6 @@ export function createSdkAgentAdapter(options = {}) {
         });
         nextSessionId = result.sessionId || nextSessionId;
         if (!content && result.fallbackResult) content = result.fallbackResult;
-      } else if (backend === SDK_BACKENDS.CODEX) {
-        await streamCodexCli({
-          prompt,
-          workFolder,
-          taskDir,
-          sessionId,
-          imagePaths,
-          abortController,
-          workspaceWrite,
-          agent,
-          ...callbacks,
-        });
       } else {
         throw new Error(`unsupported SDK agent backend ${backend}`);
       }

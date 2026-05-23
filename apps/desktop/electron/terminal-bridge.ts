@@ -1,10 +1,7 @@
 import { randomUUID } from "crypto";
-import { chmodSync, existsSync } from "fs";
 import { createServer } from "http";
-import { createRequire } from "module";
-import { dirname, join } from "path";
-import { spawn, type IPty } from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
+import { interruptInteractiveSession, resizeInteractiveSession, writeInteractiveSessionInput } from "../../../packages/core-lib/langgraph-runtime/sdk-agent-adapter";
 
 const MAX_BUFFER_CHARS = 200_000;
 const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -19,41 +16,20 @@ interface TerminalSession {
   cwd: string;
   exitCode: number | null;
   id: string;
+  pendingInput: string[];
   output: string;
-  pty: IPty;
-  shell: string;
+  interactiveSessionId: string;
   idleTimer: NodeJS.Timeout | null;
 }
 
 interface StartTerminalBridgeResult {
+  appendToSession: (sessionId: string, cwd: string, chunk: string) => void;
   close: () => Promise<void>;
+  closeSession: (sessionId: string, exitCode?: number | null) => void;
+  clearSession: (sessionId: string, cwd?: string) => void;
+  setInteractiveSession: (sessionId: string, interactiveSessionId: string) => void;
   getUrl: () => string;
 }
-
-const require = createRequire(import.meta.url);
-
-const resolveShell = () => {
-  if (process.platform === "win32") {
-    return process.env.ComSpec || "cmd.exe";
-  }
-  return process.env.SHELL || "/bin/sh";
-};
-
-const ensureNodePtyHelperExecutable = () => {
-  if (process.platform !== "darwin") return;
-  try {
-    const packageRoot = dirname(require.resolve("node-pty/package.json"));
-    const helperPath = join(packageRoot, "prebuilds", `darwin-${process.arch}`, "spawn-helper");
-    if (existsSync(helperPath)) chmodSync(helperPath, 0o755);
-  } catch {}
-};
-
-const createSpawnEnv = () => {
-  const env = { ...process.env };
-  delete env.NODE_OPTIONS;
-  delete env.ELECTRON_RUN_AS_NODE;
-  return env;
-};
 
 const trimBuffer = (value: string) =>
   value.length > MAX_BUFFER_CHARS ? value.slice(-MAX_BUFFER_CHARS) : value;
@@ -74,9 +50,6 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
     if (!session) return;
     if (session.idleTimer) clearTimeout(session.idleTimer);
     session.idleTimer = null;
-    try {
-      session.pty.kill();
-    } catch {}
     sessions.delete(sessionId);
   };
 
@@ -106,25 +79,10 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
 
   const ensureSession = (sessionId: string, cwd: string): TerminalSession => {
     const existing = sessions.get(sessionId);
-    if (existing && !existing.closed) {
-      if (existing.cwd !== cwd) {
-        // Keep the first workspace for the session. The right panel is task-bound,
-        // so a stable session is more useful than silently switching directories.
-      }
+    if (existing) {
+      if (cwd && !existing.cwd) existing.cwd = cwd;
       return existing;
     }
-
-    if (existing?.closed) destroySession(sessionId);
-
-    ensureNodePtyHelperExecutable();
-    const shell = resolveShell();
-    const pty = spawn(shell, [], {
-      cols: 80,
-      cwd: cwd || process.cwd(),
-      env: createSpawnEnv(),
-      name: "xterm-256color",
-      rows: 24,
-    });
 
     const session: TerminalSession = {
       clients: new Set(),
@@ -132,26 +90,54 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
       cwd: cwd || process.cwd(),
       exitCode: null,
       id: sessionId,
+      pendingInput: [],
       output: "",
-      pty,
-      shell,
+      interactiveSessionId: "",
       idleTimer: null,
     };
 
-    pty.onData((chunk) => {
-      session.output = trimBuffer(`${session.output}${chunk}`);
-      broadcast(session, chunk);
-    });
-
-    pty.onExit((event) => {
-      session.closed = true;
-      session.exitCode = event.exitCode;
-      broadcast(session, JSON.stringify({ type: "exit", code: event.exitCode }));
-      scheduleCleanup(session, 5_000);
-    });
-
     sessions.set(sessionId, session);
     return session;
+  };
+
+  const appendToSession = (sessionId: string, cwd: string, chunk: string) => {
+    if (!chunk) return;
+    const session = ensureSession(sessionId, cwd);
+    if (session.closed) return;
+    session.output = trimBuffer(`${session.output}${chunk}`);
+    broadcast(session, chunk);
+  };
+
+  const clearSession = (sessionId: string, cwd = "") => {
+    const session = ensureSession(sessionId, cwd);
+    session.closed = false;
+    session.exitCode = null;
+    session.interactiveSessionId = "";
+    session.pendingInput = [];
+    session.output = "";
+    broadcast(session, JSON.stringify({ type: "reset" }));
+  };
+
+  const setInteractiveSession = (sessionId: string, interactiveSessionId: string) => {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    session.interactiveSessionId = String(interactiveSessionId || "");
+    if (!session.interactiveSessionId || session.pendingInput.length === 0) return;
+    const pendingInput = session.pendingInput.splice(0, session.pendingInput.length);
+    for (const text of pendingInput) {
+      writeInteractiveSessionInput(session.interactiveSessionId, text);
+    }
+  };
+
+  const closeSession = (sessionId: string, exitCode: number | null = 0) => {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    session.closed = true;
+    session.exitCode = exitCode;
+    session.interactiveSessionId = "";
+    session.pendingInput = [];
+    broadcast(session, JSON.stringify({ type: "exit", code: exitCode }));
+    scheduleCleanup(session, 5_000);
   };
 
   wss.on("connection", (socket, request) => {
@@ -178,21 +164,32 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
       try {
         const parsed = JSON.parse(text) as unknown;
         if (isTerminalControlMessage(parsed)) {
-          if (parsed.type === "resize") {
-            session.pty.resize(Math.max(1, Math.floor(parsed.cols)), Math.max(1, Math.floor(parsed.rows)));
-            return;
-          }
           if (parsed.type === "close") {
             socket.close();
             return;
           }
+          if (parsed.type === "resize") {
+            const session = sessions.get(sessionId);
+            const interactiveSessionId = session?.interactiveSessionId || "";
+            if (interactiveSessionId) {
+              resizeInteractiveSession(interactiveSessionId, parsed.cols, parsed.rows);
+            }
+            return;
+          }
         }
       } catch {
-        // Not JSON, treat as terminal input.
+        const session = sessions.get(sessionId);
+        const interactiveSessionId = session?.interactiveSessionId || "";
+        if (!interactiveSessionId) {
+          if (session) session.pendingInput.push(text);
+          return;
+        }
+        if (text === "\u0003") {
+          interruptInteractiveSession(interactiveSessionId);
+          return;
+        }
+        writeInteractiveSessionInput(interactiveSessionId, text);
       }
-
-      if (session.closed) return;
-      session.pty.write(text);
     });
 
     socket.on("close", () => {
@@ -220,6 +217,7 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
   }
 
   return {
+    appendToSession,
     close: async () => {
       for (const sessionId of Array.from(sessions.keys())) {
         destroySession(sessionId);
@@ -230,6 +228,9 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
         });
       });
     },
+    closeSession,
+    clearSession,
+    setInteractiveSession,
     getUrl: () => `ws://127.0.0.1:${address.port}`,
   };
 };

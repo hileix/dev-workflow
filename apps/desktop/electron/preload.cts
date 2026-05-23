@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   approveWorkflow: (taskId, runId) => ipcRenderer.invoke("app:approve-workflow", taskId, runId),
   rejectWorkflow: (taskId, rejectTo, reason, runId) => ipcRenderer.invoke("app:reject-workflow", taskId, rejectTo, reason, runId),
   sendWorkflowMessage: (taskId, text, images, runId) => ipcRenderer.invoke("app:send-workflow-message", taskId, text, images, runId),
+  interruptWorkflowPhase: (taskId, phase, runId) => ipcRenderer.invoke("app:interrupt-workflow-phase", taskId, phase, runId),
   resumeWorkflowPhase: (taskId, phase, runId) => ipcRenderer.invoke("app:resume-workflow-phase", taskId, phase, runId),
   retryWorkflowPhase: (taskId, phase, runId) => ipcRenderer.invoke("app:retry-workflow-phase", taskId, phase, runId),
   pauseWorkflowPhase: (taskId, phase, runId) => ipcRenderer.invoke("app:pause-workflow-phase", taskId, phase, runId),

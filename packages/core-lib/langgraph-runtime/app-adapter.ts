@@ -138,6 +138,10 @@ async function publishCheckpointOutput({ taskId, runId, step, state, rule }) {
 }
 
 export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, taskRunDir, imagePaths = [], abortController, aiBackendOverride = "" }) {
+  const terminalWriter = typeof send === "function" ? (type, payload = {}) => {
+    send({ type: "__terminal_bridge__", terminalEventType: type, ...payload });
+  } : () => {};
+
   async function markStepRunning(phase) {
     if (!phase) return;
     const state = await readState(taskId, runId);
@@ -167,6 +171,7 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
         runIndex,
       }, runId);
       if (interaction) send({ type: "phase_interaction", phase, interaction });
+      terminalWriter("phase_start", { phase, backend, runIndex });
     } catch {}
   }
 
@@ -181,6 +186,7 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
 
       if (event.type === "text_delta") {
         send({ type: "text_delta", phase, text: event.text, backend: event.backend });
+        terminalWriter("text_delta", { phase, backend: event.backend, text: event.text });
         await appendPhaseInteraction(taskId, phase, {
           role: "assistant",
           type: "assistant_delta",
@@ -190,6 +196,7 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
         await appendToPhaseFile(taskId, phase, event.text, runId);
       } else if (event.type === "tool_use") {
         send({ type: "tool_use", phase, name: event.backend, log: event.log });
+        terminalWriter("tool_use", { phase, backend: event.backend, log: event.log });
         await appendPhaseInteraction(taskId, phase, {
           role: "tool",
           type: "tool_use",
@@ -199,6 +206,7 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
         await appendToPhaseFile(taskId, phase, `\n\n*${event.log || event.backend}*\n\n`, runId);
       } else if (event.type === "session_attached") {
         send({ type: "session_attached", phase, backend: event.backend, sessionId: event.sessionId });
+        terminalWriter("session_attached", { phase, backend: event.backend, sessionId: event.sessionId });
         try {
           const state = await readState(taskId, runId);
           const current = state.phases.find((item) => item.id === phase);
@@ -336,6 +344,7 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
       await markStepRunning(step.id);
       await appendPhaseStart(step.id, runtimeAgent.backend);
       send({ type: "backend_selected", phase: step.id, backend: runtimeAgent.backend, mode: useBackendOverride ? "app" : "workflow" });
+      terminalWriter("backend_selected", { phase: step.id, backend: runtimeAgent.backend });
       const result = await adapter.runAgent({
         step,
         agent: runtimeAgent,

@@ -1,6 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { getAppApi } from "../lib/api-client";
@@ -9,39 +9,34 @@ import { useI18n } from "./i18n-provider";
 const desktopApi = getAppApi();
 
 function createTerminalTheme() {
-  const styles = getComputedStyle(document.documentElement);
-  const background = styles.getPropertyValue("--bg").trim() || "#0e0e0e";
-  const foreground = styles.getPropertyValue("--fg").trim() || "#f4f4f5";
-  const accent = styles.getPropertyValue("--primary").trim() || "#3b82f6";
-  const muted = styles.getPropertyValue("--muted-fg").trim() || "#a1a1aa";
   return {
-    background,
-    black: "#111827",
-    blue: accent,
-    brightBlack: muted,
-    brightBlue: accent,
-    brightCyan: "#38bdf8",
-    brightGreen: "#4ade80",
-    brightMagenta: "#c084fc",
-    brightRed: "#f87171",
-    brightWhite: foreground,
-    brightYellow: "#facc15",
-    cursor: foreground,
-    cyan: "#0891b2",
-    foreground,
-    green: "#16a34a",
-    magenta: "#9333ea",
-    red: "#dc2626",
-    selectionBackground: `${accent}44`,
-    white: foreground,
-    yellow: "#ca8a04",
+    background: "#0b1020",
+    black: "#0f172a",
+    blue: "#60a5fa",
+    brightBlack: "#64748b",
+    brightBlue: "#93c5fd",
+    brightCyan: "#67e8f9",
+    brightGreen: "#86efac",
+    brightMagenta: "#d8b4fe",
+    brightRed: "#fda4af",
+    brightWhite: "#f8fafc",
+    brightYellow: "#fde68a",
+    cursor: "#e2e8f0",
+    cyan: "#22d3ee",
+    foreground: "#e2e8f0",
+    green: "#4ade80",
+    magenta: "#c084fc",
+    red: "#f87171",
+    selectionBackground: "#2563eb55",
+    white: "#cbd5e1",
+    yellow: "#fbbf24",
   };
 }
 
 function isControlPayload(value) {
   try {
     const parsed = JSON.parse(value);
-    if (parsed?.type === "exit") return parsed;
+    if (parsed?.type === "exit" || parsed?.type === "reset") return parsed;
   } catch {}
   return null;
 }
@@ -69,14 +64,6 @@ function writeLine(terminal, value = "") {
 function hasTaskInput(taskInputs, taskTitle) {
   if (String(taskTitle || "").trim()) return true;
   return Object.values(taskInputs || {}).some((value) => String(value || "").trim());
-}
-
-function fileToImagePayload(file) {
-  return file.arrayBuffer().then((buffer) => ({
-    name: file.name || `image-${Date.now()}.png`,
-    data: Array.from(new Uint8Array(buffer)),
-    type: file.type || "application/octet-stream",
-  }));
 }
 
 function writeTaskIntro(terminal, { cwd, phaseLabel, taskInputs, taskTitle }) {
@@ -189,18 +176,16 @@ export default function TaskTerminalPanel({
   isRunning = false,
   isStreaming = false,
   isPaused = false,
+  isAwaiting = false,
+  isFailed = false,
   phaseKey,
   phaseLabel,
-  modelLabel = "",
-  onInterrupt,
-  onSendMessage,
   sessionId,
   taskInputs = {},
   taskTitle,
 }) {
   const { t } = useI18n();
   const containerRef = useRef(null);
-  const inputRef = useRef(null);
   const terminalRef = useRef(null);
   const activityStateRef = useRef({
     count: 0,
@@ -209,20 +194,13 @@ export default function TaskTerminalPanel({
     runningSignature: "",
     taskIntroSignature: "",
   });
-  const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState([]);
   const [error, setError] = useState("");
-  const [, setStatus] = useState("connecting");
   const [terminalReadyTick, setTerminalReadyTick] = useState(0);
-  const isSubmittingRef = useRef(false);
-  const attachmentsRef = useRef([]);
   const activityKey = `${sessionId || ""}:${phaseKey || phaseLabel || ""}`;
-  const showComposer = Boolean(onSendMessage) && Boolean(phaseKey) && (isRunning || isStreaming || isPaused);
 
   useEffect(() => {
     if (!containerRef.current) return;
     if (enableShell && (!cwd || !sessionId)) {
-      setStatus("error");
       setError(t("stepDetail.terminalNoWorkspace"));
       return;
     }
@@ -232,12 +210,31 @@ export default function TaskTerminalPanel({
     let resizeTimer = null;
     let socket = null;
     let terminal = null;
-    let inputSubscription = null;
     let fitAddon = null;
+    let inputDisposable = null;
+    let socketReady = false;
+    let pendingInput = [];
 
     const clearResizeTimer = () => {
       if (resizeTimer) window.clearTimeout(resizeTimer);
       resizeTimer = null;
+    };
+
+    const flushPendingInput = () => {
+      if (!socket || socket.readyState !== WebSocket.OPEN || !socketReady || pendingInput.length === 0) return;
+      for (const chunk of pendingInput) {
+        socket.send(chunk);
+      }
+      pendingInput = [];
+    };
+
+    const sendInput = (text) => {
+      if (!text) return;
+      if (socket && socket.readyState === WebSocket.OPEN && socketReady) {
+        socket.send(text);
+        return;
+      }
+      pendingInput.push(text);
     };
 
     const sendResize = () => {
@@ -255,7 +252,6 @@ export default function TaskTerminalPanel({
       }, 50);
     };
 
-    setStatus("connecting");
     setError("");
 
     void Promise.all([
@@ -270,6 +266,7 @@ export default function TaskTerminalPanel({
         const nextTerminal = new xtermModule.Terminal({
           allowProposedApi: true,
           cursorBlink: true,
+          cursorStyle: "bar",
           fontFamily: "'SF Mono', 'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
           fontSize: 13,
           letterSpacing: 0,
@@ -284,12 +281,12 @@ export default function TaskTerminalPanel({
         nextTerminal.loadAddon(new clipboardModule.ClipboardAddon());
         nextTerminal.open(containerRef.current);
         nextFitAddon.fit();
-        nextTerminal.focus();
 
         terminal = nextTerminal;
         terminalRef.current = nextTerminal;
         fitAddon = nextFitAddon;
         setTerminalReadyTick((value) => value + 1);
+        inputDisposable = nextTerminal.onData(sendInput);
 
         void import("@xterm/addon-web-links")
           .then((webLinksModule) => {
@@ -316,62 +313,43 @@ export default function TaskTerminalPanel({
         }
         window.addEventListener("resize", scheduleResize);
 
-        if (!enableShell) {
-          setStatus("connected");
-          return;
+        if (enableShell) {
+          const bridgeUrl = await desktopApi.getTerminalBridgeUrl?.();
+          if (disposed || terminal !== nextTerminal) return;
+          if (!bridgeUrl) throw new Error(t("stepDetail.terminalUnavailable"));
+
+          const url = new URL(bridgeUrl);
+          url.searchParams.set("sessionId", sessionId);
+          url.searchParams.set("cwd", cwd || "");
+          socket = new WebSocket(url.toString());
+          socket.addEventListener("open", () => {
+            if (disposed || terminal !== nextTerminal) return;
+            socketReady = true;
+            sendResize();
+            flushPendingInput();
+            nextTerminal.focus();
+          });
+          socket.addEventListener("message", (event) => {
+            const value = typeof event.data === "string" ? event.data : "";
+            const control = isControlPayload(value);
+            if (control?.type === "reset") {
+              nextTerminal.reset();
+              return;
+            }
+            if (control?.type === "exit") return;
+            if (value) nextTerminal.write(value);
+          });
+          socket.addEventListener("close", () => {
+            socketReady = false;
+            pendingInput = [];
+          });
+          socket.addEventListener("error", () => {
+            if (!disposed) setError(t("stepDetail.terminalError"));
+          });
         }
-
-        const bridgeUrl = await desktopApi.getTerminalBridgeUrl?.();
-        if (disposed || terminal !== nextTerminal) return;
-        if (!bridgeUrl) {
-          setStatus("error");
-          setError(t("stepDetail.terminalUnavailable"));
-          nextTerminal.writeln(t("stepDetail.terminalUnavailable"));
-          return;
-        }
-
-        const url = new URL(bridgeUrl);
-        url.searchParams.set("sessionId", sessionId);
-        url.searchParams.set("cwd", cwd);
-        socket = new WebSocket(url.toString());
-
-        socket.addEventListener("open", () => {
-          if (disposed) return;
-          setStatus("connected");
-          sendResize();
-          nextTerminal.focus();
-        });
-
-        socket.addEventListener("message", (event) => {
-          if (disposed) return;
-          const chunk = typeof event.data === "string" ? event.data : "";
-          const control = isControlPayload(chunk);
-          if (control?.type === "exit") {
-            setStatus("closed");
-            return;
-          }
-          nextTerminal.write(chunk);
-        });
-
-        socket.addEventListener("close", () => {
-          if (disposed) return;
-          setStatus((current) => (current === "error" ? current : "closed"));
-        });
-
-        socket.addEventListener("error", () => {
-          if (disposed) return;
-          setStatus("error");
-          setError(t("stepDetail.terminalError"));
-        });
-
-        inputSubscription = nextTerminal.onData((chunk) => {
-          if (!socket || socket.readyState !== WebSocket.OPEN) return;
-          socket.send(chunk);
-        });
       })
       .catch((err) => {
         if (disposed) return;
-        setStatus("error");
         setError(err?.message || t("stepDetail.terminalError"));
       });
 
@@ -380,10 +358,7 @@ export default function TaskTerminalPanel({
       clearResizeTimer();
       window.removeEventListener("resize", scheduleResize);
       resizeObserver?.disconnect();
-      inputSubscription?.dispose();
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "close" }));
-      }
+      inputDisposable?.dispose();
       socket?.close();
       terminal?.dispose();
       if (terminalRef.current === terminal) terminalRef.current = null;
@@ -404,12 +379,9 @@ export default function TaskTerminalPanel({
       terminal.reset();
     }
 
-    const taskIntroSignature = JSON.stringify({
-      cwd,
-      phaseLabel,
-      taskInputs,
-      taskTitle,
-    });
+    if (enableShell) return;
+
+    const taskIntroSignature = JSON.stringify({ cwd, phaseLabel, taskInputs, taskTitle });
     if (state.taskIntroSignature !== taskIntroSignature) {
       state.taskIntroSignature = taskIntroSignature;
       writeTaskIntro(terminal, { cwd, phaseLabel, taskInputs, taskTitle });
@@ -421,187 +393,38 @@ export default function TaskTerminalPanel({
     }
     state.count = interactions.length;
     writeRunningMarker(terminal, { backendLabel, interactions, isRunning, isStreaming, phaseLabel }, state);
-  }, [activityKey, backendLabel, cwd, interactions, isRunning, isStreaming, phaseLabel, taskInputs, taskTitle, terminalReadyTick]);
+  }, [activityKey, backendLabel, cwd, enableShell, interactions, isRunning, isStreaming, phaseLabel, taskInputs, taskTitle, terminalReadyTick]);
 
-  useEffect(() => {
-    setDraft("");
-    setAttachments((prev) => {
-      for (const attachment of prev) {
-        URL.revokeObjectURL(attachment.preview);
-      }
-      return [];
-    });
-    isSubmittingRef.current = false;
-    inputRef.current?.focus?.();
-  }, [activityKey]);
-
-  useEffect(() => {
-    attachmentsRef.current = attachments;
-  }, [attachments]);
-
-  useEffect(() => () => {
-    for (const attachment of attachmentsRef.current) {
-      URL.revokeObjectURL(attachment.preview);
-    }
-  }, []);
-
-  function addImageFiles(files) {
-    const imageFiles = [];
-    for (const file of files) {
-      if (!file?.type?.startsWith("image/")) continue;
-      imageFiles.push({ file, preview: URL.createObjectURL(file) });
-    }
-    if (imageFiles.length > 0) {
-      setAttachments((prev) => [...prev, ...imageFiles]);
-    }
-  }
-
-  function handlePaste(event) {
-    const items = event.clipboardData?.items;
-    if (!items) return;
-    const files = [];
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (file) files.push(file);
-      }
-    }
-    if (files.length > 0) {
-      event.preventDefault();
-      addImageFiles(files);
-    }
-  }
-
-  function handleDrop(event) {
-    event.preventDefault();
-    const files = Array.from(event.dataTransfer?.files || []);
-    const imageFiles = files.filter((file) => file?.type?.startsWith("image/"));
-    if (imageFiles.length > 0) {
-      addImageFiles(imageFiles);
-    }
-  }
-
-  function removeAttachment(index) {
-    setAttachments((prev) => {
-      const next = [...prev];
-      const [removed] = next.splice(index, 1);
-      if (removed?.preview) URL.revokeObjectURL(removed.preview);
-      return next;
-    });
-  }
-
-  async function handleInterrupt() {
-    if (isSubmittingRef.current || !onInterrupt || !phaseKey || (!isRunning && !isStreaming)) return;
-    isSubmittingRef.current = true;
-    setError("");
-    try {
-      const result = await onInterrupt(phaseKey);
-      if (result === false) throw new Error(t("stepDetail.terminalError"));
-      inputRef.current?.focus?.();
-    } catch (err) {
-      setError(err?.message || t("stepDetail.terminalError"));
-    } finally {
-      isSubmittingRef.current = false;
-    }
-  }
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    const text = draft.trim();
-    if (isSubmittingRef.current || (!text && attachments.length === 0) || !onSendMessage || !phaseKey) return;
-    const nextAttachments = attachments;
-    isSubmittingRef.current = true;
-    setDraft("");
-    setAttachments((prev) => {
-      for (const attachment of prev) {
-        URL.revokeObjectURL(attachment.preview);
-      }
-      return [];
-    });
-    setError("");
-    try {
-      const imagePayloads = await Promise.all(nextAttachments.map((attachment) => fileToImagePayload(attachment.file)));
-      const result = await onSendMessage(text, imagePayloads);
-      if (result === false) throw new Error(t("stepDetail.terminalError"));
-      inputRef.current?.focus?.();
-    } catch (err) {
-      setError(err?.message || t("stepDetail.terminalError"));
-    } finally {
-      isSubmittingRef.current = false;
-    }
-  }
+  const isInteractive = isRunning || isStreaming || isPaused || isAwaiting || isFailed;
+  const showInactiveHint = !isInteractive && enableShell;
 
   return (
-    <aside className="flex min-h-0 flex-col overflow-hidden border-t border-border bg-card/45 xl:border-l xl:border-t-0">
-      <div className="relative min-h-0 flex-1 bg-background px-3 pb-6 pt-3">
-        <div ref={containerRef} className="h-full min-h-0 w-full overflow-hidden" />
+    <aside
+      className="flex min-h-0 flex-col overflow-hidden border-t border-slate-800/80 bg-slate-950 xl:border-l xl:border-t-0"
+      onMouseDownCapture={(event) => {
+        event.preventDefault();
+        window.requestAnimationFrame(() => terminalRef.current?.focus?.());
+      }}
+    >
+      <div className="relative min-h-0 flex-1 bg-slate-950 p-3">
+        <div ref={containerRef} className="workflow-terminal-output h-full min-h-0 w-full overflow-hidden" />
         {error ? (
-          <div className="pointer-events-none absolute inset-x-3 top-3 rounded-md border border-destructive/40 bg-background/95 px-3 py-2 text-xs text-destructive shadow-sm">
+          <div className="pointer-events-none absolute inset-x-3 top-3 rounded-md border border-rose-500/35 bg-slate-900/95 px-3 py-2 text-xs text-rose-300 shadow-sm">
             <span className="flex items-center gap-2">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               {error}
             </span>
           </div>
         ) : null}
-      </div>
-      {showComposer ? (
-        <form className="border-t border-border bg-background px-3 pt-2 pb-0" onSubmit={handleSubmit}>
-          {attachments.length > 0 ? (
-            <div className="mb-2 flex flex-wrap gap-2">
-              {attachments.map((attachment, index) => (
-                <button
-                  key={attachment.preview}
-                  type="button"
-                  onClick={() => removeAttachment(index)}
-                  className="group relative h-14 w-14 overflow-hidden rounded-md border border-border bg-card"
-                  title={attachment.file.name}
-                >
-                  <img src={attachment.preview} alt={attachment.file.name} className="h-full w-full object-cover" />
-                  <span className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-background/90 text-[10px] text-muted-foreground opacity-90 group-hover:text-foreground">
-                    <X className="h-2.5 w-2.5" />
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <div className="border-y border-border bg-card/70 py-2 shadow-sm">
-            <div className="flex items-center gap-2">
-              <span className="select-none font-mono text-[13px] text-primary">$</span>
-              <input
-                ref={inputRef}
-                type="text"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.ctrlKey && event.key.toLowerCase() === "c") {
-                    event.preventDefault();
-                    void handleInterrupt();
-                    return;
-                  }
-                  if (event.key === "Escape" && (isRunning || isStreaming)) {
-                    event.preventDefault();
-                    void handleInterrupt();
-                  }
-                }}
-                onPaste={handlePaste}
-                onDrop={handleDrop}
-                aria-label={t("stepDetail.terminal")}
-                autoComplete="off"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-                className="h-6 min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[13px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0"
-              />
-            </div>
-          </div>
-          <div className="mt-1 flex min-w-0 items-center gap-2 font-mono text-[12px] leading-5">
-            <span className="min-w-0 truncate text-emerald-600" title={modelLabel || t("stepDetail.terminal")}>
-              {modelLabel || "default model"}
+        {showInactiveHint ? (
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded-md border border-slate-700/50 bg-slate-900/95 px-3 py-2 text-xs text-slate-400 shadow-sm">
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-2 shrink-0 rounded-full bg-slate-500" />
+              {t("stepDetail.phaseCompleted")}
             </span>
-            <span className="shrink-0 text-muted-foreground">•</span>
           </div>
-        </form>
-      ) : null}
+        ) : null}
+      </div>
     </aside>
   );
 }

@@ -6,22 +6,6 @@ import { buildClientDebugPayload, DEBUG_EVENT_TRIGGERS, DEBUG_EVENT_TYPES } from
 const desktopApi = getAppApi();
 const MAX_DEBUG_EVENTS = 200;
 
-function playNotificationSound() {
-  try {
-    const ctx = new AudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.value = 880;
-    osc.type = "sine";
-    gain.gain.value = 0.3;
-    osc.start();
-    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-    osc.stop(ctx.currentTime + 0.5);
-  } catch {}
-}
-
 let prevStatusRef = {};
 let unsubscribeWorkflowEvents = null;
 const ACTIVE_PHASE_STATUSES = new Set(["in_progress", "awaiting_input", "paused"]);
@@ -320,16 +304,23 @@ function markPhaseRunning(set, msg, phaseId) {
     };
     const activeStateKey = getWorkflowStateKey(state.workflowState?.taskId, state.workflowState?.runId);
     const isActiveState = activeStateKey === stateKey;
+
+    // Auto-select the new running phase unless user is viewing a completed phase
+    const currentSelected = state.selectedPhaseByRun[stateKey];
+    const selectedPhaseState = existingState.phases?.find(p => (p.id || p.name) === currentSelected);
+    const isViewingCompletedPhase = selectedPhaseState?.status === "completed" && currentSelected !== phaseId;
+    const shouldAutoSelect = !isViewingCompletedPhase;
+
     return {
       workflowState: isActiveState ? workflowState : state.workflowState,
       workflowStatesByRun: {
         ...state.workflowStatesByRun,
         [stateKey]: workflowState,
       },
-      selectedPhaseByRun: {
+      selectedPhaseByRun: shouldAutoSelect ? {
         ...state.selectedPhaseByRun,
         [stateKey]: phaseId,
-      },
+      } : state.selectedPhaseByRun,
       isStreamingByRun: {
         ...state.isStreamingByRun,
         [stateKey]: true,
@@ -489,37 +480,65 @@ function attachWorkflowEvents(set, get) {
       const prevPhase = prevStatus._currentPhase;
       const selectedPhase = getSelectedPhaseFromWorkflowState(displayState);
 
+      // Auto-select on phase change unless user is viewing a completed phase
       if (isActiveState && displayState.currentPhase && displayState.currentPhase !== prevPhase) {
         if (selectedPhase) {
-          set((state) => ({
-            selectedPhaseByRun: {
-              ...state.selectedPhaseByRun,
-              [stateKey]: selectedPhase,
-            },
-          }));
+          set((state) => {
+            const currentSelected = state.selectedPhaseByRun[stateKey];
+            const selectedPhaseState = displayState.phases?.find(p => (p.id || p.name) === currentSelected);
+            const isViewingCompletedPhase = selectedPhaseState?.status === "completed" && currentSelected !== selectedPhase;
+
+            // Don't override if user is viewing a completed phase
+            if (!isViewingCompletedPhase) {
+              return {
+                selectedPhaseByRun: {
+                  ...state.selectedPhaseByRun,
+                  [stateKey]: selectedPhase,
+                },
+              };
+            }
+            return {};
+          });
         }
-        if (prevPhase) playNotificationSound();
       }
 
       let streaming = false;
       for (const phase of displayState.phases) {
         const prevPhaseStatus = prevStatus[phase.id];
+        // Auto-select awaiting_input or paused phases unless user is viewing a completed phase
         if (isActiveState && phase.status === "awaiting_input" && prevPhaseStatus !== "awaiting_input") {
-          playNotificationSound();
-          set((state) => ({
-            selectedPhaseByRun: {
-              ...state.selectedPhaseByRun,
-              [stateKey]: phase.id,
-            },
-          }));
+          set((state) => {
+            const currentSelected = state.selectedPhaseByRun[stateKey];
+            const selectedPhaseState = displayState.phases?.find(p => (p.id || p.name) === currentSelected);
+            const isViewingCompletedPhase = selectedPhaseState?.status === "completed" && currentSelected !== phase.id;
+
+            if (!isViewingCompletedPhase) {
+              return {
+                selectedPhaseByRun: {
+                  ...state.selectedPhaseByRun,
+                  [stateKey]: phase.id,
+                },
+              };
+            }
+            return {};
+          });
         }
         if (isActiveState && phase.status === "paused" && prevPhaseStatus !== "paused") {
-          set((state) => ({
-            selectedPhaseByRun: {
-              ...state.selectedPhaseByRun,
-              [stateKey]: phase.id,
-            },
-          }));
+          set((state) => {
+            const currentSelected = state.selectedPhaseByRun[stateKey];
+            const selectedPhaseState = displayState.phases?.find(p => (p.id || p.name) === currentSelected);
+            const isViewingCompletedPhase = selectedPhaseState?.status === "completed" && currentSelected !== phase.id;
+
+            if (!isViewingCompletedPhase) {
+              return {
+                selectedPhaseByRun: {
+                  ...state.selectedPhaseByRun,
+                  [stateKey]: phase.id,
+                },
+              };
+            }
+            return {};
+          });
         }
         if (phase.status === "in_progress") streaming = true;
       }
@@ -562,7 +581,7 @@ function attachWorkflowEvents(set, get) {
           },
         };
       });
-    } else if (msg.type === DEBUG_EVENT_TYPES.PHASE_PAUSED) {
+    } else if (msg.type === DEBUG_EVENT_TYPES.PHASE_PAUSED || msg.type === "phase_interrupted") {
       set((state) => {
         const stateKey = getEventStateKey(msg);
         if (!stateKey) return {};
@@ -744,9 +763,12 @@ export const useWorkflowStore = create((set, get) => ({
   },
 
   async loadTask(taskId, runId) {
+    console.log("[loadTask] START - taskId:", taskId, "runId:", runId);
     try {
       const stateKey = getWorkflowStateKey(taskId, runId);
+      console.log("[loadTask] stateKey:", stateKey);
       const cachedState = get().workflowStatesByRun[stateKey];
+      console.log("[loadTask] cachedState exists:", !!cachedState);
       if (cachedState) {
         const selectedPhase = getSelectedPhaseFromWorkflowState(cachedState);
         const runningPhase = getRunningPhaseFromWorkflowState(cachedState);
@@ -775,6 +797,8 @@ export const useWorkflowStore = create((set, get) => ({
       }
 
       const { state, messages, outputArtifacts, interactions } = await desktopApi.getTaskState(taskId, runId);
+      console.log("[loadTask] Loaded interactions:", interactions);
+      console.log("[loadTask] Interaction keys:", Object.keys(interactions));
       const currentState = get().workflowStatesByRun[stateKey];
       const displayState = getLatestWorkflowState(state, currentState);
       const displayStateKey = getWorkflowStateKey(displayState.taskId, displayState.runId || runId);
@@ -822,10 +846,15 @@ export const useWorkflowStore = create((set, get) => ({
         },
       });
 
+      console.log("[loadTask] Store updated");
+      console.log("[loadTask] phaseInteractionsByRun[" + displayStateKey + "]:", get().phaseInteractionsByRun[displayStateKey]);
+
       if (displayState.workFolder && displayState.overallStatus !== "completed") {
         get().connectWorkflow(taskId, displayState.workFolder, undefined, undefined, displayState.runId || runId || "", "", displayState.workflowFilename || "");
       }
-    } catch {}
+    } catch (error) {
+      console.error("[loadTask] ERROR:", error);
+    }
   },
 
   async connectWorkflow(taskId, workFolder, taskInputs, images, runId, worktreeName, workflowFilename) {
@@ -984,19 +1013,77 @@ export const useWorkflowStore = create((set, get) => ({
     const phaseState = (workflowState.phases || []).find((item) => (item.id || item.name) === phase);
     const phaseStatus = phaseState?.status || "";
     const isPaused = phaseStatus === "paused" || workflowState.overallStatus === "paused";
+    const isAwaiting = phaseStatus === "awaiting_input" || workflowState.overallStatus === "awaiting_input";
     const isRunning = !isPaused && (phaseStatus === "in_progress" || streamingPhaseByRun[stateKey] === phase);
 
-    if (!isRunning && !isPaused) return false;
-    if (isRunning) {
-      const paused = await get().pausePhase(phase, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL });
-      if (!paused) return false;
-    }
-
+    if (!isRunning && !isPaused && !isAwaiting) return false;
     const imagePaths = await normalizeMessageImages(images, workflowState?.runId || "");
     if (imagePaths === false) return false;
-    const sent = await get().sendMessage(text, imagePaths, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL });
-    if (!sent) return false;
-    return await get().resumePhase(phase, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL });
+
+    if (isRunning) {
+      const interrupted = await get().interruptPhase(phase, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL });
+      if (!interrupted) return false;
+    }
+
+    set((state) => ({
+      isStreamingByRun: {
+        ...state.isStreamingByRun,
+        [stateKey]: true,
+      },
+      streamingPhaseByRun: {
+        ...state.streamingPhaseByRun,
+        [stateKey]: phase,
+      },
+      lastErrorByRun: {
+        ...state.lastErrorByRun,
+        [stateKey]: null,
+      },
+      workflowState: state.workflowState
+        ? {
+            ...state.workflowState,
+            overallStatus: "in_progress",
+            currentPhase: phase,
+            phases: state.workflowState.phases.map((item) =>
+              (item.id || item.name) === phase ? { ...item, status: "in_progress" } : item
+            ),
+          }
+        : state.workflowState,
+    }));
+    const nextState = get().workflowState;
+    if (nextState) {
+      set((state) => ({
+        workflowStatesByRun: {
+          ...state.workflowStatesByRun,
+          [getWorkflowStateKey(nextState.taskId, nextState.runId)]: nextState,
+        },
+      }));
+    }
+
+    return await get().sendMessage(text, imagePaths, { trigger: DEBUG_EVENT_TRIGGERS.TERMINAL });
+  },
+
+  async interruptPhase(phase, options = {}) {
+    const { activeTask, workflowState } = get();
+    if (!activeTask || !phase) return false;
+    pushClientDebugEvent(buildClientDebugPayload(DEBUG_EVENT_TYPES.PHASE_PAUSE_REQUESTED, { phase, trigger: options.trigger || DEBUG_EVENT_TRIGGERS.TERMINAL }));
+    const stateKey = getWorkflowStateKey(workflowState?.taskId, workflowState?.runId);
+    try {
+      await desktopApi.interruptWorkflowPhase(activeTask, phase, workflowState?.runId || "");
+      set((state) => ({
+        isStreamingByRun: {
+          ...state.isStreamingByRun,
+          [stateKey]: false,
+        },
+        streamingPhaseByRun: {
+          ...state.streamingPhaseByRun,
+          [stateKey]: null,
+        },
+      }));
+      return true;
+    } catch (err) {
+      pushClientErrorEvent({ type: DEBUG_EVENT_TYPES.ERROR, message: err?.message || "Interrupt failed", phase });
+      return false;
+    }
   },
 
   async resumePhase(phase, options = {}) {

@@ -38,8 +38,6 @@ export default function StepDetail({
   isFailed,
   onApprove,
   onReject,
-  onSendMessage,
-  onInterrupt,
   onOpenDocument,
   phaseModel,
   phaseLabels,
@@ -56,7 +54,7 @@ export default function StepDetail({
   const showTerminal = phaseType === "auto" || phaseType === "condition";
   const currentBackend = isCheckpoint ? t("stepDetail.checkpoint") : getBackendLabel(getCurrentBackend(activeBackend, interactions));
   const rejectOptions = isCheckpoint ? rejectTargets?.[phase] || [] : [];
-  const terminalSessionId = `${taskId || "task"}:${runId || taskId || "run"}`;
+  const terminalSessionId = `${taskId || "task"}:${runId || taskId || "run"}:${phase || "phase"}`;
 
   function openRejectModal(target) {
     setRejectTarget(target);
@@ -138,15 +136,15 @@ export default function StepDetail({
           <TaskTerminalPanel
             backendLabel={currentBackend}
             cwd={workFolder}
-            enableShell={false}
+            enableShell
             interactions={interactions}
             isRunning={isRunning}
             isStreaming={isStreaming}
             isPaused={isPaused}
+            isAwaiting={isAwaiting}
+            isFailed={isFailed}
             phaseKey={phase}
             phaseLabel={phaseLabels?.[phase] || phase}
-            onInterrupt={onInterrupt}
-            onSendMessage={onSendMessage}
             sessionId={terminalSessionId}
             modelLabel={phaseModel}
             taskInputs={taskInputs}
