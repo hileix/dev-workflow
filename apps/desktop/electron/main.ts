@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, screen } from "electron";
 import { mkdirSync } from "fs";
+import { readFile, writeFile } from "fs/promises";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { killAllChildren } from "../../../packages/core-lib/claude";
@@ -48,6 +49,8 @@ import {
   pauseWorkflowPhase,
   detachWorkflowSender,
   setWorkflowTerminalBridge,
+  attachRunningWorkflowTerminalSessions,
+  restoreWorkflowTerminalSession,
 } from "./workflow-runtime";
 
 let mainWindow: BrowserWindow | null = null;
@@ -62,6 +65,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const rendererDevServerUrl = process.env.ELECTRON_RENDERER_URL;
 const isDev = Boolean(rendererDevServerUrl);
 const userDataDir = getDefaultDesktopUserDataDir();
+const windowStatePath = join(userDataDir, "window-state.json");
+const defaultWindowSize = { minWidth: 960, minHeight: 640 };
+
+type WindowState = {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+};
 
 mkdirSync(userDataDir, { recursive: true });
 app.setPath("userData", userDataDir);
@@ -145,12 +157,54 @@ async function waitForRenderer(url, attempts = 40, delayMs = 500) {
   throw new Error(`Renderer dev server not ready: ${url}`);
 }
 
+async function readWindowState(): Promise<WindowState | null> {
+  try {
+    const raw = JSON.parse(await readFile(windowStatePath, "utf-8"));
+    if (!Number.isFinite(raw?.width) || !Number.isFinite(raw?.height)) {
+      return null;
+    }
+    return {
+      x: Number.isFinite(raw?.x) ? raw.x : undefined,
+      y: Number.isFinite(raw?.y) ? raw.y : undefined,
+      width: Math.max(defaultWindowSize.minWidth, raw.width),
+      height: Math.max(defaultWindowSize.minHeight, raw.height),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function saveWindowState(window: BrowserWindow) {
+  if (window.isDestroyed() || window.isMaximized() || window.isMinimized() || window.isFullScreen()) {
+    return;
+  }
+  const bounds = window.getBounds();
+  await writeFile(windowStatePath, JSON.stringify(bounds, null, 2));
+}
+
+async function getWindowBounds(): Promise<WindowState> {
+  const savedState = await readWindowState();
+  if (savedState) {
+    return savedState;
+  }
+  const { workArea } = screen.getPrimaryDisplay();
+  return {
+    x: workArea.x,
+    y: workArea.y,
+    width: Math.max(defaultWindowSize.minWidth, workArea.width),
+    height: Math.max(defaultWindowSize.minHeight, workArea.height),
+  };
+}
+
 async function createWindow() {
+  const bounds = await getWindowBounds();
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 900,
-    minWidth: 960,
-    minHeight: 640,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: defaultWindowSize.minWidth,
+    minHeight: defaultWindowSize.minHeight,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 18, y: 8 },
     backgroundColor: "#f5f5f7",
@@ -185,6 +239,12 @@ async function createWindow() {
     await mainWindow.loadFile(join(__dirname, "..", "renderer", "dist", "index.html"));
   }
 
+  mainWindow.on("resize", () => {
+    void saveWindowState(mainWindow!);
+  });
+  mainWindow.on("move", () => {
+    void saveWindowState(mainWindow!);
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -224,6 +284,8 @@ function registerIpcHandlers() {
   ipcMain.handle("app:remove-task-worktree", (_event, taskId, runId) => removeTaskWorktreeOnly(taskId, runId));
   ipcMain.handle("app:save-task-uploads", (_event, taskId, filePaths) => saveTaskUploads(taskId, filePaths));
   ipcMain.handle("app:get-terminal-bridge-url", () => terminalBridge?.getUrl() || "");
+  ipcMain.handle("app:attach-running-terminal-sessions", (_event, payload) => attachRunningWorkflowTerminalSessions(payload));
+  ipcMain.handle("app:restore-terminal-session", (_event, payload) => restoreWorkflowTerminalSession(payload));
   ipcMain.handle("app:start-workflow", (event, payload) =>
     startWorkflowSession(
       payload.taskId,

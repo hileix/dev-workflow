@@ -204,9 +204,10 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
           backend: event.backend,
         }, runId);
         await appendToPhaseFile(taskId, phase, `\n\n*${event.log || event.backend}*\n\n`, runId);
+      } else if (event.type === "interactive_session_attached") {
+        terminalWriter("session_attached", { phase, backend: event.backend, sessionId: event.sessionId });
       } else if (event.type === "session_attached") {
         send({ type: "session_attached", phase, backend: event.backend, sessionId: event.sessionId });
-        terminalWriter("session_attached", { phase, backend: event.backend, sessionId: event.sessionId });
         try {
           const state = await readState(taskId, runId);
           const current = state.phases.find((item) => item.id === phase);
@@ -237,6 +238,13 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
       if (content) inputSections.push(`## ${input.name}\n\n${content}`);
     }
     const prompt = renderAiApiPrompt(step, state, inputSections);
+    const promptInteraction = await appendPhaseInteraction(taskId, step.id, {
+      role: "user",
+      type: "prompt",
+      text: prompt,
+      backend,
+    }, runId);
+    if (promptInteraction) send({ type: "phase_interaction", phase: step.id, interaction: promptInteraction });
     const client = new OpenAI({
       apiKey: profile.apiKey,
       baseURL: profile.baseUrl || undefined,

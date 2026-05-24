@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld("desktopApi", {
   removeTaskWorktree: (taskId, runId) => ipcRenderer.invoke("app:remove-task-worktree", taskId, runId),
   saveTaskUploads: (taskId, filePaths) => ipcRenderer.invoke("app:save-task-uploads", taskId, filePaths),
   getTerminalBridgeUrl: () => ipcRenderer.invoke("app:get-terminal-bridge-url"),
+  attachRunningTerminalSessions: (payload) => ipcRenderer.invoke("app:attach-running-terminal-sessions", payload),
+  restoreTerminalSession: (payload) => ipcRenderer.invoke("app:restore-terminal-session", payload),
   startWorkflow: (payload) => ipcRenderer.invoke("app:start-workflow", payload),
   approveWorkflow: (taskId, runId) => ipcRenderer.invoke("app:approve-workflow", taskId, runId),
   rejectWorkflow: (taskId, rejectTo, reason, runId) => ipcRenderer.invoke("app:reject-workflow", taskId, rejectTo, reason, runId),

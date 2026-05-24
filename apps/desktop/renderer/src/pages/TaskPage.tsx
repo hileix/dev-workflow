@@ -124,6 +124,19 @@ function getPhaseRouteLabels(phaseId, workflowConfig) {
   return labels;
 }
 
+function getTerminalBackendLabel(backend) {
+  if (String(backend || "").startsWith("ai-api:")) return `AI API: ${String(backend).slice("ai-api:".length)}`;
+  if (backend === "ai-api") return "AI API";
+  if (backend === "codex") return "Codex";
+  if (backend === "claude") return "Claude Code";
+  return "Shell";
+}
+
+function supportsTerminalBackend(backend) {
+  const value = String(backend || "").trim();
+  return value === "codex" || value === "claude";
+}
+
 function RunStepList({ phases, workflowConfig, selectedPhase, onSelect }) {
   if (!phases.length) {
     return (
@@ -390,6 +403,7 @@ export default function TaskPage() {
   const [isDeletingTask, setIsDeletingTask] = useState(false);
   const [showRemoveWorktreeConfirm, setShowRemoveWorktreeConfirm] = useState(false);
   const [isRemovingWorktree, setIsRemovingWorktree] = useState(false);
+  const [openedTerminalPhases, setOpenedTerminalPhases] = useState([]);
   const navigate = useNavigate();
   const { id: urlTaskId } = useParams();
   const [searchParams] = useSearchParams();
@@ -409,6 +423,14 @@ export default function TaskPage() {
       loadTask(urlTaskId, urlRunId);
     }
   }, [urlTaskId, urlRunId, activeTask, workflowState?.taskId, workflowState?.runId]);
+
+  useEffect(() => {
+    if (!taskId || !workflowState?.runId || workflowState.overallStatus === "completed") return;
+    void appApi.attachRunningTerminalSessions?.({
+      taskId,
+      runId: workflowState.runId,
+    }).catch(() => {});
+  }, [taskId, workflowState?.runId, workflowState?.overallStatus]);
   const selectedPhaseByRun = useWorkflowStore((s) => s.selectedPhaseByRun);
   const setSelectedPhase = useWorkflowStore((s) => s.setSelectedPhase);
   const phaseOutputArtifactsByRun = useWorkflowStore((s) => s.phaseOutputArtifactsByRun);
@@ -451,6 +473,7 @@ export default function TaskPage() {
   const phases = workflowState?.phases || [];
   const selectedRunPhase = selectedPhase;
   const activePhase = selectedRunPhase || currentPhase || phases[0]?.id || null;
+  const activePhaseState = phases.find((p) => (p.id || p.name) === activePhase) || null;
   const activeStatus = phases.find((p) => (p.id || p.name) === activePhase)?.status;
   const isAutoPhase = runWorkflowConfig?.phaseTypes?.[activePhase] === "auto" || runWorkflowConfig?.phaseTypes?.[activePhase] === "condition";
   const { canPausePhase, canResumePhase, canRetryPhase } = getPhaseControls({
@@ -485,12 +508,9 @@ export default function TaskPage() {
     : null;
   const activePhaseInteractions = detailPhase ? phaseInteractions[detailPhase] || [] : [];
 
-  console.log("[TaskPage] detailPhase:", detailPhase);
-  console.log("[TaskPage] phaseInteractions keys:", Object.keys(phaseInteractions));
-  console.log("[TaskPage] activePhaseInteractions length:", activePhaseInteractions.length);
-
   const activePhaseBackend = activePhaseInteractions.findLast?.((interaction) => interaction.backend)?.backend
     || runWorkflowConfig?.phaseBackends?.[detailPhase];
+
   const activePhaseModel = getPhaseModelLabel(detailPhase, workflowState, runWorkflowConfig, activePhaseBackend);
   const emptyDocumentMessage = getMissingDocumentMessage({
     t,
@@ -508,12 +528,56 @@ export default function TaskPage() {
     workflowConfig: runWorkflowConfig,
     connectionState,
   });
+  const terminalPanels = phases
+    .filter((phaseState) => {
+      const phaseId = phaseState.id || phaseState.name;
+      const phaseInteractionsForPanel = phaseInteractions[phaseId] || [];
+      const phaseBackend = phaseInteractionsForPanel.findLast?.((interaction) => interaction.backend)?.backend
+        || runWorkflowConfig?.phaseBackends?.[phaseId]
+        || "";
+      return supportsTerminalBackend(phaseBackend);
+    })
+    .map((phaseState) => {
+      const phaseId = phaseState.id || phaseState.name;
+      const phaseStatus = phaseState.status;
+      const phaseInteractionsForPanel = phaseInteractions[phaseId] || [];
+      const phaseBackend = phaseInteractionsForPanel.findLast?.((interaction) => interaction.backend)?.backend
+        || runWorkflowConfig?.phaseBackends?.[phaseId]
+        || "";
+      return {
+        agentSessionId: phaseState.sessionId || "",
+        backendLabel: phaseBackend ? getTerminalBackendLabel(phaseBackend) : "",
+        backendType: phaseBackend,
+        cwd: workflowState?.workFolder || "",
+        interactions: phaseInteractionsForPanel,
+        isRunning: phaseStatus === "in_progress",
+        isStreaming: isStreaming && phaseId === streamingPhase,
+        isPaused: phaseStatus === "paused",
+        isAwaiting: phaseStatus === "awaiting_input",
+        isFailed: phaseStatus === "failed",
+        phaseKey: phaseId,
+        phaseLabel: runWorkflowConfig?.phaseLabels?.[phaseId] || phaseId,
+        runId: workflowState?.runId || urlRunId || "",
+        sessionId: `${taskId || "task"}:${workflowState?.runId || urlRunId || taskId || "run"}:${phaseId || "phase"}`,
+        taskInputs: workflowState?.taskInputs || {},
+        taskTitle: taskId,
+      };
+    });
+  const currentPhaseNeedsTerminal = supportsTerminalBackend(activePhaseBackend);
+  const mountedTerminalPhases = currentPhaseNeedsTerminal && detailPhase
+    ? Array.from(new Set([...openedTerminalPhases, detailPhase]))
+    : openedTerminalPhases;
+  const visibleTerminalPanels = terminalPanels.filter((panel) => mountedTerminalPhases.includes(panel.phaseKey));
 
   useEffect(() => {
     if (workflowState?.worktree?.enabled) {
       setCleanedWorktree(null);
     }
   }, [workflowState?.worktree?.enabled]);
+
+  useEffect(() => {
+    setOpenedTerminalPhases([]);
+  }, [taskId, workflowState?.runId]);
 
   useEffect(() => {
     if (!showWorktreeOpenMenu) return;
@@ -663,6 +727,17 @@ export default function TaskPage() {
     retryPhase(activePhase);
   }
 
+  function handleSelectPhase(nextPhase) {
+    const nextPhaseInteractions = phaseInteractions[nextPhase] || [];
+    const nextPhaseBackend = nextPhaseInteractions.findLast?.((interaction) => interaction.backend)?.backend
+      || runWorkflowConfig?.phaseBackends?.[nextPhase]
+      || "";
+    if (supportsTerminalBackend(nextPhaseBackend)) {
+      setOpenedTerminalPhases((current) => (current.includes(nextPhase) ? current : [...current, nextPhase]));
+    }
+    setSelectedPhase(nextPhase, currentStateKey);
+  }
+
   return (
     <>
       <WindowChrome />
@@ -761,7 +836,7 @@ export default function TaskPage() {
                 phases={phases}
                 workflowConfig={runWorkflowConfig}
                 selectedPhase={detailPhase}
-                onSelect={(phase) => setSelectedPhase(phase, currentStateKey)}
+                onSelect={handleSelectPhase}
               />
             </div>
           </aside>
@@ -771,7 +846,6 @@ export default function TaskPage() {
               <div className="flex min-w-0 items-center gap-3">
                 <div className="min-w-0">
                   <h2 className="truncate text-sm font-semibold text-foreground">Run details</h2>
-                  <p className="truncate text-xs text-muted-foreground">Selected workflow step output and conversation.</p>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -791,6 +865,7 @@ export default function TaskPage() {
               </div>
             </div>
             <StepDetail
+              agentSessionId={activePhaseState?.sessionId || ""}
               taskId={taskId}
               runId={workflowState?.runId || urlRunId || ""}
               workFolder={workflowState?.workFolder || ""}
@@ -800,11 +875,15 @@ export default function TaskPage() {
               interactions={activePhaseInteractions}
               emptyDocumentMessage={emptyDocumentMessage}
               activeBackend={activePhaseBackend}
+              backendType={activePhaseBackend}
               isStreaming={isPhaseStreaming}
               isRunning={isPhaseRunning}
               isPaused={isPhasePaused}
               isAwaiting={isPhaseAwaiting}
               isFailed={isPhaseFailed}
+              phaseStatus={detailStatus || "pending"}
+              phaseUpdatedAt={activePhaseState?.updated || ""}
+              phaseDecision={workflowState?.stepDecisions?.[detailPhase] || null}
               onApprove={approve}
               onReject={reject}
               onOpenDocument={documentOpenTarget ? handleOpenDocument : undefined}
@@ -812,6 +891,8 @@ export default function TaskPage() {
               phaseLabels={runWorkflowConfig?.phaseLabels || {}}
               phaseTypes={runWorkflowConfig?.phaseTypes || {}}
               rejectTargets={runWorkflowConfig?.rejectTargets || {}}
+              conditionRoutes={runWorkflowConfig?.conditionRoutes || {}}
+              terminalPanels={visibleTerminalPanels}
             />
           </section>
         </div>

@@ -169,7 +169,10 @@ function writeRunningMarker(terminal, { backendLabel, interactions, isRunning, i
 }
 
 export default function TaskTerminalPanel({
+  agentSessionId,
   backendLabel,
+  backendType,
+  className = "",
   cwd,
   enableShell = false,
   interactions = [],
@@ -180,6 +183,7 @@ export default function TaskTerminalPanel({
   isFailed = false,
   phaseKey,
   phaseLabel,
+  runId,
   sessionId,
   taskInputs = {},
   taskTitle,
@@ -197,6 +201,7 @@ export default function TaskTerminalPanel({
   const [error, setError] = useState("");
   const [terminalReadyTick, setTerminalReadyTick] = useState(0);
   const activityKey = `${sessionId || ""}:${phaseKey || phaseLabel || ""}`;
+  const restoredSessionKeyRef = useRef("");
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -314,6 +319,8 @@ export default function TaskTerminalPanel({
         window.addEventListener("resize", scheduleResize);
 
         if (enableShell) {
+          const canRestoreFromHistory = backendType === "codex" && !isRunning && !isStreaming && !isPaused && !isAwaiting;
+          const restoreKey = `${backendType || ""}:${agentSessionId || ""}:${sessionId || ""}:${canRestoreFromHistory ? "history" : ""}`;
           const bridgeUrl = await desktopApi.getTerminalBridgeUrl?.();
           if (disposed || terminal !== nextTerminal) return;
           if (!bridgeUrl) throw new Error(t("stepDetail.terminalUnavailable"));
@@ -321,6 +328,10 @@ export default function TaskTerminalPanel({
           const url = new URL(bridgeUrl);
           url.searchParams.set("sessionId", sessionId);
           url.searchParams.set("cwd", cwd || "");
+          let resolveSocketOpen = null;
+          const socketOpenPromise = new Promise((resolve) => {
+            resolveSocketOpen = resolve;
+          });
           socket = new WebSocket(url.toString());
           socket.addEventListener("open", () => {
             if (disposed || terminal !== nextTerminal) return;
@@ -328,6 +339,7 @@ export default function TaskTerminalPanel({
             sendResize();
             flushPendingInput();
             nextTerminal.focus();
+            resolveSocketOpen?.();
           });
           socket.addEventListener("message", (event) => {
             const value = typeof event.data === "string" ? event.data : "";
@@ -346,6 +358,27 @@ export default function TaskTerminalPanel({
           socket.addEventListener("error", () => {
             if (!disposed) setError(t("stepDetail.terminalError"));
           });
+          if (
+            backendType &&
+            !isRunning &&
+            !isStreaming &&
+            !isPaused &&
+            !isAwaiting &&
+            (agentSessionId || canRestoreFromHistory) &&
+            restoredSessionKeyRef.current !== restoreKey
+          ) {
+            await socketOpenPromise;
+            if (disposed || terminal !== nextTerminal) return;
+            restoredSessionKeyRef.current = restoreKey;
+            await desktopApi.restoreTerminalSession?.({
+              taskId: taskTitle,
+              runId: runId || "",
+              phase: phaseKey || phaseLabel || "",
+              backend: backendType,
+              agentSessionId,
+              workFolder: cwd || "",
+            });
+          }
         }
       })
       .catch((err) => {
@@ -363,14 +396,16 @@ export default function TaskTerminalPanel({
       terminal?.dispose();
       if (terminalRef.current === terminal) terminalRef.current = null;
     };
-  }, [cwd, enableShell, sessionId, t]);
+  }, [agentSessionId, backendType, cwd, enableShell, isAwaiting, isPaused, isRunning, isStreaming, phaseKey, phaseLabel, sessionId, t, taskTitle]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
 
     const state = activityStateRef.current;
-    if (state.key !== activityKey) {
+    const activityChanged = state.key !== activityKey;
+    if (activityChanged) {
+      restoredSessionKeyRef.current = "";
       state.key = activityKey;
       state.count = 0;
       state.lastType = "";
@@ -394,13 +429,9 @@ export default function TaskTerminalPanel({
     state.count = interactions.length;
     writeRunningMarker(terminal, { backendLabel, interactions, isRunning, isStreaming, phaseLabel }, state);
   }, [activityKey, backendLabel, cwd, enableShell, interactions, isRunning, isStreaming, phaseLabel, taskInputs, taskTitle, terminalReadyTick]);
-
-  const isInteractive = isRunning || isStreaming || isPaused || isAwaiting || isFailed;
-  const showInactiveHint = !isInteractive && enableShell;
-
   return (
     <aside
-      className="flex min-h-0 flex-col overflow-hidden border-t border-slate-800/80 bg-slate-950 xl:border-l xl:border-t-0"
+      className={`flex min-h-0 flex-col overflow-hidden border-t border-slate-800/80 bg-slate-950 xl:border-l xl:border-t-0 ${className}`.trim()}
       onMouseDownCapture={(event) => {
         event.preventDefault();
         window.requestAnimationFrame(() => terminalRef.current?.focus?.());
@@ -413,14 +444,6 @@ export default function TaskTerminalPanel({
             <span className="flex items-center gap-2">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               {error}
-            </span>
-          </div>
-        ) : null}
-        {showInactiveHint ? (
-          <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded-md border border-slate-700/50 bg-slate-900/95 px-3 py-2 text-xs text-slate-400 shadow-sm">
-            <span className="flex items-center gap-2">
-              <span className="h-2 w-2 shrink-0 rounded-full bg-slate-500" />
-              {t("stepDetail.phaseCompleted")}
             </span>
           </div>
         ) : null}

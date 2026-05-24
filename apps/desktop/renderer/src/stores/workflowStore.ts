@@ -763,12 +763,9 @@ export const useWorkflowStore = create((set, get) => ({
   },
 
   async loadTask(taskId, runId) {
-    console.log("[loadTask] START - taskId:", taskId, "runId:", runId);
     try {
       const stateKey = getWorkflowStateKey(taskId, runId);
-      console.log("[loadTask] stateKey:", stateKey);
       const cachedState = get().workflowStatesByRun[stateKey];
-      console.log("[loadTask] cachedState exists:", !!cachedState);
       if (cachedState) {
         const selectedPhase = getSelectedPhaseFromWorkflowState(cachedState);
         const runningPhase = getRunningPhaseFromWorkflowState(cachedState);
@@ -797,8 +794,6 @@ export const useWorkflowStore = create((set, get) => ({
       }
 
       const { state, messages, outputArtifacts, interactions } = await desktopApi.getTaskState(taskId, runId);
-      console.log("[loadTask] Loaded interactions:", interactions);
-      console.log("[loadTask] Interaction keys:", Object.keys(interactions));
       const currentState = get().workflowStatesByRun[stateKey];
       const displayState = getLatestWorkflowState(state, currentState);
       const displayStateKey = getWorkflowStateKey(displayState.taskId, displayState.runId || runId);
@@ -846,12 +841,6 @@ export const useWorkflowStore = create((set, get) => ({
         },
       });
 
-      console.log("[loadTask] Store updated");
-      console.log("[loadTask] phaseInteractionsByRun[" + displayStateKey + "]:", get().phaseInteractionsByRun[displayStateKey]);
-
-      if (displayState.workFolder && displayState.overallStatus !== "completed") {
-        get().connectWorkflow(taskId, displayState.workFolder, undefined, undefined, displayState.runId || runId || "", "", displayState.workflowFilename || "");
-      }
     } catch (error) {
       console.error("[loadTask] ERROR:", error);
     }

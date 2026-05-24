@@ -5,6 +5,7 @@ import { createRequire } from "module";
 import readline from "readline";
 import { readFile } from "fs/promises";
 import { extname, join, relative, resolve } from "path";
+import { homedir } from "os";
 import { spawn as spawnPty } from "node-pty";
 import { EventEmitter } from "events";
 import { createContentPreview, createContentSummary, formatStepOutputForPrompt } from "./artifacts";
@@ -28,6 +29,7 @@ const AGENT_ENV_EXCLUDES = new Set([
 ]);
 const SHELL_ENV_MARKER = "__DEV_WORKFLOW_SHELL_ENV__";
 const SHELL_ENV_TIMEOUT_MS = 5000;
+const CODEX_HISTORY_PATH = join(homedir(), ".codex", "history.jsonl");
 const shellEnvCache = new Map();
 const liveAgentSessions = new Map();
 
@@ -43,6 +45,10 @@ function createLiveAgentSession(sessionId, processHandle, backend) {
 
 function getLiveAgentSession(sessionId) {
   return liveAgentSessions.get(sessionId) || null;
+}
+
+export function hasLiveInteractiveSession(sessionId) {
+  return Boolean(getLiveAgentSession(sessionId));
 }
 
 function dropLiveAgentSession(sessionId) {
@@ -95,8 +101,111 @@ export function closeInteractiveSession(sessionId) {
   return true;
 }
 
+export async function spawnResumedInteractiveAgentSession(options = {}) {
+  const backend = String(options.backend || "").trim();
+  const resumeSessionId = String(options.sessionId || "").trim();
+  if (!resumeSessionId) throw new Error("sessionId is required");
+
+  const workFolder = options.workFolder || process.cwd();
+  const liveSessionId = String(options.terminalSessionId || resumeSessionId).trim() || resumeSessionId;
+  const abortController = options.abortController || new AbortController();
+  const env = await buildAgentEnv(workFolder);
+  const command = backend === SDK_BACKENDS.CODEX ? getCodexCliPath() : getClaudeCliPath();
+  const args = [];
+
+  if (backend === SDK_BACKENDS.CODEX) {
+    args.push(
+      "resume",
+      "--no-alt-screen",
+      "--sandbox",
+      "danger-full-access",
+      "--cd",
+      workFolder,
+      "--config",
+      "approval_policy=\"never\"",
+      "--config",
+      "sandbox_workspace_write.network_access=true",
+      resumeSessionId,
+    );
+  } else if (backend === SDK_BACKENDS.CLAUDE) {
+    args.push(
+      "--resume",
+      resumeSessionId,
+      "--permission-mode",
+      "bypassPermissions",
+      "--setting-sources",
+      "user,project,local",
+      "--dangerously-skip-permissions",
+      "--no-alt-screen",
+    );
+  } else {
+    throw new Error(`unsupported SDK agent backend ${backend}`);
+  }
+
+  closeInteractiveSession(liveSessionId);
+
+  const child = createSpawnedProcessFromPty(command, args, {
+    cwd: workFolder,
+    env,
+    signal: abortController.signal,
+  });
+  if (!child.stdout) throw new Error(`${backend} CLI has no stdout`);
+
+  createLiveAgentSession(liveSessionId, child, backend);
+
+  const stdout = child.stdout;
+  const onData = (chunk) => {
+    const text = String(chunk || "");
+    if (!text) return;
+    options.onText?.(text);
+  };
+  const onExit = (code, signal) => {
+    stdout.off("data", onData);
+    dropLiveAgentSession(liveSessionId);
+    options.onExit?.(code, signal);
+  };
+
+  stdout.on("data", onData);
+  child.once("exit", onExit);
+
+  return { sessionId: liveSessionId };
+}
+
 export async function runInteractiveAgentSession(options = {}) {
   return await streamInteractiveCli(options);
+}
+
+function matchesCodexHistoryEntry(entry, runId, phase) {
+  const sessionId = String(entry?.session_id || "").trim();
+  const text = String(entry?.text || "");
+  if (!sessionId || !text || !runId || !phase) return false;
+  return text.includes(`Run ID: ${runId}`) && text.includes(`Current step: ${phase}`);
+}
+
+async function findCodexSessionIdFromHistory(runId, phase) {
+  if (!runId || !phase) return "";
+  const raw = await readFile(CODEX_HISTORY_PATH, "utf-8").catch(() => "");
+  if (!raw) return "";
+  const lines = raw.trim().split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (!line) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (matchesCodexHistoryEntry(entry, runId, phase)) return String(entry.session_id || "").trim();
+    } catch {}
+  }
+  return "";
+}
+
+export async function resolvePersistedAgentSessionId(options = {}) {
+  const backend = String(options.backend || "").trim();
+  const explicitSessionId = String(options.sessionId || "").trim();
+  if (explicitSessionId) return explicitSessionId;
+  if (backend === SDK_BACKENDS.CODEX) {
+    return await findCodexSessionIdFromHistory(String(options.runId || "").trim(), String(options.phase || "").trim());
+  }
+  return "";
 }
 
 function isPathInside(parent, child) {
@@ -524,15 +633,17 @@ async function streamInteractiveCli({
   workspaceWrite,
   agent,
   onText,
+  onLiveSession,
   onSession,
 }) {
   const env = await buildAgentEnv(workFolder);
-  const liveSessionId = sessionId || randomUUID();
+  const liveSessionId = randomUUID();
   const command = backend === SDK_BACKENDS.CODEX ? getCodexCliPath() : getClaudeCliPath();
   const args = [];
 
   // 为 Codex 和 Claude 创建项目级别的 Stop hook 来检测完成
   let projectHooksPath = null;
+  let projectConfigPath = null;
   let hookCompletionPromise = null;
   let completionMarkerPath = null;
   let actualSessionId = null;
@@ -545,17 +656,19 @@ async function streamInteractiveCli({
   await mkdir(hookDir, { recursive: true });
   completionMarkerPath = join(hookDir, `completed-${liveSessionId}.txt`);
 
-  // 在项目目录下创建 .claude/settings.json（不是 hooks.json）
   const projectConfigDir = backend === SDK_BACKENDS.CODEX
     ? join(workFolder, ".codex")
     : join(workFolder, ".claude");
-  projectHooksPath = join(projectConfigDir, "settings.json");
+  projectHooksPath = backend === SDK_BACKENDS.CODEX
+    ? join(projectConfigDir, "hooks.json")
+    : join(projectConfigDir, "settings.json");
+  projectConfigPath = backend === SDK_BACKENDS.CODEX
+    ? join(projectConfigDir, "config.toml")
+    : null;
 
   try {
     await mkdir(projectConfigDir, { recursive: true });
 
-    // 创建项目级别的 hooks 配置
-    // 根据官方文档，hooks 应该在 settings.json 中，并且需要额外的 hooks 数组嵌套
     const projectHooksConfig = {
       hooks: {
         Stop: [
@@ -564,15 +677,17 @@ async function streamInteractiveCli({
               {
                 type: "command",
                 command: `touch "${completionMarkerPath}"`,
-                timeout: 5
-              }
-            ]
-          }
-        ]
-      }
+                timeout: 5,
+              },
+            ],
+          },
+        ],
+      },
     };
-
     await writeFile(projectHooksPath, JSON.stringify(projectHooksConfig, null, 2));
+    if (backend === SDK_BACKENDS.CODEX) {
+      await writeFile(projectConfigPath, "[hooks]\npath = \".codex/hooks.json\"\n");
+    }
   } catch (error) {
     console.warn("Failed to create project hooks:", error);
   }
@@ -610,8 +725,10 @@ async function streamInteractiveCli({
   });
 
   if (backend === SDK_BACKENDS.CODEX) {
-    args.push(
+    const codexArgs = [
       "--no-alt-screen",
+      "--enable",
+      "codex_hooks",
       "--sandbox",
       "danger-full-access",
       "--cd",
@@ -620,11 +737,18 @@ async function streamInteractiveCli({
       "approval_policy=\"never\"",
       "--config",
       "sandbox_workspace_write.network_access=true",
-    );
+    ];
     const modelReasoningEffort = agent.options?.thread?.modelReasoningEffort || "";
-    if (agent.model) args.push("--model", agent.model);
-    if (modelReasoningEffort) args.push("--config", `model_reasoning_effort="${modelReasoningEffort}"`);
-    for (const imagePath of imagePaths || []) args.push("--image", imagePath);
+    if (agent.model) codexArgs.push("--model", agent.model);
+    if (modelReasoningEffort) codexArgs.push("--config", `model_reasoning_effort="${modelReasoningEffort}"`);
+
+    if (sessionId) {
+      args.push("resume", ...codexArgs, sessionId);
+    } else {
+      args.push(...codexArgs);
+      // 只有新会话才添加图片
+      for (const imagePath of imagePaths || []) args.push("--image", imagePath);
+    }
   } else {
     args.push(
       "--permission-mode",
@@ -636,10 +760,18 @@ async function streamInteractiveCli({
     if (agent.model) args.push("--model", agent.model);
     const maxTurns = agent.options?.maxTurns ?? 50;
     args.push("--max-turns", String(maxTurns));
+
+    // 如果有 sessionId，使用 --resume 恢复会话
+    if (sessionId) {
+      args.push("--resume", sessionId);
+    }
   }
 
-  const interactivePrompt = buildInteractivePrompt(prompt, backend === SDK_BACKENDS.CODEX ? imagePaths : []);
-  if (interactivePrompt) args.push(interactivePrompt);
+  // 只有在非 resume 模式下才传递 prompt
+  if (!sessionId) {
+    const interactivePrompt = buildInteractivePrompt(prompt, backend === SDK_BACKENDS.CODEX ? imagePaths : []);
+    if (interactivePrompt) args.push(interactivePrompt);
+  }
 
   const child = createSpawnedProcessFromPty(command, args, {
     cwd: workFolder || process.cwd(),
@@ -649,7 +781,7 @@ async function streamInteractiveCli({
   if (!child.stdout) throw new Error(`${backend} CLI has no stdout`);
 
   createLiveAgentSession(liveSessionId, child, backend);
-  await onSession(liveSessionId);
+  await onLiveSession?.(liveSessionId);
 
   // 监听输出以捕获实际的 session ID
   // Claude Code 在启动时会输出 session ID
@@ -672,12 +804,13 @@ async function streamInteractiveCli({
     // Claude Code 输出格式可能包含 session ID
     if (!sessionIdCaptured) {
       // 匹配 UUID 格式的 session ID
-      const sessionIdMatch = text.match(/session[_\s-]?id[:\s]+([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+      const sessionIdMatch = text.match(/(?:session|thread)[_\s-]?id[:\s]+([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
       if (sessionIdMatch) {
         const capturedSessionId = sessionIdMatch[1];
         if (capturedSessionId !== liveSessionId) {
           actualSessionId = capturedSessionId;
           sessionIdCaptured = true;
+          await onSession?.(capturedSessionId);
 
           // 更新 hook 配置
           const actualMarkerPath = join(hookDir, `completed-${actualSessionId}.txt`);
@@ -691,12 +824,12 @@ async function streamInteractiveCli({
                       {
                         type: "command",
                         command: `touch "${actualMarkerPath}"`,
-                        timeout: 5
-                      }
-                    ]
-                  }
-                ]
-              }
+                        timeout: 5,
+                      },
+                    ],
+                  },
+                ],
+              },
             };
             await writeFile(projectHooksPath, JSON.stringify(projectHooksConfig, null, 2));
           } catch (error) {
@@ -743,14 +876,19 @@ async function streamInteractiveCli({
     stdout.off("data", onDataListener);
     dropLiveAgentSession(liveSessionId);
 
-    // 清理项目级别的 settings.json 文件
+    // 清理项目级别的 hooks 配置文件
     if (projectHooksPath) {
       try {
         const { unlink } = await import("fs/promises");
         await unlink(projectHooksPath);
       } catch {}
     }
-
+    if (projectConfigPath) {
+      try {
+        const { unlink } = await import("fs/promises");
+        await unlink(projectConfigPath);
+      } catch {}
+    }
     // 清理标记文件（可能有两个：liveSessionId 和 actualSessionId）
     try {
       const { unlink } = await import("fs/promises");
@@ -766,7 +904,7 @@ async function streamInteractiveCli({
     }
   }
 
-  return { sessionId: liveSessionId, fallbackResult: transcript };
+  return { sessionId: actualSessionId || sessionId || "", liveSessionId, fallbackResult: transcript };
 }
 
 function resolveOutputPath(taskDir, step, state) {
@@ -823,6 +961,10 @@ export function createSdkAgentAdapter(options = {}) {
         },
         onTool: async (log) => {
           await onEvent({ type: "tool_use", step: step.id, phase: step.id, backend, log });
+        },
+        onLiveSession: async (value) => {
+          if (!value) return;
+          await onEvent({ type: "interactive_session_attached", step: step.id, phase: step.id, sessionKey: sessionKey || step.id, backend, sessionId: value });
         },
         onSession: async (value) => {
           if (!value) return;

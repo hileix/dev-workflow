@@ -119,6 +119,8 @@ function createWebApi() {
       return data;
     },
     getTerminalBridgeUrl: async () => "",
+    attachRunningTerminalSessions: async () => ({ ok: false, attachedPhases: [] }),
+    restoreTerminalSession: async () => ({ ok: false }),
     startWorkflow: async (payload) => {
       activeTaskId = payload.taskId;
       activeRunId = payload.runId || "";

@@ -31,7 +31,14 @@ import { upsertTask } from "../../../packages/core-models/workfolders";
 import { activeWorkflows, getPhaseContent, normalizeAiBackend, normalizeWorktreeNamingProvider, readPhaseOutputArtifacts, stopActiveWorkflow, WORKTREE_NAMING_PROVIDERS } from "../../../packages/core-lib/claude";
 import { prepareWorktree, removeWorktree } from "../../../packages/core-lib/worktree";
 import { buildWorkflowGraphFromDsl, createAppSdkAgentAdapter, createSdkAgentAdapter, FileCheckpointSaver } from "../../../packages/core-lib/langgraph-runtime/index";
-import { closeInteractiveSession, interruptInteractiveSession, sendInteractiveSessionInput } from "../../../packages/core-lib/langgraph-runtime/sdk-agent-adapter";
+import {
+  closeInteractiveSession,
+  hasLiveInteractiveSession,
+  interruptInteractiveSession,
+  resolvePersistedAgentSessionId,
+  sendInteractiveSessionInput,
+  spawnResumedInteractiveAgentSession,
+} from "../../../packages/core-lib/langgraph-runtime/sdk-agent-adapter";
 import { nanoid } from "nanoid";
 
 const DEFAULT_WORKTREE_NAMING_SKILL = `Choose a concise Git branch name for this workflow run.
@@ -74,6 +81,79 @@ function renderTerminalToolLog(log) {
 
 export function setWorkflowTerminalBridge(bridge) {
   terminalBridge = bridge || null;
+}
+
+export async function attachRunningWorkflowTerminalSessions({
+  taskId,
+  runId = "",
+}) {
+  if (!terminalBridge) throw new Error("terminal bridge unavailable");
+  if (!taskId) throw new Error("taskId is required");
+
+  const state = await readState(taskId, runId || "");
+  const stateRunId = state.runId || runId || "";
+  const workFolder = state.workFolder || "";
+  const wf = activeWorkflows.get(taskId);
+  const attachedPhases = [];
+
+  for (const phase of state.phases || []) {
+    const phaseId = phase.id || phase.name || "";
+    if (!phaseId || phase.status !== "in_progress") continue;
+    const terminalSessionId = getTerminalSessionId(taskId, stateRunId, phaseId);
+    const liveSessionId = String(wf?.phaseLiveSessionMap?.[phaseId] || "").trim();
+    if (!liveSessionId || !hasLiveInteractiveSession(liveSessionId)) continue;
+    terminalBridge.setInteractiveSession(terminalSessionId, liveSessionId);
+    attachedPhases.push(phaseId);
+  }
+
+  return {
+    ok: true,
+    runId: stateRunId,
+    workFolder,
+    attachedPhases,
+  };
+}
+
+export async function restoreWorkflowTerminalSession({
+  taskId,
+  runId = "",
+  phase = "",
+  backend = "",
+  agentSessionId = "",
+  workFolder = "",
+}) {
+  const terminalSessionId = getTerminalSessionId(taskId, runId, phase);
+  if (!terminalBridge) throw new Error("terminal bridge unavailable");
+  if (!taskId || !phase || !backend || !workFolder) {
+    throw new Error("restore terminal session requires taskId, phase, backend, sessionId, and workFolder");
+  }
+  const resolvedAgentSessionId = await resolvePersistedAgentSessionId({
+    backend,
+    sessionId: agentSessionId,
+    runId,
+    phase,
+  });
+  if (!resolvedAgentSessionId) {
+    throw new Error("restore terminal session requires a resumable agent session");
+  }
+
+  terminalBridge.clearSession(terminalSessionId, workFolder);
+  terminalBridge.setInteractiveSession(terminalSessionId, terminalSessionId);
+
+  await spawnResumedInteractiveAgentSession({
+    backend,
+    sessionId: resolvedAgentSessionId,
+    terminalSessionId,
+    workFolder,
+    onText: (text) => {
+      writeTerminalChunk(taskId, runId, phase, workFolder, text);
+    },
+    onExit: (code) => {
+      terminalBridge?.closeSession(terminalSessionId, typeof code === "number" ? code : 0);
+    },
+  });
+
+  return { ok: true, terminalSessionId };
 }
 
 function bumpInvokeToken(wf) {
@@ -436,6 +516,11 @@ function createGraph(taskId, runId, wf, imagePaths = []) {
     send: (message) => {
       if (message?.type === "backend_selected" && message.phase) {
         wf.currentPhase = message.phase;
+      } else if (message?.type === "__terminal_bridge__" && message.terminalEventType === "session_attached" && message.phase) {
+        wf.phaseLiveSessionMap = {
+          ...(wf.phaseLiveSessionMap || {}),
+          [message.phase]: message.sessionId || "",
+        };
       }
       wf.send?.(message);
     },
@@ -584,6 +669,7 @@ export async function startWorkflowSession(taskId, workFolder, taskInputs, image
         runId: existingRunId,
         workflow: existingState.workflowDefinition,
         currentPhase: existingState.currentPhase,
+        phaseLiveSessionMap: {},
       });
     }
     send({ type: "state", state: existingState });
@@ -670,6 +756,7 @@ export async function startWorkflowSession(taskId, workFolder, taskInputs, image
     runId: finalRunId,
     workflow,
     currentPhase: stepOrder[0],
+    phaseLiveSessionMap: {},
   });
   await upsertTask(workFolder, taskId, "in_progress", finalRunId);
   send({ type: "state", state });

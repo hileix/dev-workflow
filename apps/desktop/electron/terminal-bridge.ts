@@ -119,8 +119,7 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
   };
 
   const setInteractiveSession = (sessionId: string, interactiveSessionId: string) => {
-    const session = sessions.get(sessionId);
-    if (!session) return;
+    const session = ensureSession(sessionId, "");
     session.interactiveSessionId = String(interactiveSessionId || "");
     if (!session.interactiveSessionId || session.pendingInput.length === 0) return;
     const pendingInput = session.pendingInput.splice(0, session.pendingInput.length);
