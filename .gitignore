@@ -5,5 +5,6 @@ apps/desktop/electron-dist/
 renderer/node_modules/
 
 references/
+external-docs/
 dist/
 out/
