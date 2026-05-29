@@ -181,6 +181,7 @@ export default function TaskTerminalPanel({
   isPaused = false,
   isAwaiting = false,
   isFailed = false,
+  isCompleted = false,
   phaseKey,
   phaseLabel,
   runId,
@@ -328,6 +329,15 @@ export default function TaskTerminalPanel({
           const url = new URL(bridgeUrl);
           url.searchParams.set("sessionId", sessionId);
           url.searchParams.set("cwd", cwd || "");
+          const rerunInputPayload = {
+            taskId: taskTitle,
+            runId: runId || "",
+            phase: phaseKey || phaseLabel || "",
+          };
+          if (isCompleted) {
+            await desktopApi.attachRerunTerminalInput?.(rerunInputPayload);
+            if (disposed || terminal !== nextTerminal) return;
+          }
           let resolveSocketOpen = null;
           const socketOpenPromise = new Promise((resolve) => {
             resolveSocketOpen = resolve;
@@ -337,8 +347,8 @@ export default function TaskTerminalPanel({
             if (disposed || terminal !== nextTerminal) return;
             socketReady = true;
             sendResize();
-            flushPendingInput();
-            nextTerminal.focus();
+            if (!isCompleted) flushPendingInput();
+            if (!isCompleted) nextTerminal.focus();
             resolveSocketOpen?.();
           });
           socket.addEventListener("message", (event) => {
@@ -379,6 +389,12 @@ export default function TaskTerminalPanel({
               workFolder: cwd || "",
             });
           }
+          if (isCompleted) {
+            await desktopApi.attachRerunTerminalInput?.(rerunInputPayload);
+            if (disposed || terminal !== nextTerminal) return;
+            nextTerminal.focus();
+            flushPendingInput();
+          }
         }
       })
       .catch((err) => {
@@ -396,7 +412,7 @@ export default function TaskTerminalPanel({
       terminal?.dispose();
       if (terminalRef.current === terminal) terminalRef.current = null;
     };
-  }, [agentSessionId, backendType, cwd, enableShell, isAwaiting, isPaused, isRunning, isStreaming, phaseKey, phaseLabel, sessionId, t, taskTitle]);
+  }, [agentSessionId, backendType, cwd, enableShell, isAwaiting, isCompleted, isPaused, isRunning, isStreaming, phaseKey, phaseLabel, runId, sessionId, t, taskTitle]);
 
   useEffect(() => {
     const terminal = terminalRef.current;

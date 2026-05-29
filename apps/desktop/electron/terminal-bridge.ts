@@ -10,12 +10,16 @@ type TerminalControlMessage =
   | { type: "close" }
   | { cols: number; rows: number; type: "resize" };
 
+type TerminalInputHandler = (line: string) => void | Promise<void>;
+
 interface TerminalSession {
   clients: Set<WebSocket>;
   closed: boolean;
   cwd: string;
   exitCode: number | null;
   id: string;
+  inputHandler: TerminalInputHandler | null;
+  inputLine: string;
   pendingInput: string[];
   output: string;
   interactiveSessionId: string;
@@ -28,6 +32,7 @@ interface StartTerminalBridgeResult {
   closeSession: (sessionId: string, exitCode?: number | null) => void;
   clearSession: (sessionId: string, cwd?: string) => void;
   setInteractiveSession: (sessionId: string, interactiveSessionId: string) => void;
+  setInputHandler: (sessionId: string, handler: TerminalInputHandler | null) => void;
   getUrl: () => string;
 }
 
@@ -90,6 +95,8 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
       cwd: cwd || process.cwd(),
       exitCode: null,
       id: sessionId,
+      inputHandler: null,
+      inputLine: "",
       pendingInput: [],
       output: "",
       interactiveSessionId: "",
@@ -100,27 +107,78 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
     return session;
   };
 
-  const appendToSession = (sessionId: string, cwd: string, chunk: string) => {
+  const appendToExistingSession = (session: TerminalSession, chunk: string) => {
     if (!chunk) return;
-    const session = ensureSession(sessionId, cwd);
     if (session.closed) return;
     session.output = trimBuffer(`${session.output}${chunk}`);
     broadcast(session, chunk);
+  };
+
+  const appendToSession = (sessionId: string, cwd: string, chunk: string) => {
+    appendToExistingSession(ensureSession(sessionId, cwd), chunk);
+  };
+
+  const submitInputLine = (session: TerminalSession) => {
+    const line = session.inputLine.trim();
+    session.inputLine = "";
+    if (!line || !session.inputHandler) return;
+    void Promise.resolve(session.inputHandler(line)).catch((error) => {
+      appendToExistingSession(session, `\r\n# ${error?.message || "Terminal input failed"}\r\n`);
+    });
+  };
+
+  const handleInputLine = (session: TerminalSession, text: string) => {
+    for (const char of Array.from(text)) {
+      if (char === "\r" || char === "\n") {
+        appendToExistingSession(session, "\r\n");
+        submitInputLine(session);
+        continue;
+      }
+      if (char === "\u007f") {
+        if (!session.inputLine) continue;
+        session.inputLine = Array.from(session.inputLine).slice(0, -1).join("");
+        appendToExistingSession(session, "\b \b");
+        continue;
+      }
+      if (char === "\u0003") {
+        session.inputLine = "";
+        appendToExistingSession(session, "^C\r\n");
+        continue;
+      }
+      if (char === "\t" || char >= " ") {
+        session.inputLine += char;
+        appendToExistingSession(session, char);
+      }
+    }
   };
 
   const clearSession = (sessionId: string, cwd = "") => {
     const session = ensureSession(sessionId, cwd);
     session.closed = false;
     session.exitCode = null;
+    session.inputHandler = null;
+    session.inputLine = "";
     session.interactiveSessionId = "";
     session.pendingInput = [];
     session.output = "";
     broadcast(session, JSON.stringify({ type: "reset" }));
   };
 
+  const setInputHandler = (sessionId: string, handler: TerminalInputHandler | null) => {
+    const session = ensureSession(sessionId, "");
+    session.inputHandler = handler;
+    session.inputLine = "";
+    if (!handler || session.pendingInput.length === 0) return;
+    const pendingInput = session.pendingInput.splice(0, session.pendingInput.length);
+    for (const text of pendingInput) {
+      handleInputLine(session, text);
+    }
+  };
+
   const setInteractiveSession = (sessionId: string, interactiveSessionId: string) => {
     const session = ensureSession(sessionId, "");
     session.interactiveSessionId = String(interactiveSessionId || "");
+    if (session.inputHandler) return;
     if (!session.interactiveSessionId || session.pendingInput.length === 0) return;
     const pendingInput = session.pendingInput.splice(0, session.pendingInput.length);
     for (const text of pendingInput) {
@@ -133,6 +191,8 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
     if (!session) return;
     session.closed = true;
     session.exitCode = exitCode;
+    session.inputHandler = null;
+    session.inputLine = "";
     session.interactiveSessionId = "";
     session.pendingInput = [];
     broadcast(session, JSON.stringify({ type: "exit", code: exitCode }));
@@ -177,18 +237,23 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
           }
         }
       } catch {
-        const session = sessions.get(sessionId);
-        const interactiveSessionId = session?.interactiveSessionId || "";
-        if (!interactiveSessionId) {
-          if (session) session.pendingInput.push(text);
-          return;
-        }
-        if (text === "\u0003") {
-          interruptInteractiveSession(interactiveSessionId);
-          return;
-        }
-        writeInteractiveSessionInput(interactiveSessionId, text);
       }
+
+      const session = sessions.get(sessionId);
+      if (session?.inputHandler) {
+        handleInputLine(session, text);
+        return;
+      }
+      const interactiveSessionId = session?.interactiveSessionId || "";
+      if (!interactiveSessionId) {
+        if (session) session.pendingInput.push(text);
+        return;
+      }
+      if (text === "\u0003") {
+        interruptInteractiveSession(interactiveSessionId);
+        return;
+      }
+      writeInteractiveSessionInput(interactiveSessionId, text);
     });
 
     socket.on("close", () => {
@@ -230,6 +295,7 @@ export const startTerminalBridge = async (): Promise<StartTerminalBridgeResult> 
     closeSession,
     clearSession,
     setInteractiveSession,
+    setInputHandler,
     getUrl: () => `ws://127.0.0.1:${address.port}`,
   };
 };

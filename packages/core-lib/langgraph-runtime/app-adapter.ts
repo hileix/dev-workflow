@@ -194,6 +194,8 @@ export function createAppSdkAgentAdapter({ taskId, runId, send, workFolder, task
           backend: event.backend,
         }, runId);
         await appendToPhaseFile(taskId, phase, event.text, runId);
+      } else if (event.type === "terminal_text_delta") {
+        terminalWriter("text_delta", { phase, backend: event.backend, text: event.text });
       } else if (event.type === "tool_use") {
         send({ type: "tool_use", phase, name: event.backend, log: event.log });
         terminalWriter("tool_use", { phase, backend: event.backend, log: event.log });

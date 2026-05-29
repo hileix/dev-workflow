@@ -143,6 +143,17 @@
     text-orientation: mixed;
   }
 
+  .workflow-terminal-output .xterm .xterm-viewport,
+  .workflow-terminal-output .xterm .composition-view {
+    background-color: #0b1020 !important;
+  }
+
+  .workflow-terminal-output .xterm .composition-view {
+    color: #e2e8f0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
   .react-flow {
     background: var(--bg);
     color: var(--fg);

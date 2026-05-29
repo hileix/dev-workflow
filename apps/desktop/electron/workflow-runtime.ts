@@ -1,6 +1,6 @@
 import { Command, INTERRUPT, isInterrupted } from "@langchain/langgraph";
 import OpenAI from "openai";
-import { realpath, stat } from "fs/promises";
+import { realpath, rm, stat } from "fs/promises";
 import { join, relative, resolve } from "path";
 import { getBaseDir, readAiApiProfileSync, readAiApiProfilesSync, readAiBackendOverrideSync } from "../../../packages/core-models/config";
 import { readManagedSkillContentSync } from "../../../packages/core-models/skills";
@@ -12,6 +12,7 @@ import {
   getWorkflowRejectTargets,
   getWorkflowStepOrder,
   getWorkflowStepType,
+  interpolate,
   isWorkflowAutoStep,
   readWorkflowFileSync,
 } from "../../../packages/core-models/workflow";
@@ -83,6 +84,46 @@ export function setWorkflowTerminalBridge(bridge) {
   terminalBridge = bridge || null;
 }
 
+function attachLiveSessionToTerminal(taskId, runId, phase, interactiveSessionId) {
+  if (!terminalBridge || !taskId || !phase || !interactiveSessionId || !hasLiveInteractiveSession(interactiveSessionId)) return false;
+  const terminalSessionId = getTerminalSessionId(taskId, runId, phase);
+  terminalBridge.setInteractiveSession(terminalSessionId, interactiveSessionId);
+  const wf = activeWorkflows.get(taskId);
+  if (wf) {
+    wf.phaseLiveSessionMap = {
+      ...(wf.phaseLiveSessionMap || {}),
+      [phase]: interactiveSessionId,
+    };
+  }
+  return true;
+}
+
+function handleTerminalBridgeEvent(taskId, runId, event = {}) {
+  const stateRunId = runId || event.runId || "";
+  const wf = activeWorkflows.get(taskId);
+  const cwd = event.cwd || wf?.workFolder || "";
+  const phase = event.phase || "";
+  if (event.terminalEventType === "phase_start") {
+    const backend = event.backend ? ` ${event.backend}` : "";
+    const runSuffix = event.runIndex ? ` run ${event.runIndex}` : "";
+    writeTerminalLine(taskId, stateRunId, phase, cwd, "");
+    writeTerminalLine(taskId, stateRunId, phase, cwd, `$ workflow phase ${phase}${backend}${runSuffix}`);
+  } else if (event.terminalEventType === "backend_selected") {
+    writeTerminalLine(taskId, stateRunId, phase, cwd, "");
+    writeTerminalLine(taskId, stateRunId, phase, cwd, `$ ${event.backend || "agent"} running`);
+  } else if (event.terminalEventType === "tool_use") {
+    const rendered = renderTerminalToolLog(event.log || event.backend || "tool");
+    if (rendered) {
+      writeTerminalLine(taskId, stateRunId, phase, cwd, "");
+      writeTerminalLine(taskId, stateRunId, phase, cwd, `$ ${rendered}`);
+    }
+  } else if (event.terminalEventType === "text_delta") {
+    writeTerminalChunk(taskId, stateRunId, phase, cwd, String(event.text || ""));
+  } else if (event.terminalEventType === "session_attached") {
+    attachLiveSessionToTerminal(taskId, stateRunId, phase, event.sessionId || "");
+  }
+}
+
 export async function attachRunningWorkflowTerminalSessions({
   taskId,
   runId = "",
@@ -90,20 +131,17 @@ export async function attachRunningWorkflowTerminalSessions({
   if (!terminalBridge) throw new Error("terminal bridge unavailable");
   if (!taskId) throw new Error("taskId is required");
 
-  const state = await readState(taskId, runId || "");
-  const stateRunId = state.runId || runId || "";
-  const workFolder = state.workFolder || "";
   const wf = activeWorkflows.get(taskId);
+  const state = await readState(taskId, runId || wf?.runId || "");
+  const stateRunId = state.runId || runId || wf?.runId || "";
+  const workFolder = state.workFolder || "";
   const attachedPhases = [];
 
   for (const phase of state.phases || []) {
     const phaseId = phase.id || phase.name || "";
-    if (!phaseId || phase.status !== "in_progress") continue;
-    const terminalSessionId = getTerminalSessionId(taskId, stateRunId, phaseId);
+    if (!phaseId) continue;
     const liveSessionId = String(wf?.phaseLiveSessionMap?.[phaseId] || "").trim();
-    if (!liveSessionId || !hasLiveInteractiveSession(liveSessionId)) continue;
-    terminalBridge.setInteractiveSession(terminalSessionId, liveSessionId);
-    attachedPhases.push(phaseId);
+    if (attachLiveSessionToTerminal(taskId, stateRunId, phaseId, liveSessionId)) attachedPhases.push(phaseId);
   }
 
   return {
@@ -126,6 +164,11 @@ export async function restoreWorkflowTerminalSession({
   if (!terminalBridge) throw new Error("terminal bridge unavailable");
   if (!taskId || !phase || !backend || !workFolder) {
     throw new Error("restore terminal session requires taskId, phase, backend, sessionId, and workFolder");
+  }
+  const wf = activeWorkflows.get(taskId);
+  const liveSessionId = String(wf?.phaseLiveSessionMap?.[phase] || "").trim();
+  if (attachLiveSessionToTerminal(taskId, runId, phase, liveSessionId)) {
+    return { ok: true, terminalSessionId, source: "live" };
   }
   const resolvedAgentSessionId = await resolvePersistedAgentSessionId({
     backend,
@@ -156,6 +199,37 @@ export async function restoreWorkflowTerminalSession({
   return { ok: true, terminalSessionId };
 }
 
+export async function attachRerunWorkflowTerminalInput({
+  taskId,
+  runId = "",
+  phase = "",
+}, sender) {
+  if (!terminalBridge) throw new Error("terminal bridge unavailable");
+  if (!taskId || !phase) throw new Error("taskId and phase are required");
+
+  const wf = activeWorkflows.get(taskId);
+  const state = await readState(taskId, runId || wf?.runId || "");
+  const stateRunId = state.runId || runId || wf?.runId || "";
+  const terminalSessionId = getTerminalSessionId(taskId, stateRunId, phase);
+  const phaseState = (state.phases || []).find((item) => (item.id || item.name) === phase);
+  if (phaseState?.status !== "completed") {
+    terminalBridge.setInputHandler?.(terminalSessionId, null);
+    return { ok: true, attached: false, terminalSessionId };
+  }
+
+  let pending = false;
+  terminalBridge.setInputHandler?.(terminalSessionId, async (text) => {
+    if (pending) return;
+    pending = true;
+    try {
+      await rerunWorkflowPhase(taskId, phase, text, sender, stateRunId);
+    } finally {
+      pending = false;
+    }
+  });
+  return { ok: true, attached: true, terminalSessionId };
+}
+
 function bumpInvokeToken(wf) {
   if (!wf) return 0;
   wf.invokeToken = (wf.invokeToken || 0) + 1;
@@ -168,6 +242,21 @@ function isCurrentInvoke(taskId, wf, invokeToken) {
 
 async function readLatestState(taskId, runId) {
   return await readState(taskId, runId).catch(() => null);
+}
+
+async function clearPhaseRunFiles(taskId, runId, workflow, state, phases = []) {
+  const taskRunDir = await taskDir(taskId, runId);
+  for (const phase of phases) {
+    await rm(join(taskRunDir, "messages", `${phase}.md`), { force: true }).catch(() => {});
+    await rm(join(taskRunDir, "interactions", `${phase}.jsonl`), { force: true }).catch(() => {});
+    const step = workflow?.steps?.find((item) => item.id === phase);
+    for (const output of step?.outputs || []) {
+      if (!output?.filename) continue;
+      const outputPath = resolve(taskRunDir, interpolate(output.filename, { taskId, runId, ...(state.taskInputs || {}) }));
+      if (!isPathInside(taskRunDir, outputPath)) continue;
+      await rm(outputPath, { force: true }).catch(() => {});
+    }
+  }
 }
 
 function isAbortError(error) {
@@ -203,30 +292,7 @@ async function getSafeRunImagePaths(taskId, runId, images = []) {
 function createEmitter(sender, taskId, runId = "") {
   return (event = {}) => {
     if (event?.type === "__terminal_bridge__") {
-      const stateRunId = runId || event.runId || "";
-      const wf = activeWorkflows.get(taskId);
-      const cwd = event.cwd || wf?.workFolder || "";
-      const phase = event.phase || "";
-      const terminalSessionId = getTerminalSessionId(taskId, stateRunId, phase);
-      if (event.terminalEventType === "phase_start") {
-        const backend = event.backend ? ` ${event.backend}` : "";
-        const runSuffix = event.runIndex ? ` run ${event.runIndex}` : "";
-        writeTerminalLine(taskId, stateRunId, phase, cwd, "");
-        writeTerminalLine(taskId, stateRunId, phase, cwd, `$ workflow phase ${phase}${backend}${runSuffix}`);
-      } else if (event.terminalEventType === "backend_selected") {
-        writeTerminalLine(taskId, stateRunId, phase, cwd, "");
-        writeTerminalLine(taskId, stateRunId, phase, cwd, `$ ${event.backend || "agent"} running`);
-      } else if (event.terminalEventType === "tool_use") {
-        const rendered = renderTerminalToolLog(event.log || event.backend || "tool");
-        if (rendered) {
-          writeTerminalLine(taskId, stateRunId, phase, cwd, "");
-          writeTerminalLine(taskId, stateRunId, phase, cwd, `$ ${rendered}`);
-        }
-      } else if (event.terminalEventType === "text_delta") {
-        writeTerminalChunk(taskId, stateRunId, phase, cwd, String(event.text || ""));
-      } else if (event.terminalEventType === "session_attached") {
-        terminalBridge?.setInteractiveSession(terminalSessionId, event.sessionId || "");
-      }
+      handleTerminalBridgeEvent(taskId, runId, event);
       return;
     }
 
@@ -400,6 +466,53 @@ function syncPhaseStatusesAroundCurrent(state, workflow) {
   }
 }
 
+function resetStateFromPhase(state, workflow, phase) {
+  const order = getWorkflowStepOrder(workflow);
+  const startIndex = order.indexOf(phase);
+  if (startIndex < 0) throw new Error(`phase not found: ${phase}`);
+  const resetPhases = order.slice(startIndex);
+  const resetSet = new Set(resetPhases);
+  const pendingSet = new Set(order.slice(startIndex + 1));
+  const now = new Date().toISOString();
+
+  state.currentPhase = phase;
+  state.currentStep = phase;
+  state.overallStatus = "in_progress";
+
+  for (const item of state.phases || []) {
+    const id = item.id || item.name;
+    if (id === phase) {
+      item.status = "in_progress";
+      item.updated = now;
+      item.sessionId = null;
+    } else if (pendingSet.has(id)) {
+      item.status = "pending";
+      item.updated = now;
+      item.sessionId = null;
+    }
+  }
+
+  for (const item of state.steps || []) {
+    const id = item.id || item.name;
+    if (id === phase) {
+      item.status = "in_progress";
+      item.updated = now;
+      item.sessionId = null;
+    } else if (pendingSet.has(id)) {
+      item.status = "pending";
+      item.updated = now;
+      item.sessionId = null;
+    }
+  }
+
+  for (const key of ["sessionMap", "stepOutputs", "stepArtifacts", "stepDecisions", "pendingMessages", "pendingImagePaths"]) {
+    state[key] = { ...(state[key] || {}) };
+    for (const phaseId of resetSet) delete state[key][phaseId];
+  }
+
+  return resetPhases;
+}
+
 async function persistLangGraphState(taskId, runId, langState, workflow, shouldPersist = () => true) {
   const state = await readState(taskId, runId);
   const runtimeWorkflow = workflow || state.workflowDefinition || getWorkflow();
@@ -514,13 +627,17 @@ function createGraph(taskId, runId, wf, imagePaths = []) {
     taskId,
     runId,
     send: (message) => {
-      if (message?.type === "backend_selected" && message.phase) {
+      if (message?.type === "__terminal_bridge__") {
+        handleTerminalBridgeEvent(taskId, runId, message);
+        if (message.terminalEventType === "session_attached" && message.phase) {
+          wf.phaseLiveSessionMap = {
+            ...(wf.phaseLiveSessionMap || {}),
+            [message.phase]: message.sessionId || "",
+          };
+        }
+        return;
+      } else if (message?.type === "backend_selected" && message.phase) {
         wf.currentPhase = message.phase;
-      } else if (message?.type === "__terminal_bridge__" && message.terminalEventType === "session_attached" && message.phase) {
-        wf.phaseLiveSessionMap = {
-          ...(wf.phaseLiveSessionMap || {}),
-          [message.phase]: message.sessionId || "",
-        };
       }
       wf.send?.(message);
     },
@@ -576,11 +693,8 @@ async function invokeGraph(taskId, runId, input) {
   if (isInterrupted(result)) return state;
   if (state.overallStatus === "completed") {
     const completedPhase = state.currentPhase || state.currentStep || "";
-    const completedSessionId = state.sessionMap?.[completedPhase] || "";
     writeTerminalLine(taskId, runId, completedPhase, state.workFolder || "", "");
     writeTerminalLine(taskId, runId, completedPhase, state.workFolder || "", "# workflow completed");
-    terminalBridge?.closeSession(getTerminalSessionId(taskId, runId, completedPhase), 0);
-    if (completedSessionId) closeInteractiveSession(completedSessionId);
     await finalizeWorktreeIfNeeded(state);
     await upsertTask(state.originalWorkFolder || state.workFolder, taskId, "completed", state.runId || runId, { create: false });
     return state;
@@ -891,6 +1005,89 @@ export async function sendWorkflowMessage(taskId, text, images, sender, runId = 
 
   const workflow = getRuntimeWorkflow(wf, state);
   if (!isWorkflowAutoStep(workflow, phase)) return;
+}
+
+export async function rerunWorkflowPhase(taskId, phase, text, sender, runId = "") {
+  let wf = activeWorkflows.get(taskId);
+  const state = await readState(taskId, runId || wf?.runId || "");
+  const stateRunId = state.runId || runId || wf?.runId || "";
+  const workflow = getRuntimeWorkflow(wf, state);
+  if (!isWorkflowAutoStep(workflow, phase)) throw new Error(`cannot rerun manual phase ${phase}`);
+
+  if (!wf || (stateRunId && wf.runId && wf.runId !== stateRunId)) {
+    wf = {
+      workFolder: state.workFolder,
+      taskRunDir: await taskDir(taskId, stateRunId),
+      send: null,
+      abortController: null,
+      runId: stateRunId,
+      workflow,
+      currentPhase: phase,
+      phaseLiveSessionMap: {},
+    };
+    activeWorkflows.set(taskId, wf);
+  }
+
+  wf.send = createEmitter(sender, taskId, stateRunId);
+  bumpInvokeToken(wf);
+  if (wf.abortController) {
+    try { wf.abortController.abort(); } catch {}
+    wf.abortController = null;
+  }
+
+  const previousSessions = { ...(state.sessionMap || {}) };
+  const resetPhases = resetStateFromPhase(state, workflow, phase);
+  await clearPhaseRunFiles(taskId, stateRunId, workflow, state, resetPhases);
+  const notes = String(text || "").trim();
+  state.pendingMessages = {
+    ...(state.pendingMessages || {}),
+    [phase]: notes,
+  };
+  await writeState(taskId, state);
+  await upsertTask(state.originalWorkFolder || state.workFolder, taskId, "in_progress", stateRunId, { create: false }).catch(() => {});
+
+  for (const phaseId of resetPhases) {
+    const terminalSessionId = getTerminalSessionId(taskId, stateRunId, phaseId);
+    terminalBridge?.clearSession(terminalSessionId, state.workFolder || "");
+    const liveSessionId = String(wf.phaseLiveSessionMap?.[phaseId] || "").trim();
+    if (liveSessionId) closeInteractiveSession(liveSessionId);
+    const persistedSessionId = previousSessions[phaseId] || "";
+    if (persistedSessionId && persistedSessionId !== liveSessionId) closeInteractiveSession(persistedSessionId);
+  }
+  wf.phaseLiveSessionMap = Object.fromEntries(
+    Object.entries(wf.phaseLiveSessionMap || {}).filter(([phaseId]) => !resetPhases.includes(phaseId))
+  );
+
+  wf.send({ type: "phase_reset", phase, phases: resetPhases, trigger: "terminal" });
+  writeTerminalLine(taskId, stateRunId, phase, state.workFolder || "", "");
+  writeTerminalLine(taskId, stateRunId, phase, state.workFolder || "", `> user`);
+  if (notes) writeTerminalLine(taskId, stateRunId, phase, state.workFolder || "", stripAnsiForPrompt(notes));
+
+  const interaction = await appendPhaseInteraction(taskId, phase, {
+    role: "user",
+    type: "user_message",
+    text: notes,
+  }, stateRunId);
+  await appendToPhaseFile(taskId, phase, `\n\n---\n\n**You:** ${notes}\n\n`, stateRunId);
+  if (interaction) wf.send({ type: "phase_interaction", phase, interaction });
+  wf.send({ type: "phase_resumed", phase, requestedBy: "user", trigger: "terminal" });
+  wf.send({ type: "user_message", phase, text: notes });
+  wf.send({ type: "state", state });
+
+  resetGraph(taskId, stateRunId);
+  void invokeGraph(taskId, stateRunId, new Command({
+    update: {
+      ...state,
+      currentStep: phase,
+      currentPhase: phase,
+      overallStatus: "in_progress",
+    },
+    goto: phase,
+  }))
+    .catch((err) => markWorkflowFailed(taskId, stateRunId, phase, err, wf.send))
+    .catch(() => {});
+
+  return { ok: true };
 }
 
 export async function resumeWorkflowPhase(taskId, phase, sender, runId = "") {

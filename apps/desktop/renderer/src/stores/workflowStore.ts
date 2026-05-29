@@ -459,15 +459,39 @@ function attachWorkflowEvents(set, get) {
       const stateKey = getWorkflowStateKey(state.taskId, state.runId);
       const cachedState = get().workflowStatesByRun[stateKey];
       const displayState = getLatestWorkflowState(state, cachedState);
+      const pendingPhases = new Set((displayState.phases || [])
+        .filter((phase) => phase.status === "pending")
+        .map((phase) => phase.id || phase.name)
+        .filter(Boolean));
       let isActiveState = false;
       set((current) => {
         const activeStateKey = getWorkflowStateKey(current.workflowState?.taskId, current.workflowState?.runId);
         isActiveState = activeStateKey === stateKey || (!current.workflowState && current.activeTask === displayState.taskId);
+        const currentMessages = { ...(current.phaseMessagesByRun[stateKey] || {}) };
+        const currentArtifacts = { ...(current.phaseOutputArtifactsByRun[stateKey] || {}) };
+        const currentInteractions = { ...(current.phaseInteractionsByRun[stateKey] || {}) };
+        for (const phaseId of pendingPhases) {
+          delete currentMessages[phaseId];
+          delete currentArtifacts[phaseId];
+          delete currentInteractions[phaseId];
+        }
         return {
           workflowState: isActiveState ? displayState : current.workflowState,
           workflowStatesByRun: {
             ...current.workflowStatesByRun,
             [stateKey]: displayState,
+          },
+          phaseMessagesByRun: {
+            ...current.phaseMessagesByRun,
+            [stateKey]: currentMessages,
+          },
+          phaseOutputArtifactsByRun: {
+            ...current.phaseOutputArtifactsByRun,
+            [stateKey]: currentArtifacts,
+          },
+          phaseInteractionsByRun: {
+            ...current.phaseInteractionsByRun,
+            [stateKey]: currentInteractions,
           },
           selectedPhaseByRun: {
             ...current.selectedPhaseByRun,
@@ -672,6 +696,34 @@ function attachWorkflowEvents(set, get) {
           workflowStatesByRun: {
             ...state.workflowStatesByRun,
             [stateKey]: nextWorkflowState,
+          },
+        };
+      });
+    } else if (msg.type === "phase_reset") {
+      set((state) => {
+        const stateKey = getEventStateKey(msg);
+        if (!stateKey) return {};
+        const resetPhases = new Set((msg.phases || [msg.phase]).filter(Boolean));
+        const currentMessages = { ...(state.phaseMessagesByRun[stateKey] || {}) };
+        const currentArtifacts = { ...(state.phaseOutputArtifactsByRun[stateKey] || {}) };
+        const currentInteractions = { ...(state.phaseInteractionsByRun[stateKey] || {}) };
+        for (const phaseId of resetPhases) {
+          delete currentMessages[phaseId];
+          delete currentArtifacts[phaseId];
+          delete currentInteractions[phaseId];
+        }
+        return {
+          phaseMessagesByRun: {
+            ...state.phaseMessagesByRun,
+            [stateKey]: currentMessages,
+          },
+          phaseOutputArtifactsByRun: {
+            ...state.phaseOutputArtifactsByRun,
+            [stateKey]: currentArtifacts,
+          },
+          phaseInteractionsByRun: {
+            ...state.phaseInteractionsByRun,
+            [stateKey]: currentInteractions,
           },
         };
       });

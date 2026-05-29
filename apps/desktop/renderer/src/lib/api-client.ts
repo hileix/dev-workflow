@@ -121,6 +121,7 @@ function createWebApi() {
     getTerminalBridgeUrl: async () => "",
     attachRunningTerminalSessions: async () => ({ ok: false, attachedPhases: [] }),
     restoreTerminalSession: async () => ({ ok: false }),
+    attachRerunTerminalInput: async () => ({ ok: false, attached: false }),
     startWorkflow: async (payload) => {
       activeTaskId = payload.taskId;
       activeRunId = payload.runId || "";
@@ -145,6 +146,7 @@ function createWebApi() {
     sendWorkflowMessage: async (taskId, text, images, runId) => {
       sendSocket({ type: "message", taskId, text, images, runId });
     },
+    rerunWorkflowPhase: async () => ({ ok: false }),
     interruptWorkflowPhase: async (taskId, phase, runId) => {
       sendSocket({ type: "interrupt_phase", taskId, phase, runId });
     },

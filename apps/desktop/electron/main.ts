@@ -43,6 +43,7 @@ import {
   approveWorkflow,
   rejectWorkflow,
   sendWorkflowMessage,
+  rerunWorkflowPhase,
   interruptWorkflowPhase,
   resumeWorkflowPhase,
   retryWorkflowPhase,
@@ -51,6 +52,7 @@ import {
   setWorkflowTerminalBridge,
   attachRunningWorkflowTerminalSessions,
   restoreWorkflowTerminalSession,
+  attachRerunWorkflowTerminalInput,
 } from "./workflow-runtime";
 
 let mainWindow: BrowserWindow | null = null;
@@ -59,6 +61,7 @@ let terminalBridge: {
   close: () => Promise<void>;
   closeSession: (sessionId: string, exitCode?: number | null) => void;
   clearSession: (sessionId: string, cwd?: string) => void;
+  setInputHandler: (sessionId: string, handler: ((line: string) => void | Promise<void>) | null) => void;
   getUrl: () => string;
 } | null = null;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -286,6 +289,12 @@ function registerIpcHandlers() {
   ipcMain.handle("app:get-terminal-bridge-url", () => terminalBridge?.getUrl() || "");
   ipcMain.handle("app:attach-running-terminal-sessions", (_event, payload) => attachRunningWorkflowTerminalSessions(payload));
   ipcMain.handle("app:restore-terminal-session", (_event, payload) => restoreWorkflowTerminalSession(payload));
+  ipcMain.handle("app:attach-rerun-terminal-input", (event, payload) =>
+    attachRerunWorkflowTerminalInput(
+      payload,
+      (message) => event.sender.send("workflow:event", message),
+    )
+  );
   ipcMain.handle("app:start-workflow", (event, payload) =>
     startWorkflowSession(
       payload.taskId,
@@ -305,6 +314,15 @@ function registerIpcHandlers() {
   );
   ipcMain.handle("app:send-workflow-message", (event, taskId, text, images, runId) =>
     sendWorkflowMessage(taskId, text, images, (message) => event.sender.send("workflow:event", message), runId)
+  );
+  ipcMain.handle("app:rerun-workflow-phase", (event, payload) =>
+    rerunWorkflowPhase(
+      payload.taskId,
+      payload.phase,
+      payload.text,
+      (message) => event.sender.send("workflow:event", message),
+      payload.runId,
+    )
   );
   ipcMain.handle("app:interrupt-workflow-phase", (event, taskId, phase, runId) =>
     interruptWorkflowPhase(taskId, phase, (message) => event.sender.send("workflow:event", message), runId)

@@ -425,12 +425,12 @@ export default function TaskPage() {
   }, [urlTaskId, urlRunId, activeTask, workflowState?.taskId, workflowState?.runId]);
 
   useEffect(() => {
-    if (!taskId || !workflowState?.runId || workflowState.overallStatus === "completed") return;
+    if (!taskId || !workflowState?.runId) return;
     void appApi.attachRunningTerminalSessions?.({
       taskId,
       runId: workflowState.runId,
     }).catch(() => {});
-  }, [taskId, workflowState?.runId, workflowState?.overallStatus]);
+  }, [taskId, workflowState?.runId]);
   const selectedPhaseByRun = useWorkflowStore((s) => s.selectedPhaseByRun);
   const setSelectedPhase = useWorkflowStore((s) => s.setSelectedPhase);
   const phaseOutputArtifactsByRun = useWorkflowStore((s) => s.phaseOutputArtifactsByRun);
@@ -555,6 +555,7 @@ export default function TaskPage() {
         isPaused: phaseStatus === "paused",
         isAwaiting: phaseStatus === "awaiting_input",
         isFailed: phaseStatus === "failed",
+        isCompleted: phaseStatus === "completed",
         phaseKey: phaseId,
         phaseLabel: runWorkflowConfig?.phaseLabels?.[phaseId] || phaseId,
         runId: workflowState?.runId || urlRunId || "",
@@ -965,6 +966,14 @@ export default function TaskPage() {
                 <p className="text-sm text-muted-foreground mb-4">
                   {t("task.deleteTaskConfirm", { name: taskId })}
                 </p>
+                <div className="mb-4 rounded-md border border-border bg-secondary/35 p-3">
+                  <div className="text-[11px] font-medium text-muted-foreground">
+                    {t("task.taskTitle")}
+                  </div>
+                  <div className="mt-1 break-words text-sm text-foreground">
+                    {taskId}
+                  </div>
+                </div>
               </>
             )}
             {hasWorktree && !isDeletingTask && (

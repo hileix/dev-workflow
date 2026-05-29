@@ -633,6 +633,7 @@ async function streamInteractiveCli({
   workspaceWrite,
   agent,
   onText,
+  onTerminalText,
   onLiveSession,
   onSession,
 }) {
@@ -844,6 +845,44 @@ async function streamInteractiveCli({
   const onDataListener = (chunk) => {
     void onData(chunk);
   };
+  const onTerminalDataListener = (chunk) => {
+    const text = String(chunk || "");
+    if (!text) return;
+    try {
+      void onTerminalText?.(text);
+    } catch {}
+  };
+  const onTerminalExit = () => {
+    stdout.off("data", onTerminalDataListener);
+    child.off("exit", onTerminalExit);
+  };
+  let keepLiveSession = false;
+  const cleanupHookFiles = async () => {
+    if (projectHooksPath) {
+      try {
+        const { unlink } = await import("fs/promises");
+        await unlink(projectHooksPath);
+      } catch {}
+    }
+    if (projectConfigPath) {
+      try {
+        const { unlink } = await import("fs/promises");
+        await unlink(projectConfigPath);
+      } catch {}
+    }
+    try {
+      const { unlink } = await import("fs/promises");
+      await unlink(completionMarkerPath);
+    } catch {}
+
+    if (actualSessionId && actualSessionId !== liveSessionId) {
+      try {
+        const { unlink } = await import("fs/promises");
+        const actualMarkerPath = join(hookDir, `completed-${actualSessionId}.txt`);
+        await unlink(actualMarkerPath);
+      } catch {}
+    }
+  };
 
   stdout.on("data", onDataListener);
 
@@ -858,10 +897,14 @@ async function streamInteractiveCli({
     const result = await Promise.race(promises);
 
     if (result.reason === "hook_completed") {
-      // Hook 检测到完成，主动关闭进程
-      try {
-        child.kill("SIGTERM");
-      } catch {}
+      // Hook 检测到完成，步骤已完成
+      // Don't kill the process - let it stay alive for potential user interaction
+      // The process will exit naturally or when the user closes it
+      keepLiveSession = true;
+      await cleanupHookFiles();
+      if (actualSessionId && actualSessionId !== liveSessionId) {
+        createLiveAgentSession(actualSessionId, child, backend);
+      }
     } else if (result.reason === "hook_timeout") {
       // Hook 超时（30分钟）
       console.warn("Hook completion timeout, force closing process");
@@ -874,33 +917,13 @@ async function streamInteractiveCli({
     }
   } finally {
     stdout.off("data", onDataListener);
-    dropLiveAgentSession(liveSessionId);
-
-    // 清理项目级别的 hooks 配置文件
-    if (projectHooksPath) {
-      try {
-        const { unlink } = await import("fs/promises");
-        await unlink(projectHooksPath);
-      } catch {}
+    if (keepLiveSession) {
+      stdout.on("data", onTerminalDataListener);
+      child.once("exit", onTerminalExit);
     }
-    if (projectConfigPath) {
-      try {
-        const { unlink } = await import("fs/promises");
-        await unlink(projectConfigPath);
-      } catch {}
-    }
-    // 清理标记文件（可能有两个：liveSessionId 和 actualSessionId）
-    try {
-      const { unlink } = await import("fs/promises");
-      await unlink(completionMarkerPath);
-    } catch {}
-
-    if (actualSessionId && actualSessionId !== liveSessionId) {
-      try {
-        const { unlink } = await import("fs/promises");
-        const actualMarkerPath = join(hookDir, `completed-${actualSessionId}.txt`);
-        await unlink(actualMarkerPath);
-      } catch {}
+    if (!keepLiveSession) {
+      dropLiveAgentSession(liveSessionId);
+      await cleanupHookFiles();
     }
   }
 
@@ -984,6 +1007,9 @@ export function createSdkAgentAdapter(options = {}) {
           abortController,
           workspaceWrite,
           agent,
+          onTerminalText: async (text) => {
+            await onEvent({ type: "terminal_text_delta", step: step.id, phase: step.id, backend, text });
+          },
           ...callbacks,
         });
         nextSessionId = result.sessionId || nextSessionId;
