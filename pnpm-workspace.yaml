@@ -1,7 +1,7 @@
 allowBuilds:
-  electron: true
   esbuild: true
-  fs-xattr: true
-  macos-alias: true
 packages:
-  - "apps/desktop/renderer"
+  - "apps/daemon"
+  - "apps/server"
+  - "apps/web"
+  - "packages/*"

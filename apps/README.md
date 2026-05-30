@@ -1,50 +1,36 @@
 # Monorepo Apps
 
-## Directory layout
+## Directory Layout
 
-- `apps/desktop/electron`: Electron main/preload/runtime
-- `apps/desktop/renderer`: React renderer
-- `apps/desktop/local-server-controllers`: existing local workflow HTTP/WebSocket controllers
-- `apps/backend`: cloud relay backend
-- `apps/desktop/connector`: local connector between local workflow server and cloud backend
-- `apps/mobile`: Flutter mobile app
-- `packages/core-models`: shared workflow/config/state models
-- `packages/core-lib`: shared runtime helpers
+- `apps/web`: React web app.
+- `apps/daemon`: local backend daemon for workflow/task data, storage, runtime, and outbound relay connection.
+- `apps/server`: stateless relay server.
+- `packages/protocol`: shared daemon/server/web protocol contracts.
 
-## Local development
+## Local Development
 
-### Existing desktop app
+### Full Stack
 
 ```bash
-pnpm dev:desktop
+pnpm dev:all
 ```
 
-### Local workflow server
+### Web App
 
 ```bash
-pnpm dev:server
+pnpm dev:web
 ```
 
-### Cloud backend
+### Relay Server
 
 ```bash
-pnpm dev:backend
+pnpm dev:relay-server
 ```
 
-### Desktop connector
+### Daemon
 
 ```bash
-pnpm dev:connector
+pnpm dev:daemon
 ```
 
-### Flutter mobile app
-
-```bash
-pnpm dev:mobile
-```
-
-Set backend URL in the app to:
-
-```txt
-http://<your-host>:8787
-```
+The daemon does not expose the app API. It connects outbound to the relay server.

@@ -99,7 +99,7 @@
           "filename": "02-code-review.md"
         }
       ],
-      "prompt": "Review the implementation.\n\nRead {{taskDir}}/01-implementation-summary.md and inspect the current git diff.\n\nFocus on:\n- Bugs, regressions, data loss, race conditions, and security issues.\n- Missing or weak verification.\n- Unrelated changes or overcomplication.\n\nSave the review to {{taskDir}}/02-code-review.md.\n\nLead with findings by severity. If there are no findings, say: No code review findings.",
+      "prompt": "Review the implementation using only the workflow artifacts already provided in this task.\n\nRead:\n- {{taskDir}}/01-implementation-summary.md\n- The declared inputs and previous step outputs included in this prompt.\n\nRules:\n- Do not run shell commands.\n- Do not run git, build, test, package-manager, or filesystem inspection commands.\n- Do not inspect the project workspace through terminal tools.\n- Do not claim command-based verification.\n- Base the review only on the implementation summary, previous step outputs, and any file or artifact content already included in this prompt.\n\nFocus on:\n- Bugs, regressions, data loss, race conditions, and security issues that are visible from the provided artifacts.\n- Missing or weak verification reported by the implementation step.\n- Unrelated changes or overcomplication described in the implementation summary.\n\nSave the review to {{taskDir}}/02-code-review.md.\n\nLead with findings by severity. If there are no findings, say: No code review findings.",
       "next": "risk_gate",
       "options": {
         "thread": {
