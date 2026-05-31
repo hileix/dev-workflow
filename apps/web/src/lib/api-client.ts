@@ -6,7 +6,11 @@ import {
   formatRelayApiRoute,
 } from "@dev-workflow/protocol";
 
-function jsonHeaders(headers = {}) {
+function jsonHeaders(options = {}) {
+  const headers = options.headers || {};
+  if (options.body === undefined || options.body === null) {
+    return headers;
+  }
   return {
     "content-type": "application/json",
     ...headers,
@@ -29,7 +33,7 @@ function createServerApi() {
   async function request(path, options = {}) {
     const response = await fetch(`${baseUrl}${path}`, {
       ...options,
-      headers: jsonHeaders(options.headers),
+      headers: jsonHeaders(options),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {

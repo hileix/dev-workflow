@@ -261,7 +261,11 @@ function sendCommandToDefaultDaemon(taskId, type, payload = {}, request = null) 
   return sendCommandToDaemon(connection.deviceId, taskId, type, payload);
 }
 
-await fastify.register(cors, { origin: true });
+await fastify.register(cors, {
+  origin: true,
+  methods: ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["content-type", "x-device-id"],
+});
 await fastify.register(websocket);
 
 fastify.get(RELAY_API_ROUTES.health, async () => ({ ok: true }));
