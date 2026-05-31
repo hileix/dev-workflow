@@ -1,0 +1,561 @@
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { execFile, spawn } from "child_process";
+import { createRequire } from "module";
+import readline from "readline";
+import { mkdir, readFile, writeFile } from "fs/promises";
+import { basename, dirname, extname, join, relative, resolve } from "path";
+import { createContentPreview, createContentSummary, formatStepOutputForPrompt } from "./artifacts";
+
+const SDK_BACKENDS = {
+  CLAUDE: "claude",
+  CODEX: "codex",
+};
+const require = createRequire(import.meta.url);
+const SHELL_ENV_MARKER = "__DEV_WORKFLOW_SHELL_ENV__";
+const SHELL_ENV_TIMEOUT_MS = 5000;
+const shellEnvCache = new Map();
+
+function isPathInside(parent, child) {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === "" || (rel && !rel.startsWith("..") && !rel.startsWith("/"));
+}
+
+function renderTemplate(template, state) {
+  const taskInputs = state.taskInputs || {};
+  const vars = {
+    taskId: state.taskId || "",
+    runId: state.runId || "",
+    workFolder: state.workFolder || "",
+    taskDir: state.taskDir || "",
+    ...taskInputs,
+  };
+  return String(template || "").replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? "");
+}
+
+function renderStepInputs(step, state) {
+  const parts = [];
+  const taskInputs = state.taskInputs || {};
+  const stepOutputs = state.stepOutputs || {};
+
+  for (const input of step.inputs || []) {
+    if (input.sourceType === "task_input") {
+      parts.push(`## ${input.name}\n\n${taskInputs[input.name] || ""}`);
+      continue;
+    }
+
+    if (input.sourceType === "step_output") {
+      const output = stepOutputs[input.stepId]?.outputs?.[input.outputKey] || stepOutputs[input.stepId];
+      parts.push([
+        `## ${input.name}`,
+        output?.summary ? `Summary: ${output.summary}` : "",
+        output?.artifactPath ? `Artifact: ${output.artifactPath}` : "",
+        output?.contentPreview ? ["", "Preview:", output.contentPreview].join("\n") : "",
+      ].filter(Boolean).join("\n"));
+    }
+  }
+
+  return parts.filter(Boolean).join("\n\n");
+}
+
+function buildPrompt({ step, state }) {
+  const parts = [];
+  const pendingMessage = String(state.pendingMessages?.[step.id] || "").trim();
+  const pendingImageCount = state.pendingImagePaths?.[step.id]?.length || 0;
+
+  if (pendingMessage) {
+    parts.push(["# User feedback", "", pendingMessage].join("\n"));
+  }
+
+  if (pendingImageCount > 0) {
+    parts.push(["# Attached images", "", `The user attached ${pendingImageCount} image${pendingImageCount === 1 ? "" : "s"} for this step.`].join("\n"));
+  }
+
+  if (step.instructions) parts.push(renderTemplate(step.instructions, state));
+
+  if (step.prompt) parts.push(renderTemplate(step.prompt, state));
+
+  const stepInputs = renderStepInputs(step, state);
+  if (stepInputs) parts.push(["# Declared inputs", "", stepInputs].join("\n"));
+
+  const previousOutputs = Object.entries(state.stepOutputs || {})
+    .map(([stepId, output]) => formatStepOutputForPrompt(stepId, output))
+    .filter(Boolean)
+    .join("\n\n");
+
+  parts.push([
+    "# Runtime context",
+    "",
+    `Task ID: ${state.taskId || ""}`,
+    `Run ID: ${state.runId || ""}`,
+    `Current step: ${step.id}`,
+    `Task directory: ${state.taskDir || ""}`,
+    "",
+    "## Task inputs",
+    "",
+    JSON.stringify(state.taskInputs || {}, null, 2),
+    previousOutputs ? `\n## Previous step outputs\n\n${previousOutputs}` : "",
+  ].filter(Boolean).join("\n"));
+
+  return parts.filter(Boolean).join("\n\n");
+}
+
+function buildWorkspaceAccessPrompt(workspaceWrite, workFolder, taskDir) {
+  if (workspaceWrite) return "";
+  return [
+    "# Workspace access",
+    "",
+    "The project workspace is read-only for this step.",
+    `You may read files in: ${workFolder || ""}`,
+    `You may write only task artifact files under: ${taskDir || ""}`,
+    "Do not create, edit, move, or delete files in the project workspace.",
+  ].join("\n");
+}
+
+function guessImageMediaType(filePath) {
+  const ext = extname(filePath).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".gif") return "image/gif";
+  return "image/png";
+}
+
+async function buildClaudePrompt(prompt, imagePaths) {
+  if (!imagePaths || imagePaths.length === 0) return prompt;
+
+  const content = [];
+  if (prompt) content.push({ type: "text", text: prompt });
+
+  for (const imagePath of imagePaths) {
+    const data = await readFile(imagePath, "base64");
+    content.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: guessImageMediaType(imagePath),
+        data,
+      },
+    });
+  }
+
+  return (async function* messageStream() {
+    yield {
+      type: "user",
+      parent_tool_use_id: null,
+      message: {
+        role: "user",
+        content,
+      },
+    };
+  })();
+}
+
+function getShellArgs(shell, command) {
+  const name = basename(shell || "");
+  if (name.includes("bash") || name.includes("zsh")) return ["-lc", command];
+  if (name.includes("fish")) return ["-lc", command];
+  return ["-lc", command];
+}
+
+function parseShellEnv(raw) {
+  const entries = String(raw || "").split("\0");
+  const markerIndex = entries.indexOf(SHELL_ENV_MARKER);
+  if (markerIndex < 0) return {};
+  const envEntries = entries.slice(markerIndex + 1);
+  const env = {};
+  for (const entry of envEntries) {
+    const index = entry.indexOf("=");
+    if (index <= 0) continue;
+    env[entry.slice(0, index)] = entry.slice(index + 1);
+  }
+  return env;
+}
+
+function readUserShellEnv(workFolder) {
+  const shell = process.env.SHELL || "/bin/sh";
+  const cwd = workFolder || process.cwd();
+  const cacheKey = `${shell}:${cwd}`;
+  if (shellEnvCache.has(cacheKey)) return shellEnvCache.get(cacheKey);
+
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+  const command = `printf '${SHELL_ENV_MARKER}\\0'; env -0`;
+  const promise = new Promise((resolve) => {
+    execFile(shell, getShellArgs(shell, command), {
+      cwd,
+      env,
+      maxBuffer: 1024 * 1024,
+      timeout: SHELL_ENV_TIMEOUT_MS,
+    }, (error, stdout) => {
+      if (error) {
+        resolve({});
+        return;
+      }
+      resolve(parseShellEnv(stdout));
+    });
+  });
+  shellEnvCache.set(cacheKey, promise);
+  return promise;
+}
+
+async function buildCodexEnv(workFolder) {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && key !== "CODEX_API_KEY" && key !== "NODE_OPTIONS") env[key] = value;
+  }
+  const shellEnv = await readUserShellEnv(workFolder);
+  for (const [key, value] of Object.entries(shellEnv)) {
+    if (value !== undefined && key !== "CODEX_API_KEY") env[key] = value;
+  }
+  return env;
+}
+
+function getCodexCliPath() {
+  return require.resolve("@openai/codex/bin/codex.js");
+}
+
+function getToolFilePath(input) {
+  return input?.file_path || input?.path || input?.notebook_path || "";
+}
+
+function formatClaudeToolLog(name, input) {
+  try {
+    const parsed = JSON.parse(input);
+    if (name === "Bash" && parsed.command) return `\`$ ${parsed.command}\``;
+    if (name === "Read" && parsed.file_path) return `Reading \`${parsed.file_path}\``;
+    if (name === "Edit" && parsed.file_path) return `Editing \`${parsed.file_path}\``;
+    if (name === "Write" && parsed.file_path) return `Writing \`${parsed.file_path}\``;
+    if ((name === "Grep" || name === "Glob") && parsed.pattern) return `${name}: \`${parsed.pattern}\``;
+    if (name === "Skill" && parsed.skill) return `Skill: \`/${parsed.skill}\``;
+    return `${name}`;
+  } catch {
+    return `${name}`;
+  }
+}
+
+function formatCodexToolLog(item) {
+  if (!item) return "Codex";
+  if (item.type === "command_execution" && item.command) return `\`$ ${item.command}\``;
+  if (item.type === "mcp_tool_call") return `MCP: \`${item.server}.${item.tool}\``;
+  if (item.type === "web_search" && item.query) return `WebSearch: \`${item.query}\``;
+  if (item.type === "file_change") {
+    const count = item.changes?.length || 0;
+    return `Updated ${count} file${count === 1 ? "" : "s"}`;
+  }
+  if (item.type === "todo_list") return "Updated todo list";
+  return item.type || "Codex";
+}
+
+function canWriteWorkspace(step, agent) {
+  return step.workspaceAccess === "write" || (!step.workspaceAccess && agent.workspaceAccess === "write");
+}
+
+function createReadOnlyClaudeToolGuard(workFolder, taskDir) {
+  const readTools = new Set(["Read", "Grep", "Glob", "LS"]);
+  const writeTools = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+  return async (toolName, input) => {
+    if (readTools.has(toolName)) {
+      const filePath = String(getToolFilePath(input) || "");
+      if (!filePath || isPathInside(workFolder, filePath) || isPathInside(taskDir, filePath)) {
+        return { behavior: "allow" };
+      }
+      return { behavior: "deny", message: "This step can only read the project workspace and task files." };
+    }
+
+    if (writeTools.has(toolName)) {
+      const filePath = String(getToolFilePath(input) || "");
+      if (filePath && isPathInside(taskDir, filePath)) return { behavior: "allow" };
+      return { behavior: "deny", message: "This step can only write its own task artifact files." };
+    }
+
+    return { behavior: "deny", message: "This step is read-only for the workspace." };
+  };
+}
+
+async function streamClaudeSdk({ prompt, workFolder, taskDir, sessionId, imagePaths, abortController, workspaceWrite, agent, onText, onTool, onSession }) {
+  const promptInput = await buildClaudePrompt(prompt, imagePaths);
+  const stream = query({
+    prompt: promptInput,
+    options: {
+      cwd: workFolder,
+      resume: sessionId || undefined,
+      abortController,
+      additionalDirectories: workspaceWrite ? undefined : [taskDir],
+      includePartialMessages: true,
+      permissionMode: workspaceWrite ? "bypassPermissions" : "dontAsk",
+      allowDangerouslySkipPermissions: workspaceWrite ? true : undefined,
+      canUseTool: workspaceWrite ? undefined : createReadOnlyClaudeToolGuard(workFolder, taskDir),
+      systemPrompt: { type: "preset", preset: "claude_code" },
+      tools: workspaceWrite ? { type: "preset", preset: "claude_code" } : ["Read", "Grep", "Glob", "LS", "Write", "Edit", "MultiEdit", "NotebookEdit"],
+      settingSources: ["user", "project", "local"],
+      model: agent.model || undefined,
+      ...(agent.options || {}),
+    },
+  });
+
+  let currentTool = null;
+  let toolInputJson = "";
+  let fallbackResult = "";
+  let nextSessionId = "";
+
+  for await (const message of stream) {
+    if (message.type === "stream_event") {
+      const inner = message.event;
+      if (inner.type === "content_block_delta" && inner.delta?.type === "text_delta") {
+        if (inner.delta.text) await onText(inner.delta.text);
+      } else if (inner.type === "content_block_start" && inner.content_block?.type === "tool_use") {
+        currentTool = inner.content_block.name;
+        toolInputJson = "";
+      } else if (inner.type === "content_block_delta" && inner.delta?.type === "input_json_delta") {
+        toolInputJson += inner.delta.partial_json || "";
+      } else if (inner.type === "content_block_stop" && currentTool) {
+        await onTool(formatClaudeToolLog(currentTool, toolInputJson));
+        currentTool = null;
+        toolInputJson = "";
+      }
+      continue;
+    }
+
+      if (message.type === "result") {
+        if (message.session_id) {
+          nextSessionId = message.session_id;
+          await onSession(nextSessionId);
+        }
+      if (message.subtype !== "success") {
+        const details = Array.isArray(message.errors) && message.errors.length > 0
+          ? message.errors.join("; ")
+          : message.result || "Claude run failed";
+        throw new Error(details);
+      }
+      fallbackResult = message.result || "";
+    }
+  }
+
+  return { sessionId: nextSessionId || sessionId || "", fallbackResult };
+}
+
+async function streamCodexCli({ prompt, workFolder, taskDir, sessionId, imagePaths, abortController, workspaceWrite, agent, onText, onTool, onSession }) {
+  const workingDirectory = workspaceWrite ? workFolder : taskDir;
+  const args = [
+    "exec",
+    "--json",
+    "--sandbox",
+    workspaceWrite ? "danger-full-access" : "workspace-write",
+    "--cd",
+    workingDirectory,
+    "--skip-git-repo-check",
+    "--config",
+    "approval_policy=\"never\"",
+    "--config",
+    "sandbox_workspace_write.network_access=true",
+  ];
+
+  const modelReasoningEffort = agent.options?.thread?.modelReasoningEffort || "";
+  if (agent.model) args.push("--model", agent.model);
+  if (modelReasoningEffort) args.push("--config", `model_reasoning_effort="${modelReasoningEffort}"`);
+  for (const imagePath of imagePaths || []) args.push("--image", imagePath);
+  if (sessionId) args.push("resume", sessionId);
+
+  const child = spawn(getCodexCliPath(), args, {
+    env: await buildCodexEnv(workFolder),
+    signal: abortController.signal,
+  });
+  let spawnError = null;
+  const stderrChunks = [];
+  child.once("error", (error) => { spawnError = error; });
+  child.stderr?.on("data", (chunk) => stderrChunks.push(chunk));
+  if (!child.stdin) throw new Error("Codex CLI has no stdin");
+  if (!child.stdout) throw new Error("Codex CLI has no stdout");
+
+  child.stdin.write(prompt);
+  child.stdin.end();
+
+  const exitPromise = new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const events = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const seenItemText = new Map();
+  const seenToolItems = new Set();
+
+  try {
+    for await (const line of events) {
+      if (!String(line || "").trim()) continue;
+      const event = JSON.parse(line);
+      if (event.type === "turn.completed") break;
+
+      if (event.type === "thread.started") {
+        await onSession(event.thread_id);
+        continue;
+      }
+
+      if (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") {
+        const item = event.item;
+        if (item.type === "agent_message") {
+          const previous = seenItemText.get(item.id) || "";
+          const next = item.text || "";
+          if (next.startsWith(previous)) {
+            const delta = next.slice(previous.length);
+            if (delta) await onText(delta);
+          } else if (next && next !== previous) {
+            await onText(next);
+          }
+          seenItemText.set(item.id, next);
+          continue;
+        }
+
+        if (
+          (item.type === "command_execution" || item.type === "mcp_tool_call" || item.type === "web_search" || item.type === "file_change" || item.type === "todo_list")
+          && !seenToolItems.has(item.id)
+        ) {
+          seenToolItems.add(item.id);
+          await onTool(formatCodexToolLog(item));
+        }
+        continue;
+      }
+
+      if (event.type === "turn.failed") throw new Error(event.error?.message || "Codex CLI run failed");
+      if (event.type === "error") throw new Error(event.message || "Codex CLI run failed");
+    }
+
+    if (spawnError) throw spawnError;
+    const { code, signal } = await exitPromise;
+    if (code !== 0 || signal) {
+      const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
+      throw new Error(`Codex CLI exited with ${detail}: ${Buffer.concat(stderrChunks).toString("utf8")}`);
+    }
+  } finally {
+    events.close();
+  }
+}
+
+function resolveOutputPath(taskDir, step, state) {
+  const filename = renderTemplate(step.outputs?.[0]?.filename || "", state);
+  if (!filename) return "";
+  const outputPath = resolve(taskDir, filename);
+  if (!isPathInside(taskDir, outputPath)) throw new Error(`step ${step.id} output filename escapes taskDir`);
+  return outputPath;
+}
+
+function resolveDeclaredOutputPath(taskDir, output, state) {
+  const filename = renderTemplate(output?.filename || "", state);
+  if (!filename) return "";
+  const outputPath = resolve(taskDir, filename);
+  if (!isPathInside(taskDir, outputPath)) throw new Error(`step output filename escapes taskDir`);
+  return outputPath;
+}
+
+async function writeOutputArtifact(taskDir, step, state, content) {
+  const outputPath = resolveOutputPath(taskDir, step, state);
+  if (!outputPath) return "";
+  try {
+    await readFile(outputPath, "utf-8");
+    return outputPath;
+  } catch {}
+  return "";
+}
+
+export function createSdkAgentAdapter(options = {}) {
+  const onEvent = options.onEvent || (() => {});
+
+  return {
+    async runAgent({ step, agent, state, sessionId, sessionKey }) {
+      const backend = String(agent.backend || "").trim();
+      const workFolder = state.workFolder || options.workFolder || process.cwd();
+      const taskDir = state.taskDir || options.taskDir || workFolder;
+      const imagePaths = [
+        ...(options.imagePaths || []),
+        ...(state.pendingImagePaths?.[step.id] || []),
+      ];
+      const abortController = options.abortController || new AbortController();
+      const workspaceWrite = canWriteWorkspace(step, agent);
+      const pendingMessage = String(state.pendingMessages?.[step.id] || "").trim();
+      const prompt = sessionId && pendingMessage
+        ? pendingMessage
+        : [
+            buildWorkspaceAccessPrompt(workspaceWrite, workFolder, taskDir),
+            buildPrompt({ step, state }),
+          ].filter(Boolean).join("\n\n");
+      let content = "";
+      let nextSessionId = sessionId || "";
+
+      const callbacks = {
+        onText: async (text) => {
+          content += text;
+          await onEvent({ type: "text_delta", step: step.id, phase: step.id, backend, text });
+        },
+        onTool: async (log) => {
+          await onEvent({ type: "tool_use", step: step.id, phase: step.id, backend, log });
+        },
+        onSession: async (value) => {
+          if (!value) return;
+          nextSessionId = value;
+          await onEvent({ type: "session_attached", step: step.id, phase: step.id, sessionKey: sessionKey || step.id, backend, sessionId: value });
+        },
+      };
+
+      if (backend === SDK_BACKENDS.CLAUDE) {
+        const result = await streamClaudeSdk({
+          prompt,
+          workFolder,
+          taskDir,
+          sessionId,
+          imagePaths,
+          abortController,
+          workspaceWrite,
+          agent,
+          ...callbacks,
+        });
+        nextSessionId = result.sessionId || nextSessionId;
+        if (!content && result.fallbackResult) content = result.fallbackResult;
+      } else if (backend === SDK_BACKENDS.CODEX) {
+        await streamCodexCli({
+          prompt,
+          workFolder,
+          taskDir,
+          sessionId,
+          imagePaths,
+          abortController,
+          workspaceWrite,
+          agent,
+          ...callbacks,
+        });
+      } else {
+        throw new Error(`unsupported SDK agent backend ${backend}`);
+      }
+
+      const artifactPath = await writeOutputArtifact(taskDir, step, state, content);
+      let artifactContent = content;
+      if (artifactPath) {
+        try {
+          artifactContent = await readFile(artifactPath, "utf-8");
+        } catch {}
+      }
+      const summary = createContentSummary(artifactContent);
+      const contentPreview = createContentPreview(artifactContent);
+      const outputs = {};
+      for (const output of step.outputs || []) {
+        const outputPath = resolveDeclaredOutputPath(taskDir, output, state);
+        if (!outputPath) continue;
+        outputs[output.key] = {
+          kind: output.kind || "markdown",
+          summary,
+          contentPreview,
+          artifactPath: outputPath,
+          status: artifactPath && resolve(outputPath) === resolve(artifactPath) ? "ready" : "pending",
+        };
+      }
+      if (artifactPath) {
+        await onEvent({ type: "artifact_written", step: step.id, phase: step.id, backend, artifactPath, summary, contentPreview });
+      }
+
+      return {
+        sessionId: nextSessionId,
+        content,
+        summary,
+        contentPreview,
+        artifactPath,
+        outputs,
+      };
+    },
+  };
+}

@@ -291,7 +291,7 @@
           "filename": "07-spec-compliance-review.md"
         }
       ],
-      "prompt": "Review the implementation for spec compliance only.\n\nRead:\n- {{taskDir}}/03-design-approved.md\n- {{taskDir}}/05-plan-approved.md\n- {{taskDir}}/06-implementation-summary.md\n\nCheck:\n- Required behavior was implemented.\n- No requested behavior was missed.\n- No unrelated behavior was added.\n- Verification matches the plan.\n\nSave the review to {{taskDir}}/07-spec-compliance-review.md.\n\nLead with findings by severity. If there are no findings, say: No spec compliance findings.",
+      "prompt": "Review the implementation for spec compliance only using the workflow artifacts already provided in this task.\n\nRead:\n- {{taskDir}}/03-design-approved.md\n- {{taskDir}}/05-plan-approved.md\n- {{taskDir}}/06-implementation-summary.md\n- The declared inputs and previous step outputs included in this prompt.\n\nRules:\n- Do not run shell commands.\n- Do not run git, build, test, package-manager, or filesystem inspection commands.\n- Do not inspect the project workspace through terminal tools.\n- Do not claim command-based verification.\n\nCheck:\n- Required behavior was implemented according to the provided artifacts.\n- No requested behavior appears to be missed in the provided artifacts.\n- No unrelated behavior appears to be added in the provided artifacts.\n- Verification reported by the implementation matches the plan.\n\nSave the review to {{taskDir}}/07-spec-compliance-review.md.\n\nLead with findings by severity. If there are no findings, say: No spec compliance findings.",
       "next": "review_code_quality",
       "backend": "codex",
       "model": "gpt-5.5",
@@ -322,7 +322,7 @@
           "filename": "08-code-quality-review.md"
         }
       ],
-      "prompt": "Review the implementation for code quality and regression risk.\n\nRead {{taskDir}}/07-spec-compliance-review.md and inspect the current git diff.\n\nFocus on:\n- Bugs, behavioral regressions, race conditions, data loss, and security issues.\n- Missing or weak verification.\n- Overcomplication relative to the approved plan.\n- Unrelated file churn.\n\nSave the review to {{taskDir}}/08-code-quality-review.md.\n\nLead with findings by severity. If there are no findings, say: No code quality findings.",
+      "prompt": "Review the implementation for code quality and regression risk using the workflow artifacts already provided in this task.\n\nRead:\n- {{taskDir}}/07-spec-compliance-review.md\n- The declared inputs and previous step outputs included in this prompt.\n\nRules:\n- Do not run shell commands.\n- Do not run git, build, test, package-manager, or filesystem inspection commands.\n- Do not inspect the project workspace through terminal tools.\n- Do not claim command-based verification.\n\nFocus on:\n- Bugs, behavioral regressions, race conditions, data loss, and security issues visible from the provided artifacts.\n- Missing or weak verification reported by earlier steps.\n- Overcomplication relative to the approved plan.\n- Unrelated file churn described in earlier artifacts.\n\nSave the review to {{taskDir}}/08-code-quality-review.md.\n\nLead with findings by severity. If there are no findings, say: No code quality findings.",
       "next": "review_gate",
       "backend": "codex",
       "model": "gpt-5.5",

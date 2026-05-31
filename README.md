@@ -1,69 +1,45 @@
 # Dev Workflow
 
-Dev Workflow is an Electron desktop app for running AI-assisted development workflows on your own machine.
+Dev Workflow is a local web app for running AI-assisted development workflows on your own machine.
 
-The desktop app is the source of truth. It manages workflow definitions, selected project folders, task runs, AI agent execution, uploaded context, generated outputs, skills, and optional Git worktrees locally. The mobile app is still early and currently only exists as an optional remote companion through the relay backend.
+The daemon is the source of truth. It stores workflow definitions, selected project folders, task runs, AI agent execution state, uploaded context, generated outputs, skills, and optional Git worktrees under `~/.dev-workflow` by default. The web app talks to the stateless relay server, and the relay server forwards requests to the local daemon.
 
-## What The Desktop App Does
+## What The App Does
 
-The app is meant to turn repeatable development work into guided, inspectable workflow runs. Instead of manually prompting an AI agent step by step, you define a workflow made of agent steps, condition steps, and checkpoint steps. Then you start a task from the desktop UI, provide the task context, and let the app run each phase while keeping the state, logs, outputs, and decisions organized.
+The app turns repeatable development work into guided, inspectable workflow runs. You define a workflow made of agent steps, condition steps, and checkpoint steps, then start a task from the web UI against a local project folder. The daemon runs each phase and keeps state, logs, outputs, and decisions organized.
 
 Typical use cases:
 
-- Create a workflow for a recurring engineering process, such as planning, implementation, review, or documentation.
+- Create workflows for planning, implementation, review, or documentation.
 - Start a task against a real local project folder.
-- Provide structured context fields and pasted or uploaded screenshots/images.
+- Provide structured context fields and uploaded screenshots/images.
 - Let Claude or Codex execute workflow phases from the local runtime.
-- Review each phase in a graph-based run page that shows status, routes, checkpoints, outputs, logs, and debug details.
-- Approve, reject, or send follow-up messages when a checkpoint needs human input.
+- Review each phase in a graph-based run page.
+- Approve, reject, or send follow-up messages at checkpoints.
 - Save generated outputs and phase artifacts under the task run.
-- Use managed skills to control how agents perform specific workflow steps.
-- Optionally create a Git worktree for a workflow run so code changes stay isolated.
-
-In short, the Electron app is a local control center for AI-assisted project work: it stores the workflow, starts the agents, tracks every phase, and keeps the run tied to your actual workspace.
-
-## Download
-
-Download the macOS installer from the latest GitHub release:
-
-https://github.com/hileix/dev-workflow/releases/latest/download/dev-workflow.dmg
-
-Open the DMG, drag Dev Workflow into Applications, then launch it from Applications.
+- Use managed skills to guide specific workflow steps.
+- Optionally create a Git worktree so code changes stay isolated.
 
 ## Architecture
 
 ```txt
-Electron Desktop App
-        |
-        | local IPC
-        v
-Desktop Runtime + Local Workflow Server
-        |
-        | local HTTP / WebSocket
-        v
-Desktop Connector
-        |
-        | WebSocket
-        v
-Relay Backend
-        |
-        | HTTP / WebSocket
-        v
-Flutter Mobile App
+Web App
+  |
+  | HTTP / WebSocket
+  v
+Relay Server
+  |
+  | WebSocket
+  v
+Daemon
 ```
-
-Mobile access is disabled by default and is not the main product surface yet.
 
 ## Repository Layout
 
-- `apps/desktop/electron`: Electron main process, preload bridge, API handlers, and workflow runtime.
-- `apps/desktop/renderer`: React renderer for the desktop app.
-- `apps/desktop/local-server-controllers`: local Express and WebSocket controllers.
-- `apps/desktop/connector`: bridge between local desktop state and the relay backend.
-- `apps/backend`: in-memory relay backend for mobile access.
-- `apps/mobile`: Flutter mobile client.
-- `packages/core-models`: workflow, config, state, skills, and workfolder storage.
-- `packages/core-lib`: shared workflow runtime helpers, worktree helpers, and SDK adapters.
+- `apps/web`: React web app.
+- `apps/daemon`: local backend daemon that owns workflow/task data, JSON storage, workflow runtime, and outbound relay connection.
+- `apps/server`: stateless in-memory relay server.
+- `packages/protocol`: shared REST/WebSocket message contracts.
 - `docs`: design notes and implementation plans.
 - `references`: external source snapshots used for architecture research.
 
@@ -71,116 +47,71 @@ Mobile access is disabled by default and is not the main product surface yet.
 
 - Node.js from `.nvmrc`
 - `pnpm`
-- Flutter, only for mobile development
 
 Install dependencies:
 
 ```bash
 pnpm install
-cd apps/mobile && flutter pub get
 ```
 
-## Desktop Development
+## Development
 
-Start the desktop app, local workflow server, and connector:
+Start the full local stack:
 
 ```bash
-pnpm dev:desktop
+pnpm dev:all
 ```
 
-Build the renderer:
+Start only the relay server and daemon:
 
 ```bash
-pnpm build:desktop
+pnpm dev:stack
 ```
 
-Run Electron with the existing renderer build:
+Start individual processes:
 
 ```bash
-pnpm start:desktop
+pnpm dev:web
+pnpm dev:daemon
+pnpm dev:relay-server
 ```
-
-Useful focused commands:
-
-```bash
-pnpm dev:renderer
-pnpm dev:server
-pnpm dev:connector
-```
-
-## Mobile Relay Development
-
-Start the local workflow server, backend, and connector:
-
-```bash
-pnpm dev:mobile-stack
-```
-
-Start the Flutter app in another terminal:
-
-```bash
-pnpm dev:mobile
-```
-
-Set the backend URL in the mobile app:
-
-- iOS simulator: `http://127.0.0.1:8787`
-- Android emulator: `http://10.0.2.2:8787`
-- Real device on the same LAN: `http://<your-host-ip>:8787`
 
 Useful checks:
 
 ```txt
-http://127.0.0.1:3000
+http://127.0.0.1:5173
 http://127.0.0.1:8787/health
 http://127.0.0.1:8787/api/devices
 ```
 
-If the connector is online and mobile access is enabled, the device list should include `desktop-local`.
-
 ## Runtime Data
 
-Desktop data is stored under the platform app-data directory:
-
-- macOS: `~/Library/Application Support/dev-Workflow`
-- Windows: `%APPDATA%/dev-Workflow`
-- Linux: `$XDG_CONFIG_HOME/dev-Workflow` or `~/.config/dev-Workflow`
+Daemon data is stored under `~/.dev-workflow` by default.
 
 Important subpaths:
 
-- `config.json`: active workflow, mobile access, and AI backend settings.
+- `config.json`: active workflow and AI backend settings.
 - `workflows/`: app-managed workflow DSL JSON files.
 - `skills/`: app-managed skills.
 - `tasks/`: task run state, uploads, phase logs, and output artifacts.
 
-Legacy workflow JSON files from repo-root `workflows/` are migrated into the app-data workflow directory when possible.
-
 ## Commands
 
 ```bash
-pnpm dev:desktop        # desktop UI + local server + connector
-pnpm dev:desktop-stack  # local server + backend + connector
-pnpm dev:mobile-stack   # local server + backend + connector
-pnpm dev:all            # desktop stack plus backend
-pnpm dev:backend        # relay backend only
-pnpm build:desktop      # build React renderer
-pnpm start:desktop      # start Electron from existing build
-```
-
-`pnpm test` is not configured and currently exits with an intentional error.
-
-For mobile checks:
-
-```bash
-cd apps/mobile
-flutter analyze
-flutter run -d ios
-flutter run -d android
+pnpm dev:web          # web app only
+pnpm dev:stack        # relay server + daemon
+pnpm dev:all          # web app + relay server + daemon
+pnpm dev:daemon       # daemon only; connects outbound to relay server
+pnpm dev:relay-server # relay server only
+pnpm build:web        # build React web app
+pnpm build:daemon     # check daemon package
+pnpm build:server     # check relay server package
+pnpm test             # web tests
+pnpm test:protocol    # protocol tests
 ```
 
 ## Current Limitations
 
-- The backend stores relay state in memory.
-- Mobile access has no production pairing or authentication layer yet.
-- Workflow execution depends on the desktop machine staying online.
-- Mobile supports remote task visibility and commands, not full workflow editing.
+- The relay server stores coordination state in memory.
+- There is no production authentication layer yet.
+- Workflow execution depends on the daemon staying online.
